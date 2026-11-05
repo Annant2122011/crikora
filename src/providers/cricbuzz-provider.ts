@@ -106,60 +106,51 @@ function parseScorecard($: ReturnType<typeof load>, id: string, bucket: Bucket):
 
 function parseInnings($: ReturnType<typeof load>, id: string, home: string, away: string): Innings[] {
   const result: Innings[] = [];
-  const headers = $("div.cb-col-100.cb-scrd-hdr-rw, div.cb-col.cb-col-100.cb-scrd-hdr-rw").toArray();
-  const teamNames = headers.map(el => clean($(el).text()).match(/^([A-Z0-9]{2,8})\b/)?.[1]).filter(Boolean) as string[];
-  const blocks = $("div.cb-col-100.cb-scrd-itms, div.cb-col.cb-col-100.cb-scrd-itms");
-  let index = 0;
+  const ordered = $("div.cb-col-100.cb-scrd-hdr-rw, div.cb-col.cb-col-100.cb-scrd-hdr-rw, div.cb-col-100.cb-scrd-itms, div.cb-col.cb-col-100.cb-scrd-itms").toArray();
   let current: Innings | undefined;
-  const teamFor = (i: number) => {
-    const code = teamNames[i];
-    if (code && code.toLowerCase() === slug(home).slice(0, code.length)) return home;
-    if (code && code.toLowerCase() === slug(away).slice(0, code.length)) return away;
-    return i === 0 ? home : away;
-  };
-  // Cricbuzz scorecard is rendered as row divs. Each innings begins with a
-  // header row, followed by batter rows, extras/total, then bowling rows.
-  const allRows = $("div.cb-col-100.cb-scrd-itms, div.cb-col.cb-col-100.cb-scrd-itms").toArray();
-  for (const row of allRows) {
-    const cols = $(row).children().toArray().map(el => clean($(el).text()));
-    if (cols.length < 3) continue;
-    const name = cols[0] ?? "";
-    if (/^Extras$/i.test(name)) continue;
-    if (/^Total$/i.test(name)) {
-      if (current) {
-        const total = cols.join(" ").match(/(\d{1,3})\s*[-/]\s*(\d{1,2})\s*\((\d+(?:\.\d+)?)\s*Overs?/i);
-        if (total) { current.runs = number(total[1]); current.wickets = number(total[2]); current.overs = total[3]!; }
-      }
+  let index = -1;
+  const teamFor = (i: number) => i === 0 ? home : i === 1 ? away : `Innings ${i + 1}`;
+  for (const element of ordered) {
+    const row = $(element);
+    const text = clean(row.text());
+    const cols = row.children().toArray().map(el => clean($(el).text()));
+    if (/^Batter\b/i.test(text) || /^Bowler\b/i.test(text)) continue;
+
+    // Each innings starts with a team/score header, for example "BIK 83-10 (18.3 Ov)".
+    if (/^[A-Z0-9]{2,8}\s+\d{1,3}[-/]\d{1,2}\s*\(/.test(text)) {
+      index += 1;
+      const teamName = teamFor(index);
+      current = {
+        id: `${id}:innings:${index + 1}`, teamId: slug(teamName), teamName,
+        runs: 0, wickets: 0, overs: "0", batters: [], bowlers: []
+      };
+      result.push(current);
+      const score = text.match(/(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*Ov/i);
+      if (score) { current.runs = number(score[1]); current.wickets = number(score[2]); current.overs = score[3]!; }
       continue;
     }
-    if (/^Fall of Wickets|^Powerplays|^Partnerships|^Yet to Bat/i.test(name)) continue;
-    if (/^Bowler$/i.test(name)) continue;
-    if (cols.length >= 5 && /^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "")) {
-      if (!current) {
-        const teamName = teamFor(index);
-        current = { id: `${id}:innings:${index + 1}`, teamId: slug(teamName), teamName, runs: 0, wickets: 0, overs: "0", batters: [], bowlers: [] };
-        result.push(current);
-      }
-      current.bowlers.push({ id: slug(name), name, overs: cols[1]!, runs: number(cols[3]), wickets: number(cols[4]) });
-    } else if (cols.length >= 6 && /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "")) {
-      if (!current) {
-        const teamName = teamFor(index);
-        current = { id: `${id}:innings:${index + 1}`, teamId: slug(teamName), teamName, runs: 0, wickets: 0, overs: "0", batters: [], bowlers: [] };
-        result.push(current);
-      }
+    if (!current || cols.length < 4) continue;
+    const name = cols[0] ?? "";
+    if (/^Total$/i.test(name)) {
+      const total = cols.join(" ").match(/(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*Overs?/i);
+      if (total) { current.runs = number(total[1]); current.wickets = number(total[2]); current.overs = total[3]!; }
+      continue;
+    }
+    if (/^(Extras|Fall of Wickets|Powerplays|Partnerships|Yet to Bat)$/i.test(name)) continue;
+    if (/^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "")) {
+      current.bowlers.push({
+        id: slug(name), name: name.replace(/\s*\(.*?\)$/, ""),
+        overs: cols[1]!, runs: number(cols[3]), wickets: number(cols[4])
+      });
+    } else if (/^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "")) {
       current.batters.push({
-        id: slug(name), name: name.replace(/\s*\(.*?\)$/, ""), runs: number(cols[2]), balls: number(cols[3]),
-        fours: number(cols[4]), sixes: number(cols[5]), out: !/not out|batting/i.test(cols.join(" "))
+        id: slug(name), name: name.replace(/\s*\(.*?\)$/, ""),
+        runs: number(cols[2]), balls: number(cols[3]), fours: number(cols[4]), sixes: number(cols[5]),
+        out: !/not out|batting/i.test(cols.join(" "))
       });
     }
-    // A second innings starts after the first total and resets on the next batter header.
-    if (/^Batter$/i.test(name) && current?.batters.length) {
-      index += 1;
-      current = undefined;
-    }
   }
-  // If the provider's CSS changes, don't invent scorecard contents.
-  return result.filter(inn => inn.batters.length > 0);
+  return result.filter(innings => innings.batters.length > 0);
 }
 
 function parseBallEvents($: ReturnType<typeof load>, match: Match): MatchEvent[] {
