@@ -6,7 +6,7 @@ Crikora is a cricket quick-score and match-moments backend. It is designed aroun
 
 The supplied message is from `grievance@cricbuzz.com` and explicitly refers to web-scraping access and a collection-to-API workflow. That is a meaningful authorization signal. Before enabling production collection, retain the original email with full headers and get the source owner to confirm operational details that the message does not specify: approved pages/endpoints, request limits and polling cadence, permitted fields, caching/retention, attribution, correction/deletion handling, and whether public redistribution and any future monetization are covered.
 
-**The Cricbuzz collector is not enabled in this repository yet.** No Cricbuzz URL, selector, undocumented endpoint, or polling pattern has been assumed. The source adapter must be implemented against the exact pages or interfaces Cricbuzz approves. Until then, the API runs on synthetic demo data. This avoids silently turning a vague technical assumption into a production dependency.
+**A first public-HTML Cricbuzz adapter is now present, but it is not yet certified production-ready.** It discovers match links from the live, upcoming, and recent match pages, then requests each match scorecard and (for live matches) its over-by-over page. It uses ordinary public page navigation, not private/mobile endpoints, cookies, or video streams. The HTML parser is deliberately isolated so it can be corrected when the live DOM is validated against actual fetched HTML fixtures. Keep demo mode as the default until local typecheck, parser tests, and a live smoke test have passed.
 
 ## Requirements
 
