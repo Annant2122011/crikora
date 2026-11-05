@@ -46,14 +46,9 @@ export class CricbuzzProvider implements CricketProvider {
       if (!parsed) continue;
       matches.push(parsed);
       if (item.bucket === "live") {
-        const oversHref = $("a[href*='/live-cricket-over-by-over/']").first().attr("href")
-          ?? $("a[href*='/live-cricket-overs/']").first().attr("href");
-        if (oversHref) {
-          const oversHtml = await this.getHtml(new URL(oversHref, ORIGIN), signal);
-          events.push(...parseBallEvents(load(oversHtml), parsed));
-        } else {
-          events.push(...parseBallEvents($, parsed));
-        }
+        // The live page itself exposes the latest delivery commentary. The
+        // over-by-over page only shows over summaries, so use the live feed.
+        events.push(...parseBallEvents($, parsed));
       }
     }
     return { matches, events, fetchedAt: new Date().toISOString() };
