@@ -18,7 +18,19 @@ The email supplied to the project says that web-scraping access is active and de
 
 Use the email address and sender identity as part of your verification, but do not treat the mailbox name alone as proof of the sender's authority. If any point is unclear, ask the Cricbuzz contact to confirm it in a reply.
 
-## Technical inputs needed to implement the adapter
+## Implemented first-pass adapter
+
+The repository now contains `src/providers/cricbuzz-provider.ts`. The public routes verified during implementation are:
+
+- Live index: `https://www.cricbuzz.com/cricket-match/live-scores`
+- Recent results: `https://www.cricbuzz.com/cricket-match/live-scores/recent-matches`
+- Upcoming fixtures: `https://www.cricbuzz.com/cricket-match/live-scores/upcoming-matches`
+- Match scorecard: `/live-cricket-scorecard/{matchId}/{slug}` (discovered from the match page's Scorecard link)
+- Over-by-over page: `/live-cricket-over-by-over/{matchId}/{slug}` (available from the match page's Overs link)
+
+The adapter currently uses the live match page for its recent delivery commentary and the discovered scorecard link for innings data. These are observed public-page routes, not a promise that Cricbuzz guarantees their HTML structure. The parser needs saved HTML fixtures and automated tests before production use.
+
+## Technical inputs needed to finish validation
 
 Provide sanitized examples of approved responses for:
 1. Match discovery (live/upcoming/completed).
@@ -44,4 +56,4 @@ For each example, include the approved URL pattern, HTTP method, required header
 
 ## Activation gate
 
-The Cricbuzz provider must remain disabled until the approved source interface and operational limits are documented in configuration and covered by tests. The demo provider is the only active source in the current scaffold.
+The Cricbuzz provider is implemented but must remain disabled until the exact operational limits from the written approval are copied into configuration and parser fixtures cover live, upcoming, completed, multi-innings, and representative domestic/women's pages. The demo provider remains the default. The checked-in 5-second request interval is a conservative placeholder, not a statement of Cricbuzz's approved limit.
