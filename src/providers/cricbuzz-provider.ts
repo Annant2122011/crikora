@@ -21,7 +21,7 @@ export class CricbuzzProvider implements CricketProvider {
     const discovered = new Map<string, { path: string; bucket: Bucket }>();
     for (const index of INDEXES) {
       const $ = load(await this.getHtml(new URL(index.path, ORIGIN), signal));
-      $("a[href*='/live-cricket-stream/']").each((_i, el) => {
+      $("a[href*='/live-cricket-scores/']").each((_i, el) => {
         const href = $(el).attr("href");
         if (!href) return;
         const url = new URL(href, ORIGIN);
