@@ -21,7 +21,6 @@ export class Poller {
   }
   start(): void {
     if (this.timer) return;
-    void this.tick().catch(() => undefined);
     this.timer = setInterval(() => void this.tick().catch(() => undefined), this.intervalMs);
     this.timer.unref();
   }
