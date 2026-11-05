@@ -36,7 +36,7 @@ The demo provider returns synthetic development fixtures, not real match data.
 5. **API** serves matches, scorecards, and event timelines.
 6. **Poller/worker** handles single-flight polling, backoff, timeouts, stale-source detection, and graceful shutdown.
 
-The current implementation is a development scaffold with an in-memory repository. It is not yet a production deployment. PostgreSQL persistence, durable job scheduling, source-specific parsing, metrics/alerts, API authentication, user preferences, and notification delivery remain production milestones.
+The current implementation is an early integration scaffold with an in-memory repository. It is not yet a production deployment. PostgreSQL persistence, durable job scheduling, source parser fixtures and validation, metrics/alerts, API authentication, user preferences, and notification delivery remain production milestones.
 
 ## API
 
@@ -56,4 +56,4 @@ npm run build
 
 ## Adding the Cricbuzz source
 
-Read [Cricbuzz source onboarding](docs/CRICBUZZ_SOURCE_ONBOARDING.md) first. Implement the source adapter only after the approved page/API list, schema examples, rate limits, and redistribution terms are confirmed. Keep credentials on the backend, never in the browser extension. Do not bypass authentication, anti-bot controls, or other technical restrictions.
+Read [Cricbuzz source onboarding](docs/CRICBUZZ_SOURCE_ONBOARDING.md) first. Set `SOURCE_MODE=cricbuzz` and `CRICKET_SOURCE_ENABLED=true` only after applying the exact request limits and retention/redistribution conditions from the written approval. Keep all collection on the backend, never in the browser extension. Do not bypass authentication, anti-bot controls, or other technical restrictions.
