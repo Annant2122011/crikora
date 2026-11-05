@@ -25,7 +25,7 @@ export class CricbuzzProvider implements CricketProvider {
         const href = $(el).attr("href");
         if (!href) return;
         const url = new URL(href, ORIGIN);
-        const id = url.pathname.match(/^\/live-cricket-stream\/(\d+)(?:\/|$)/)?.[1];
+        const id = url.pathname.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/)?.[1];
         if (url.origin === ORIGIN && id && !discovered.has(id)) discovered.set(id, { path: url.pathname, bucket: index.bucket });
       });
     }
