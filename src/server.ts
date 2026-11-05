@@ -53,7 +53,7 @@ app.setErrorHandler((error, _request, reply) => {
   reply.code(500).send({ error: "Internal server error" });
 });
 
-await poller.tick();
+await poller.tick().catch(error => app.log.error({ error }, "Initial collection failed"));
 poller.start();
 const close = async () => { poller.stop(); await app.close(); };
 process.once("SIGINT", () => void close());
