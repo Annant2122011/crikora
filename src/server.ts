@@ -10,7 +10,7 @@ import { Poller } from "./ingestion/poller.js";
 
 const env = z.object({
   HOST: z.string().default("0.0.0.0"), PORT: z.coerce.number().int().min(1).max(65535).default(8787),
-  LOG_LEVEL: z.string().default("info"), POLL_INTERVAL_MS: z.coerce.number().int().min(5000).default(30000),
+  LOG_LEVEL: z.string().default("info"), POLL_INTERVAL_MS: z.coerce.number().int().min(30000).default(90000),
   SOURCE_MODE: z.enum(["demo", "cricbuzz"]).default("demo"), CRICKET_SOURCE_ENABLED: z.string().default("false"),
   CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(1000).default(1500),
   CRICBUZZ_MAX_MATCHES_PER_POLL: z.coerce.number().int().min(1).max(50).default(20),
