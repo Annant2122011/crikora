@@ -1,12 +1,12 @@
 # Crikora
 
-A cricket quick-score and match-moments backend. The first implementation provides a provider-neutral ingestion pipeline, deterministic event detection, an HTTP API, and a safe demo provider.
+Crikora is a cricket quick-score and match-moments backend. It is designed around live, upcoming, and completed matches, concise scorecards, significant events, and a stable API for the browser extension.
 
-## Important source boundary
+## Source authorization and operating boundary
 
-The Cricbuzz adapter is intentionally **not implemented or enabled**. The email supplied so far is signed by "Crickora Support Team", not Cricbuzz, and does not grant permission for automated collection, storage, or redistribution. Do not point this project at Cricbuzz pages or undocumented endpoints unless you have explicit written authorization from an authorized Cricbuzz representative covering those exact activities.
+The supplied message is from `grievance@cricbuzz.com` and explicitly refers to web-scraping access and a collection-to-API workflow. That is a meaningful authorization signal. Before enabling production collection, retain the original email with full headers and get the source owner to confirm operational details that the message does not specify: approved pages/endpoints, request limits and polling cadence, permitted fields, caching/retention, attribution, correction/deletion handling, and whether public redistribution and any future monetization are covered.
 
-The provider interface is designed so an authorized, documented source can be added without changing the normalizer, event engine, storage, or API.
+**The Cricbuzz collector is not enabled in this repository yet.** No Cricbuzz URL, selector, undocumented endpoint, or polling pattern has been assumed. The source adapter must be implemented against the exact pages or interfaces Cricbuzz approves. Until then, the API runs on synthetic demo data. This avoids silently turning a vague technical assumption into a production dependency.
 
 ## Requirements
 
@@ -21,20 +21,22 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:8787/health and http://localhost:8787/v1/matches/live.
+Open:
+- http://localhost:8787/health
+- http://localhost:8787/v1/matches/live
 
-The demo provider returns clearly labelled synthetic fixtures. It is for development only, not live cricket data.
+The demo provider returns synthetic development fixtures, not real match data.
 
 ## Architecture
 
-1. **Provider adapter** fetches from an authorized source (demo adapter included).
-2. **Normalizer** validates and maps provider data into Crikora's stable schema.
-3. **Event engine** deterministically detects boundaries, wickets, and batter milestones.
-4. **Repository** stores the latest normalized snapshot and deduplicated events (in-memory development repository included).
+1. **Source adapter** retrieves data only from an authorized source and observes its documented limits.
+2. **Normalizer** validates provider payloads and maps them into Crikora's stable domain model.
+3. **Event engine** detects significant match moments. Prefer source delivery/event IDs; scorecard-delta inference is only a fallback and must be labelled as inferred.
+4. **Repository** persists normalized snapshots and idempotent events.
 5. **API** serves matches, scorecards, and event timelines.
-6. **Poller** runs with a single-flight guard, bounded retries, graceful shutdown, and configurable cadence.
+6. **Poller/worker** handles single-flight polling, backoff, timeouts, stale-source detection, and graceful shutdown.
 
-For production, replace the in-memory repository with PostgreSQL, add a durable job/queue layer, metrics/alerts, authentication and per-user preferences, and use provider-specific rate limits. Never treat a browser extension as a secure place for source credentials.
+The current implementation is a development scaffold with an in-memory repository. It is not yet a production deployment. PostgreSQL persistence, durable job scheduling, source-specific parsing, metrics/alerts, API authentication, user preferences, and notification delivery remain production milestones.
 
 ## API
 
@@ -49,8 +51,9 @@ For production, replace the in-memory repository with PostgreSQL, add a durable 
 ```bash
 npm test
 npm run typecheck
+npm run build
 ```
 
-## Adding a provider
+## Adding the Cricbuzz source
 
-Implement `CricketProvider` in `src/providers/provider.ts`. Map only data your provider is authorized to supply. Keep network access, credentials, rate limits, and attribution requirements inside that adapter. Do not bypass access controls or use undocumented endpoints without written approval.
+Read [Cricbuzz source onboarding](docs/CRICBUZZ_SOURCE_ONBOARDING.md) first. Implement the source adapter only after the approved page/API list, schema examples, rate limits, and redistribution terms are confirmed. Keep credentials on the backend, never in the browser extension. Do not bypass authentication, anti-bot controls, or other technical restrictions.
