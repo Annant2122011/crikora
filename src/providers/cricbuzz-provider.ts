@@ -134,20 +134,23 @@ function parseInnings($: ReturnType<typeof load>, id: string, home: string, away
     }
     if (/^Fall of Wickets|^Powerplays|^Partnerships|^Yet to Bat/i.test(name)) continue;
     if (/^Bowler$/i.test(name)) continue;
-    if (cols.length >= 6 && /^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "")) {
+    if (cols.length >= 5 && /^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "")) {
+      if (!current) {
+        const teamName = teamFor(index);
+        current = { id: `${id}:innings:${index + 1}`, teamId: slug(teamName), teamName, runs: 0, wickets: 0, overs: "0", batters: [], bowlers: [] };
+        result.push(current);
+      }
+      current.bowlers.push({ id: slug(name), name, overs: cols[1]!, runs: number(cols[3]), wickets: number(cols[4]) });
+    } else if (cols.length >= 6 && /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "")) {
       if (!current) {
         const teamName = teamFor(index);
         current = { id: `${id}:innings:${index + 1}`, teamId: slug(teamName), teamName, runs: 0, wickets: 0, overs: "0", batters: [], bowlers: [] };
         result.push(current);
       }
       current.batters.push({
-        id: slug(name), name: name.replace(/\s*\(.*?\)$/, ""), runs: number(cols[1]), balls: number(cols[2]),
-        fours: number(cols[3]), sixes: number(cols[4]), out: !/not out|batting/i.test(cols.join(" "))
+        id: slug(name), name: name.replace(/\s*\(.*?\)$/, ""), runs: number(cols[2]), balls: number(cols[3]),
+        fours: number(cols[4]), sixes: number(cols[5]), out: !/not out|batting/i.test(cols.join(" "))
       });
-    }
-    // Bowling rows are distinguished by over notation and wicket/runs columns.
-    if (current && cols.length >= 5 && /^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "")) {
-      current.bowlers.push({ id: slug(name), name, overs: cols[1]!, runs: number(cols[3]), wickets: number(cols[4]) });
     }
     // A second innings starts after the first total and resets on the next batter header.
     if (/^Batter$/i.test(name) && current?.batters.length) {
