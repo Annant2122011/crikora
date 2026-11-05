@@ -94,7 +94,7 @@ function parseScorecard($: ReturnType<typeof load>, id: string, bucket: Bucket):
   const competition = title.split(",").slice(1).join(",").trim() || "Cricket";
   return {
     id: `cricbuzz:${id}`, source: "cricbuzz", sourceMatchId: id, competition,
-    homeTeam, awayTeam, status: bucket, format, startTime: now, venue,
+    homeTeam, awayTeam, status: bucket, format, startTime: parseStartTime(body) ?? "", venue,
     description: title, innings, updatedAt: now
   };
 }
@@ -150,31 +150,36 @@ function parseInnings($: ReturnType<typeof load>, id: string, home: string, away
 
 function parseBallEvents($: ReturnType<typeof load>, match: Match): MatchEvent[] {
   const text = clean($("body").text());
-  const segments = text.split(/(?=Ov\\s+\\d+\\s+\\d+[-/]\\d+)/);
+  const segments = text.split(/(?=\\b\\d{1,2}\\.[0-6]\\s)/);
   const events: MatchEvent[] = [];
   const seen = new Set<string>();
   for (const segment of segments) {
-    const heading = segment.match(/^Ov\\s+(\\d+)\\s+\\d+[-/]\\d+/);
-    if (!heading) continue;
-    const over = heading[1]!;
-    const ballText = segment.split(/\\bto\\b/i).slice(1).join(" to ");
-    const tokens = [...ballText.matchAll(/(?:^|\\s)(W|4|6)(?=\\s|$)/g)].map(match => match[1]!);
-    tokens.forEach((token, ballIndex) => {
-      const type: MatchEvent["type"] = token === "W" ? "wicket" : token === "6" ? "six" : "four";
-      const sourceEventId = `${match.id}:${over}:ball:${ballIndex}:${type}`;
-      if (seen.has(sourceEventId)) return;
-      seen.add(sourceEventId);
-      const innings = match.innings.at(-1);
-      events.push({
-        id: sourceEventId, sourceEventId, matchId: match.id,
-        inningsId: innings?.id ?? `${match.id}:innings:1`,
-        type, teamName: innings?.teamName ?? "",
-        summary: token === "W" ? `Wicket in over ${over}` : `${token} in over ${over}`,
-        over, occurredAt: match.updatedAt
-      });
+    const over = segment.match(/^(\\d{1,2}\\.[0-6])\\s/)?.[1];
+    if (!over) continue;
+    let type: MatchEvent["type"] | undefined;
+    if (/\\b(wicket|OUT|bowled|lbw|caught|run out|stumped)\\b/i.test(segment)) type = "wicket";
+    else if (/\\bSIX\\b|\\b6 runs?\\b/i.test(segment)) type = "six";
+    else if (/\\bFOUR\\b|\\b4 runs?\\b/i.test(segment)) type = "four";
+    if (!type) continue;
+    const summary = segment.slice(0, 260);
+    const sourceEventId = `${match.id}:${over}:${type}:${hash(summary)}`;
+    if (seen.has(sourceEventId)) continue;
+    seen.add(sourceEventId);
+    const innings = match.innings.at(-1);
+    events.push({
+      id: sourceEventId, sourceEventId, matchId: match.id,
+      inningsId: innings?.id ?? `${match.id}:innings:1`,
+      type, teamName: innings?.teamName ?? "", summary, over, occurredAt: match.updatedAt
     });
   }
   return events;
+}
+
+function parseStartTime(text: string): string | null {
+  const match = text.match(/Date & Time\\s+([A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{4}[^.]{0,40})/i);
+  if (!match) return null;
+  const parsed = new Date(match[1]!);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
 function clean(value: string): string { return value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim(); }
