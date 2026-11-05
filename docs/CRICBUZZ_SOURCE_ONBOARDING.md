@@ -4,7 +4,7 @@ This checklist is an engineering gate, not legal advice. Keep the original permi
 
 ## Authorization details to confirm
 
-The email supplied to the project says that web-scraping access is active and describes match discovery, scorecard/event collection, normalization, change detection, database storage, and API delivery to the extension. Before the production adapter is switched on, obtain confirmation of:
+The email supplied to the project says that web-scraping access is active and describes match discovery, scorecard/event collection, normalization, change detection, database storage, and API delivery to the extension. Cricbuzz's own privacy notice and terms list grievance@cricbuzz.com as an official contact address, which supports that the address is associated with Cricbuzz; it does not independently authenticate the sender or establish the sender's authority to grant every category of licence. Preserve the original email with full headers. Before the production adapter is switched on, confirm:
 
 - Exact approved Cricbuzz pages, routes, or documented API endpoints.
 - Whether HTML page parsing, JSON interfaces, or both are permitted.
