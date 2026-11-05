@@ -29,8 +29,8 @@ export class CricbuzzProvider implements CricketProvider {
     const discovered = new Map<string, { url: string; bucket: MatchBucket }>();
     const pages: Array<{ path: string; bucket: MatchBucket }> = [
       { path: "/cricket-match/live-scores", bucket: "live" },
-      { path: "/cricket-match/upcoming-matches", bucket: "upcoming" },
-      { path: "/cricket-match/recent-scores", bucket: "completed" }
+      { path: "/cricket-match/live-scores/upcoming-matches", bucket: "upcoming" },
+      { path: "/cricket-match/live-scores/recent-matches", bucket: "completed" }
     ];
 
     for (const page of pages) {
@@ -74,7 +74,6 @@ export class CricbuzzProvider implements CricketProvider {
     if (bucket === "live") {
       const oversPath = stream.pathname.replace("/live-cricket-stream/", "/live-cricket-over-by-over/");
       const oversHtml = await this.getHtml(new URL(oversPath, this.origin), signal);
-      match.events = undefined as never;
       return { match, events: parseOverEvents(oversHtml, match) };
     }
     return { match, events: [] };
@@ -215,7 +214,7 @@ function parseOverEvents(html: string, match: Match): MatchEvent[] {
     const tokens = value.match(/\bW\b|\b6\b|\b4\b/g) ?? [];
     for (const token of tokens) {
       const type = token === "W" ? "wicket" : token === "6" ? "six" : "four";
-      const id = `${match.id}:over:${over}:${type}:${events.length}`;
+      const id = `${match.id}:over:${over}:ball:${tokenIndex}:${type}`;
       events.push({
         id, sourceEventId: id, matchId: match.id,
         inningsId: match.innings[0]?.id ?? `${match.id}:innings:1`,
