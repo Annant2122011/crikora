@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CrikoraEntity } from "../domain/entities.js";
 import type { Match, ProviderSnapshot } from "../domain/types.js";
 import { MemoryEntityRepository } from "../storage/memory-entity-repository.js";
@@ -87,6 +87,63 @@ describe("Poller refresh interval configuration", () => {
     const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
     expect(() => poller.setRefreshIntervalSeconds(5)).toThrow(RangeError);
     expect(() => poller.setRefreshIntervalSeconds(60)).toThrow(RangeError);
+  });
+});
+
+describe("Poller source backoff and denial handling", () => {
+  it("honors a source Retry-After before retrying a throttled request", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-06T12:00:00.000Z"));
+    let calls = 0;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot() {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(new Error("throttled"), {
+            sourceStatus: 429,
+            retryAfterMs: 20_000
+          });
+        }
+        return { matches: [], events: [], entities: [], fetchedAt: new Date().toISOString() };
+      }
+    };
+    const repository = new MemoryEntityRepository();
+    const poller = new Poller(provider, repository, 10_000);
+
+    try {
+      await expect(poller.tick()).rejects.toThrow("throttled");
+      await poller.tick();
+      expect(calls).toBe(1);
+
+      vi.advanceTimersByTime(20_001);
+      await poller.tick();
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+      await repository.close();
+    }
+  });
+
+  it("stops polling after an explicit source authorization denial", async () => {
+    let calls = 0;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot() {
+        calls += 1;
+        throw Object.assign(new Error("denied"), { sourceStatus: 403 });
+      }
+    };
+    const repository = new MemoryEntityRepository();
+    const poller = new Poller(provider, repository, 10_000);
+
+    try {
+      await expect(poller.tick()).rejects.toThrow("denied");
+      await poller.tick();
+      expect(calls).toBe(1);
+    } finally {
+      await repository.close();
+    }
   });
 });
 
