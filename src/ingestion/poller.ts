@@ -74,7 +74,7 @@ function mergeMatchSnapshot(previous: Match | undefined, incoming: Match): Match
 
 function readErrorNumber(error: unknown, key: string): number | undefined {
   if (!error || typeof error !== "object" || !(key in error)) return undefined;
-  const value = Number((error as Record<string, unknown>)[key]);
+  const value = Number((error as unknown as Record<string, unknown>)[key]);
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
