@@ -250,7 +250,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
   const claim = await pool.query<{ refresh_interval_seconds: number; last_started_at: Date | string }>(
     `UPDATE public.crikora_crawler_settings
         SET last_started_at = now(),
-            lease_until = now() + interval '90 seconds',
+            lease_until = now() + interval '330 seconds',
             last_error = NULL,
             updated_at = now()
       WHERE id = 1
