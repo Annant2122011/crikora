@@ -203,8 +203,6 @@ async function updateSettings(request: ApiRequest, response: ApiResponse): Promi
     `UPDATE public.crikora_crawler_settings
         SET refresh_interval_seconds = COALESCE($1, refresh_interval_seconds),
             enabled = COALESCE($2, enabled),
-            last_started_at = CASE WHEN $1::integer IS NOT NULL THEN NULL ELSE last_started_at END,
-            lease_until = CASE WHEN $1::integer IS NOT NULL THEN NULL ELSE lease_until END,
             updated_at = now()
       WHERE id = 1
       RETURNING refresh_interval_seconds, enabled, last_started_at, last_completed_at,
