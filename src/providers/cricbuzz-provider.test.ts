@@ -29,6 +29,7 @@ describe("Cricbuzz HTML entity extraction", () => {
         <main>
           <h1>Sample Player</h1>
           <img src="https://static.cricbuzz.com/images/player-100.jpg" alt="Sample Player">
+          <div style="background-image: url('https://static.cricbuzz.com/images/player-bg.jpg')"></div>
           <button role="tab" data-tab="batting">Batting</button><button role="tab" data-tab="bowling">Bowling</button>\n          <h3>Personal Information</h3>
           <table><tr><th>Born</th><td>May 28, 1994</td></tr>
             <tr><th>Role</th><td>Batting Allrounder</td></tr></table>
@@ -43,7 +44,8 @@ describe("Cricbuzz HTML entity extraction", () => {
     expect(entity?.sourceId).toBe("1234");
     expect(entity?.payload.title).toBe("Sample Player");
     expect(entity?.payload.images).toEqual(expect.arrayContaining([
-      expect.objectContaining({ url: "https://static.cricbuzz.com/images/player-100.jpg", alt: "Sample Player" })
+      expect.objectContaining({ url: "https://static.cricbuzz.com/images/player-100.jpg", alt: "Sample Player" }),
+      expect.objectContaining({ url: "https://static.cricbuzz.com/images/player-bg.jpg" })
     ]));
     expect((entity?.payload.tables as Array<{ headers: string[] }>).length).toBe(2);
     expect(entity?.payload.meta).toMatchObject({ "og:title": "Sample Player" });
