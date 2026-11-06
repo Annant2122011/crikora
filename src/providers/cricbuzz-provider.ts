@@ -12,6 +12,7 @@ interface Options {
   maxTeamsPerPoll: number;
   maxSeriesPerPoll: number;
   maxVenuesPerPoll: number;
+  maxContentPagesPerPoll: number;
   timeoutMs: number;
   maxResponseBytes: number;
   userAgent: string;
@@ -26,11 +27,43 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores/upcoming-matches", bucket: "upcoming" },
   { path: "/cricket-match/live-scores/recent-matches", bucket: "completed" }
 ];
-const PATH_RULES: Array<{ type: EntityType; pattern: RegExp }> = [
-  { type: "player", pattern: /^\/profiles\/(\d+)(?:\/|$)/ },
-  { type: "team", pattern: /^\/cricket-team\/([^/]+)\/(\d+)(?:\/|$)/ },
-  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)(?:\/|$)/ },
-  { type: "series", pattern: /^\/cricket-series\/(\d+)(?:\/|$)/ }
+
+// Two broad section indexes are sampled every refresh tick. The time-derived
+// cursor works across Vercel cold starts without depending on process memory.
+const SECTION_INDEXES = [
+  "/cricket-news",
+  "/cricket-videos",
+  "/cricket-photo-gallery",
+  "/cricket-team",
+  "/profiles",
+  "/cricket-schedule/series/all",
+  "/cricket-stats/icc-rankings/men/batting",
+  "/cricket-scorecard-archives"
+];
+
+const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = [
+  { type: "player", pattern: /^\/profiles\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "player-stats", pattern: /^\/profiles\/(\d+)\/[^/]+\/(?:all-matches|batting|bowling|stats)(?:\/.*)?$/ },
+  { type: "metadata", kind: "player-directory", pattern: /^\/profiles\/?$/ },
+  { type: "team", pattern: /^\/cricket-team\/([^/]+)\/(\d+)\/?$/ },
+  { type: "metadata", kind: "team-subpage", pattern: /^\/cricket-team\/([^/]+)\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "team-directory", pattern: /^\/cricket-team\/?$/ },
+  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)\/?$/ },
+  { type: "series", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "series-subpage", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/(.+)$/ },
+  { type: "metadata", kind: "series-catalog", pattern: /^\/cricket-series\/(?!\d+\/)(.+)$/ },
+  { type: "metadata", kind: "news", pattern: /^\/cricket-news\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "news-index", pattern: /^\/cricket-news\/?$/ },
+  { type: "metadata", kind: "video", pattern: /^\/cricket-videos\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "video-index", pattern: /^\/cricket-videos\/?$/ },
+  { type: "metadata", kind: "gallery", pattern: /^\/cricket-gallery\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "gallery-index", pattern: /^\/cricket-photo-gallery\/?$/ },
+  { type: "metadata", kind: "ranking-or-statistics", pattern: /^\/cricket-stats(?:\/(.+))?\/?$/ },
+  { type: "metadata", kind: "schedule", pattern: /^\/cricket-schedule(?:\/(.*))?\/?$/ },
+  { type: "metadata", kind: "scorecard-archives", pattern: /^\/cricket-scorecard-archives\/?$/ },
+  { type: "metadata", kind: "match-forecast", pattern: /^\/cricket-match-forecast\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "player-match-highlights", pattern: /^\/player-match-highlights\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "over-by-over", pattern: /^\/live-cricket-over-by-over\/(\d+)\/(.+)$/ }
 ];
 
 export class CricbuzzProvider implements CricketProvider {
@@ -44,6 +77,9 @@ export class CricbuzzProvider implements CricketProvider {
       throw new Error("Cricbuzz request interval must be a non-negative integer.");
     }
     if (options.maxMatchesPerPoll < 1 || options.maxMatchesPerPoll > 50) throw new Error("Invalid maxMatchesPerPoll.");
+    if (!Number.isInteger(options.maxContentPagesPerPoll) || options.maxContentPagesPerPoll < 0 || options.maxContentPagesPerPoll > 100) {
+      throw new Error("Invalid maxContentPagesPerPoll.");
+    }
   }
 
   async fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
@@ -59,6 +95,15 @@ export class CricbuzzProvider implements CricketProvider {
           indexRecords.set(match[1], parseMatchIndexStub(item, page, link));
         }
       }
+    }
+
+    const sectionTick = Math.floor(Date.now() / 10_000);
+    const sectionStart = (sectionTick * 2) % SECTION_INDEXES.length;
+    const sectionPaths = rotate(SECTION_INDEXES, sectionStart, 2);
+    const sectionPages: PageRecord[] = [];
+    for (const path of sectionPaths) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
+      sectionPages.push(await this.fetchPage(new URL(path, ORIGIN), signal));
     }
 
     const allMatches = [...discovered.values()];
@@ -81,6 +126,7 @@ export class CricbuzzProvider implements CricketProvider {
     const teamLinks = new Map<string, LinkRecord>();
     const seriesLinks = new Map<string, LinkRecord>();
     const venueLinks = new Map<string, LinkRecord>();
+    const contentLinks = new Map<string, LinkRecord>();
 
     for (const discoveredMatch of selected) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
@@ -116,6 +162,7 @@ export class CricbuzzProvider implements CricketProvider {
         mergeLinks(teamLinks, related.teams);
         mergeLinks(seriesLinks, related.series);
         mergeLinks(venueLinks, related.venues);
+        mergeLinks(contentLinks, related.content);
         const generic = parseEntityPage(page.$, page.url);
         if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
       }
@@ -124,7 +171,19 @@ export class CricbuzzProvider implements CricketProvider {
     await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, signal);
     await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, signal);
     await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, signal);
+    for (const page of sectionPages) {
+      const related = collectRelatedLinks(page.$, page.url);
+      mergeLinks(profileLinks, related.profiles);
+      mergeLinks(teamLinks, related.teams);
+      mergeLinks(seriesLinks, related.series);
+      mergeLinks(venueLinks, related.venues);
+      mergeLinks(contentLinks, related.content);
+      const generic = parseEntityPage(page.$, page.url);
+      if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
+    }
+
     await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, signal);
+    await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, signal);
 
     const fetchedAt = new Date().toISOString();
     return { matches, events, entities: [...entities.values()], fetchedAt };
@@ -199,7 +258,7 @@ function assertAllowedPageUrl(url: URL): void {
   if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
-  const allowed = /^\/(?:cricket-match\/|live-cricket-|profiles\/|cricket-team\/|cricket-series\/)/.test(url.pathname);
+  const allowed = /^\/(?:cricket-match\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-highlights\/)/.test(url.pathname);
   if (!allowed) throw new Error(`Page path is outside the Cricbuzz crawler allowlist: ${url.pathname}`);
 }
 
@@ -378,9 +437,11 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
   const sourceId = match?.[2] && entityType === "team" ? match[2]
     : match?.[1] ?? `${entityType}:${stableHash(path)}`;
   const data = extractPageData($, url);
+  const contentKind = rule?.kind ?? entityType;
   const payload: Record<string, unknown> = {
     ...data,
     entityType,
+    pageKind: contentKind,
     name: data.title ?? data.heading ?? new URL(url).pathname.split("/").filter(Boolean).at(-1),
     profile: entityType === "player" ? extractPlayerDetails($) : undefined,
     statistics: data.tables,
@@ -414,6 +475,7 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     canonicalUrl: $("link[rel='canonical']").attr("href") || url,
     meta: extractMeta($),
     images: extractImages($),
+    media: extractMediaReferences($, url),
     links: getLinks($, url).slice(0, 500),
     labels: extractLabels($),
     tables: extractTables($),
@@ -422,6 +484,42 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     controls: extractControls($),
     text: mainText.slice(0, 30000)
   };
+}
+
+function extractMediaReferences($: PageDoc, baseUrl: string): Array<Record<string, string>> {
+  const items = new Map<string, Record<string, string>>();
+  const add = (value: string | undefined, tag: string, kind: string, title?: string, poster?: string) => {
+    if (!value || value.startsWith("data:")) return;
+    try {
+      const parsed = new URL(value, baseUrl);
+      if (parsed.protocol !== "https:") return;
+      const key = parsed.toString();
+      items.set(key, {
+        url: key,
+        tag,
+        kind,
+        ...(title ? { title: clean(title) } : {}),
+        ...(poster ? { poster } : {})
+      });
+    } catch { /* malformed media URL */ }
+  };
+  $("video[src],audio[src],source[src],iframe[src]").each((_i, element) => {
+    const node = $(element);
+    const tag = (element as { tagName?: string }).tagName?.toLowerCase() ?? "media";
+    add(
+      node.attr("src") ?? node.attr("data-src"),
+      tag,
+      node.attr("type") ?? tag,
+      node.attr("title") ?? node.attr("aria-label"),
+      node.attr("poster")
+    );
+  });
+  $("video[poster]").each((_i, element) => {
+    const node = $(element);
+    const poster = node.attr("poster");
+    if (poster) add(poster, "video", "poster", node.attr("title"));
+  });
+  return [...items.values()].slice(0, 100);
 }
 
 function extractMeta($: PageDoc): Record<string, string> {
@@ -582,14 +680,22 @@ function extractPlayerDetails($: PageDoc): Record<string, unknown> {
 }
 
 function collectRelatedLinks($: PageDoc, baseUrl: string): {
-  profiles: LinkRecord[]; teams: LinkRecord[]; series: LinkRecord[]; venues: LinkRecord[];
+  profiles: LinkRecord[]; teams: LinkRecord[]; series: LinkRecord[]; venues: LinkRecord[]; content: LinkRecord[];
 } {
-  const result = { profiles: [] as LinkRecord[], teams: [] as LinkRecord[], series: [] as LinkRecord[], venues: [] as LinkRecord[] };
+  const result = {
+    profiles: [] as LinkRecord[],
+    teams: [] as LinkRecord[],
+    series: [] as LinkRecord[],
+    venues: [] as LinkRecord[],
+    content: [] as LinkRecord[]
+  };
   for (const link of getLinks($, baseUrl)) {
-    if (/^\/profiles\/\d+/.test(link.path)) result.profiles.push(link);
-    else if (/^\/cricket-team\//.test(link.path)) result.teams.push(link);
-    else if (/^\/cricket-series\/\d+/.test(link.path) && !/\/venues\/\d+/.test(link.path)) result.series.push(link);
-    if (/\/venues\/\d+/.test(link.path)) result.venues.push(link);
+    const identity = classifyCricbuzzEntityUrl(link.url);
+    if (identity?.entityType === "player") result.profiles.push(link);
+    else if (identity?.entityType === "team") result.teams.push(link);
+    else if (identity?.entityType === "series") result.series.push(link);
+    else if (identity?.entityType === "venue") result.venues.push(link);
+    else if (identity?.entityType === "metadata") result.content.push(link);
   }
   return result;
 }
@@ -716,10 +822,13 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
   if (!match) return undefined;
-  return {
-    entityType: rule.type,
-    sourceId: rule.type === "team" ? match[2]! : match[1]!
-  };
+  const rawId = rule.type === "team" ? match[2] : match[1];
+  const sourceId = rule.kind
+    ? `${rule.kind}:${rawId ?? stableHash(path)}`
+    : rule.type === "team"
+      ? match[2]!
+      : rawId ?? `${rule.type}:${stableHash(path)}`;
+  return { entityType: rule.type, sourceId };
 }
 
 export function parseCricbuzzEntityHtml(html: string, url: string): CrikoraEntity | undefined {
