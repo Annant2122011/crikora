@@ -4,7 +4,7 @@ Crikora is a cricket data collector and JSON API for the Crikora browser extensi
 
 ## What the collector reads
 
-The backend discovers public match pages from Cricbuzz's live, upcoming and recent indexes. It follows the navigation links exposed by each match page, rather than guessing private API endpoints:
+The backend discovers every match card exposed by Cricbuzz's live, upcoming and recent indexes and immediately returns a lightweight JSON record for each discovered match. Detailed match facts, scorecard, squads, commentary and linked profiles are deep-scraped in a rotating, bounded request budget; deeper records replace their index-only stubs as the collector reaches them. It follows the navigation links exposed by each match page, rather than guessing private API endpoints:
 
 - Match page: live score summary, match identity, competition, teams, format, result and match navigation.
 - Info/facts: date/time text, venue, toss, officials, match facts and related venue/series links.
@@ -12,13 +12,13 @@ The backend discovers public match pages from Cricbuzz's live, upcoming and rece
 - Squads: playing XI, bench/support-staff headings, player links and team images.
 - Full commentary: visible delivery commentary and explicit boundary/wicket events.
 - Player profiles: profile images, flag images, personal details, teams, summary and available career/stat tables.
-- Team, series and venue pages: visible page metadata, image URLs, tables, labels, links, sections, JSON-LD and page text. Venue pages can include location, city, capacity, timezone, home team and records when exposed by the page.
+- Team and series pages: visible page metadata, image URLs, tables, labels, buttons/tabs, links, sections, JSON-LD and page text. Where the page exposes same-host tabs for matches, stats, squads, venues, tables, players or results as ordinary links, those pages are also collected and merged into the parent entity's `supplementalPages` JSON. Venue pages can include location, city, capacity, timezone, home team and records when exposed by the page.
 
 Image assets are returned as Cricbuzz-hosted HTTPS URLs and metadata. The collector does not download video, replay streams, or bypass login, anti-bot checks or access controls. Generic page extraction preserves structured page content without claiming every page has the same schema.
 
 ## JSON API
 
-All successful data endpoints return JSON with a `data` field and small `meta` object. Every entity contains `id`, `entityType`, `sourceUrl`, `fetchedAt`, `expiresAt` and `ttlSeconds: 600`, alongside its normalized fields and page-derived payload.
+All successful data endpoints return JSON with a `data` field and small `meta` object. Index discovery makes the full visible match list available immediately; the detail fields for matches, players, teams, series and venues are progressively enriched over successive collection cycles. Every entity contains `id`, `entityType`, `sourceUrl`, `fetchedAt`, `expiresAt` and `ttlSeconds: 600`, alongside its normalized fields and page-derived payload.
 
 | Endpoint | Purpose |
 | --- | --- |
