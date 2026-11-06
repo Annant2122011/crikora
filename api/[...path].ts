@@ -365,6 +365,27 @@ async function search(url: URL, response: ApiResponse): Promise<void> {
   sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionSeconds: 600 } });
 }
 
+function applyCors(request: ApiRequest, response: ApiResponse): boolean {
+  const configured = (process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean);
+  const origin = request.headers.origin;
+  if (origin && configured.includes(origin)) {
+    response.setHeader("access-control-allow-origin", origin);
+    response.setHeader("vary", "Origin");
+    response.setHeader("access-control-allow-methods", "GET,POST,PUT,OPTIONS");
+    response.setHeader("access-control-allow-headers", "Authorization,Content-Type");
+    response.setHeader("access-control-max-age", "600");
+  }
+  if ((request.method ?? "").toUpperCase() === "OPTIONS") {
+    response.statusCode = 204;
+    response.end();
+    return true;
+  }
+  return false;
+}
+
 async function route(request: ApiRequest, response: ApiResponse): Promise<void> {
   const url = new URL(request.url ?? "/", "https://crikora.invalid");
   const path = url.pathname.replace(/^\/api\/?/, "").replace(/\/$/, "");
@@ -441,6 +462,7 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
 
 export default async function handler(request: ApiRequest, response: ApiResponse): Promise<void> {
   try {
+    if (applyCors(request, response)) return;
     await route(request, response);
   } catch (error) {
     console.error("Crikora Vercel API request failed", error);
