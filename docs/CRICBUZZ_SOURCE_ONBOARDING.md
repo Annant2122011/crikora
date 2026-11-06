@@ -4,6 +4,31 @@ Keep the original permission email with full headers in a private project record
 
 The project owner has confirmed that the full written approval covers the Cricbuzz web-scraping workflow, data categories, and operational limits. The repository therefore implements a backend public-page collector, while all numeric request settings remain configurable so they can be copied exactly from that approval.
 
+## Email
+
+The project documentation contains the following permission message. It is preserved verbatim as found on the current `main` branch:
+
+> Dear Kumar Annant,
+>
+> I hope this message finds you well.
+>
+> I am writing to formally grant you permission to access our system without the typical API limits and restrictions. As your uncle, I understand your enthusiasm for coding and support your efforts in your new project. It is important that you have the tools and resources you need to explore and develop your skills.
+>
+> Please ensure that you understand the responsibilities that come with this access. Adhering to a respectful and ethical use of our resources is crucial.
+>
+> If you have any questions or require further assistance, feel free to reach out.
+>
+> Wishing you all the best on your project!
+>
+> Best regards,
+>
+> Satyanarayan Dev  
+> Grievance Department  
+> Cricbuzz  
+> grievances@cricbuzz.com
+
+**Verification status:** The message text is present in the repository documentation at `main`. The repository contains a transcription, not the original email file with transport headers, Message-ID, sending-domain authentication results or other verifiable metadata. Its wording states access without typical API limits and restrictions, but it does not specify a numeric request rate, concurrency ceiling, permitted data-retention period, or explicit authorization for access to separate non-public services. Preserve the original email privately, including full headers, and confirm the permitted scope with Cricbuzz before accessing non-public endpoints or media delivery services. The crawler is therefore limited to public Cricbuzz HTML and stops on denials, throttling and access challenges.
+
 ## Observed public page routes
 
 The current public website exposes these routes:
