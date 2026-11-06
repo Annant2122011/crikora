@@ -828,7 +828,7 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
   if (!match) return undefined;
-  const rawId = rule.type === "team" ? match[2] : match[1];
+  const rawId = rule.type === "team" || rule.kind?.startsWith("team-") ? match[2] : match[1];
   const pathHash = stableHash(path);
   const isSubpage = Boolean(rule.kind?.includes("subpage") || rule.kind?.includes("stats"));
   const sourceId = rule.kind
