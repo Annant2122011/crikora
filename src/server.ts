@@ -3,10 +3,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import { z } from "zod";
-import { DemoProvider } from "./providers/demo-provider.js";
 import { CricbuzzProvider } from "./providers/cricbuzz-provider.js";
 import { ENTITY_TYPES, type EntityRepository, type StoredEntity } from "./domain/entities.js";
-import { MemoryEntityRepository } from "./storage/memory-entity-repository.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
 import { Poller } from "./ingestion/poller.js";
 
@@ -15,11 +13,10 @@ const env = z.object({
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   LOG_LEVEL: z.string().default("info"),
-  POLL_INTERVAL_MS: z.coerce.number().int().min(30000).default(180000),
-  SOURCE_MODE: z.enum(["demo", "cricbuzz"]).default("demo"),
-  CRICKET_SOURCE_ENABLED: z.string().default("false"),
-  DATABASE_URL: z.string().optional(),
-  CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
+  POLL_INTERVAL_SECONDS: z.enum(["10", "15", "20", "30"]).default("10"),
+  CRICBUZZ_AUTOMATION_AUTHORIZED: z.enum(["true", "false"]).default("false"),
+  DATABASE_URL: z.string().min(1),
+  CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).default(0),
   CRICBUZZ_MAX_MATCHES_PER_POLL: z.coerce.number().int().min(1).max(50).default(2),
   CRICBUZZ_MAX_PROFILES_PER_POLL: z.coerce.number().int().min(0).max(100).default(2),
   CRICBUZZ_MAX_TEAMS_PER_POLL: z.coerce.number().int().min(0).max(50).default(2),
@@ -31,38 +28,24 @@ const env = z.object({
   CORS_ORIGINS: z.string().default("")
 }).parse(process.env);
 
-if (env.SOURCE_MODE === "cricbuzz" && env.CRICKET_SOURCE_ENABLED !== "true") {
-  throw new Error("Set CRICKET_SOURCE_ENABLED=true to enable the Cricbuzz collector.");
-}
-if (env.SOURCE_MODE === "demo" && env.CRICKET_SOURCE_ENABLED === "true") {
-  throw new Error("Choose SOURCE_MODE=cricbuzz when enabling the Cricbuzz collector.");
-}
-if (env.SOURCE_MODE === "cricbuzz" && !env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is required for Cricbuzz collection; the collector must persist to PostgreSQL.");
-}
-
 async function startServer(): Promise<void> {
 const app = Fastify({ logger: { level: env.LOG_LEVEL }, requestIdHeader: "x-request-id" });
-const repository: EntityRepository = env.DATABASE_URL
-  ? new PostgresEntityRepository(env.DATABASE_URL)
-  : new MemoryEntityRepository();
-if (repository instanceof PostgresEntityRepository) await repository.ping();
+const repository: EntityRepository = new PostgresEntityRepository(env.DATABASE_URL);
+await (repository as PostgresEntityRepository).ping();
 
-const provider = env.SOURCE_MODE === "cricbuzz"
-  ? new CricbuzzProvider({
-      minRequestIntervalMs: env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS,
-      maxMatchesPerPoll: env.CRICBUZZ_MAX_MATCHES_PER_POLL,
-      maxProfilesPerPoll: env.CRICBUZZ_MAX_PROFILES_PER_POLL,
-      maxTeamsPerPoll: env.CRICBUZZ_MAX_TEAMS_PER_POLL,
-      maxSeriesPerPoll: env.CRICBUZZ_MAX_SERIES_PER_POLL,
-      maxVenuesPerPoll: env.CRICBUZZ_MAX_VENUES_PER_POLL,
-      timeoutMs: env.CRICBUZZ_TIMEOUT_MS,
-      maxResponseBytes: env.CRICBUZZ_MAX_RESPONSE_BYTES,
-      userAgent: env.CRICBUZZ_USER_AGENT
-    })
-  : new DemoProvider();
+const provider = new CricbuzzProvider({
+  minRequestIntervalMs: env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS,
+  maxMatchesPerPoll: env.CRICBUZZ_MAX_MATCHES_PER_POLL,
+  maxProfilesPerPoll: env.CRICBUZZ_MAX_PROFILES_PER_POLL,
+  maxTeamsPerPoll: env.CRICBUZZ_MAX_TEAMS_PER_POLL,
+  maxSeriesPerPoll: env.CRICBUZZ_MAX_SERIES_PER_POLL,
+  maxVenuesPerPoll: env.CRICBUZZ_MAX_VENUES_PER_POLL,
+  timeoutMs: env.CRICBUZZ_TIMEOUT_MS,
+  maxResponseBytes: env.CRICBUZZ_MAX_RESPONSE_BYTES,
+  userAgent: env.CRICBUZZ_USER_AGENT
+});
 
-const poller = new Poller(provider, repository, env.POLL_INTERVAL_MS, error => {
+const poller = new Poller(provider, repository, Number(env.POLL_INTERVAL_SECONDS) * 1000, error => {
   if (typeof error === "object" && error && "level" in error && error.level === "info") {
     app.log.info(error);
   } else {
@@ -88,7 +71,15 @@ function present(row: StoredEntity): Record<string, unknown> {
 app.get("/health", async (_request, reply) => {
   try {
     if (repository instanceof PostgresEntityRepository) await repository.ping();
-    return { ok: true, service: "crikora-api", source: provider.id, storage: repository instanceof PostgresEntityRepository ? "postgres" : "memory", retentionSeconds: 600 };
+    return {
+      ok: true,
+      service: "crikora-api",
+      source: provider.id,
+      storage: "postgres",
+      retentionSeconds: 600,
+      automationAuthorized: env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+      refreshIntervalSeconds: Number(env.POLL_INTERVAL_SECONDS)
+    };
   } catch {
     return reply.code(503).send({ ok: false, service: "crikora-api", storage: "unavailable" });
   }
@@ -187,8 +178,10 @@ const cleanupTimer = setInterval(() => {
 cleanupTimer.unref();
 
 await app.listen({ host: env.HOST, port: env.PORT });
-void poller.tick().catch(() => undefined);
-poller.start();
+if (env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true") {
+  void poller.tick().catch(() => undefined);
+  poller.start();
+}
 
 const close = async () => {
   clearInterval(cleanupTimer);
