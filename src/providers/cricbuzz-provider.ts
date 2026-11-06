@@ -391,13 +391,13 @@ function extractImages($: PageDoc): Array<{ url: string; alt?: string; width?: n
     add(node.attr("data-lazy-src"), alt, node.attr("width"), node.attr("height"));
     add(node.attr("src"), alt, node.attr("width"), node.attr("height"));
     for (const candidate of (node.attr("srcset") ?? "").split(",")) {
-      const [src, size] = candidate.trim().split(/\\s+/);
+      const [src, size] = candidate.trim().split(/\s+/);
       add(src, alt, size?.endsWith("w") ? size.slice(0, -1) : undefined);
     }
   });
   $("source[srcset]").each((_i, el) => {
     for (const candidate of ($(el).attr("srcset") ?? "").split(",")) {
-      const [src] = candidate.trim().split(/\\s+/);
+      const [src] = candidate.trim().split(/\s+/);
       add(src);
     }
   });
@@ -467,7 +467,7 @@ function extractStructuredData($: PageDoc): unknown[] {
 function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> {
   const players = new Map<string, { sourceId: string; name: string; url: string; images: ReturnType<typeof extractImages> }>();
   for (const link of getLinks($, baseUrl)) {
-    const profileId = link.path.match(/^\\/profiles\\/(\\d+)(?:\\/|$)/)?.[1];
+    const profileId = link.path.match(/^\/profiles\/(\d+)(?:\/|$)/)?.[1];
     if (!profileId) continue;
     const parent = $(`a[href="${link.path}"]`).first();
     const image = parent.find("img").first();
