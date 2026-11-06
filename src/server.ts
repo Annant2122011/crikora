@@ -22,6 +22,7 @@ const env = z.object({
   CRICBUZZ_MAX_TEAMS_PER_POLL: z.coerce.number().int().min(0).max(50).default(2),
   CRICBUZZ_MAX_SERIES_PER_POLL: z.coerce.number().int().min(0).max(50).default(1),
   CRICBUZZ_MAX_VENUES_PER_POLL: z.coerce.number().int().min(0).max(50).default(1),
+  CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL: z.coerce.number().int().min(0).max(100).default(2),
   CRICBUZZ_TIMEOUT_MS: z.coerce.number().int().min(3000).max(60000).default(15000),
   CRICBUZZ_MAX_RESPONSE_BYTES: z.coerce.number().int().min(100000).max(20000000).default(8000000),
   CRICBUZZ_USER_AGENT: z.string().min(12).default("Crikora/0.1 (+https://github.com/Annant2122011/crikora; authorized data access)"),
@@ -40,6 +41,7 @@ const provider = new CricbuzzProvider({
   maxTeamsPerPoll: env.CRICBUZZ_MAX_TEAMS_PER_POLL,
   maxSeriesPerPoll: env.CRICBUZZ_MAX_SERIES_PER_POLL,
   maxVenuesPerPoll: env.CRICBUZZ_MAX_VENUES_PER_POLL,
+  maxContentPagesPerPoll: env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL,
   timeoutMs: env.CRICBUZZ_TIMEOUT_MS,
   maxResponseBytes: env.CRICBUZZ_MAX_RESPONSE_BYTES,
   userAgent: env.CRICBUZZ_USER_AGENT
