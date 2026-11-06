@@ -1,59 +1,94 @@
 # Crikora
 
-Crikora is a cricket quick-score and match-moments backend. It is designed around live, upcoming, and completed matches, concise scorecards, significant events, and a stable API for the browser extension.
+Crikora is a cricket data collector and JSON API for the Crikora browser extension and website.
 
-## Source authorization and operating boundary
+## What the collector reads
 
-The supplied message is from `grievance@cricbuzz.com` and explicitly refers to web-scraping access and a collection-to-API workflow. That is a meaningful authorization signal. Before enabling production collection, retain the original email with full headers and get the source owner to confirm operational details that the message does not specify: approved pages/endpoints, request limits and polling cadence, permitted fields, caching/retention, attribution, correction/deletion handling, and whether public redistribution and any future monetization are covered.
+The backend discovers public match pages from Cricbuzz's live, upcoming and recent indexes. It follows the navigation links exposed by each match page, rather than guessing private API endpoints:
 
-**A first public-HTML Cricbuzz adapter is now present, but it is not yet certified production-ready.** It discovers match links from the live, upcoming, and recent match pages, then requests each match scorecard and (for live matches) its over-by-over page. It uses ordinary public page navigation, not private/mobile endpoints, cookies, or video streams. The HTML parser is deliberately isolated so it can be corrected when the live DOM is validated against actual fetched HTML fixtures. Keep demo mode as the default until local typecheck, parser tests, and a live smoke test have passed.
+- Match page: live score summary, match identity, competition, teams, format, result and match navigation.
+- Info/facts: date/time text, venue, toss, officials, match facts and related venue/series links.
+- Scorecard: innings, batting and bowling rows, player scores, overs, boundaries and wickets where the page markup exposes them.
+- Squads: playing XI, bench/support-staff headings, player links and team images.
+- Full commentary: visible delivery commentary and explicit boundary/wicket events.
+- Player profiles: profile images, flag images, personal details, teams, summary and available career/stat tables.
+- Team, series and venue pages: visible page metadata, image URLs, tables, labels, links, sections, JSON-LD and page text. Venue pages can include location, city, capacity, timezone, home team and records when exposed by the page.
 
-## Requirements
+Image assets are returned as Cricbuzz-hosted HTTPS URLs and metadata. The collector does not download video, replay streams, or bypass login, anti-bot checks or access controls. Generic page extraction preserves structured page content without claiming every page has the same schema.
 
-- Node.js 20+
-- npm
+## JSON API
+
+All successful data endpoints return JSON with a `data` field and small `meta` object. Every entity contains `id`, `entityType`, `sourceUrl`, `fetchedAt`, `expiresAt` and `ttlSeconds: 600`, alongside its normalized fields and page-derived payload.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | API, source and storage readiness |
+| `GET /v1/matches?status=live|upcoming|completed&limit=100` | Match list |
+| `GET /v1/matches/live` | Live matches |
+| `GET /v1/matches/upcoming` | Upcoming matches |
+| `GET /v1/matches/recent` | Completed/recent matches |
+| `GET /v1/matches/:matchId` | Full match JSON |
+| `GET /v1/matches/:matchId/events` | Match event timeline |
+| `GET /v1/players?limit=100` | Player profiles and images |
+| `GET /v1/teams?limit=100` | Team data |
+| `GET /v1/series?limit=100` | Series pages |
+| `GET /v1/venues?limit=100` | Venue/location data |
+| `GET /v1/entities/:entityType` | Generic entity list |
+| `GET /v1/entities/:entityType/:sourceId` | One entity |
+| `GET /v1/search?q=india` | Search cached JSON payloads |
+
+Match IDs in the API can be passed with or without the `cricbuzz:` prefix. Use the numeric Cricbuzz source ID for player/team/series/venue entity routes.
+
+## Ten-minute retention
+
+Every JSON entity is assigned a database expiry exactly ten minutes after it is fetched/refreshed:
+
+- PostgreSQL stores normalized records as JSONB.
+- Reads always filter out records whose `expires_at` is in the past.
+- The cleanup worker physically deletes expired rows every 5 seconds while the API is running.
+- Startup cleanup removes expired rows left behind during a restart or outage.
+- Upserts refresh the ten-minute window for records seen again.
+
+The in-memory development repository follows the same ten-minute expiry contract. No permanent historical archive is kept by this cache.
+
+## Neon setup
+
+A separate Neon project named `crikora` was created for cricket data. The existing `resolvX` support-bot database was left untouched.
+
+1. Apply `migrations/001_crikora_cache.sql` to the new Crikora database.
+2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
+3. Set `SOURCE_MODE=cricbuzz` and `CRICKET_SOURCE_ENABLED=true` only after the approved source request limits have been entered.
+4. Set `CORS_ORIGINS` to the exact deployed website origin and Chrome extension origin.
+
+The API refuses to start in Cricbuzz mode without `DATABASE_URL`. Demo mode can run with the memory repository.
 
 ## Run locally
+
+Requirements: Node.js 20+.
 
 ```bash
 cp .env.example .env
 npm install
+npm run typecheck
+npm test
+npm run build
 npm run dev
 ```
 
-Open:
-- http://localhost:8787/health
-- http://localhost:8787/v1/matches/live
+## Scraper configuration
 
-The demo provider returns synthetic development fixtures, not real match data.
+`POLL_INTERVAL_MS` controls how often an ingestion cycle starts. `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` spaces individual requests. Additional per-cycle limits keep the crawler bounded and allow match/profile collection to rotate across cycles. Defaults in `.env.example` are conservative placeholders; replace them with the exact numerical limits from the written Cricbuzz authorization. Do not lower the pacing or increase concurrency beyond those limits.
 
-## Architecture
+## Technical safety and known limits
 
-1. **Source adapter** retrieves data only from an authorized source and observes its documented limits.
-2. **Normalizer** validates provider payloads and maps them into Crikora's stable domain model.
-3. **Event engine** detects significant match moments. Prefer source delivery/event IDs; scorecard-delta inference is only a fallback and must be labelled as inferred.
-4. **Repository** persists normalized snapshots and idempotent events.
-5. **API** serves matches, scorecards, and event timelines.
-6. **Poller/worker** handles single-flight polling, backoff, timeouts, stale-source detection, and graceful shutdown.
+- All page requests are sequential, same-host HTTPS, timeout bounded, and response-size bounded.
+- 401, 403, 429, unexpected redirects and CAPTCHA/anti-bot pages fail closed. The scraper does not attempt to evade them.
+- Links are host-checked and constrained to the Cricbuzz match, profile, team, series and venue page routes.
+- Images are exposed as external URLs. They are not copied to Crikora object storage.
+- HTML schemas can change. Keep representative fixtures and re-run the parser tests when Cricbuzz changes markup.
+- Some player profile tabs or chart data may be loaded dynamically and won't exist in the initial static HTML. The collector returns all page content and links it can verify, but does not fabricate missing values.
+- The database cache is a ten-minute feed cache, not a historical score archive.
 
-The current implementation is an early integration scaffold with an in-memory repository. It is not yet a production deployment. PostgreSQL persistence, durable job scheduling, source parser fixtures and validation, metrics/alerts, API authentication, user preferences, and notification delivery remain production milestones.
+## CI
 
-## API
-
-- `GET /health`
-- `GET /v1/matches?status=live|upcoming|completed`
-- `GET /v1/matches/live`
-- `GET /v1/matches/:matchId`
-- `GET /v1/matches/:matchId/events`
-
-## Tests
-
-```bash
-npm test
-npm run typecheck
-npm run build
-```
-
-## Adding the Cricbuzz source
-
-Read [Cricbuzz source onboarding](docs/CRICBUZZ_SOURCE_ONBOARDING.md) first. Set `SOURCE_MODE=cricbuzz` and `CRICKET_SOURCE_ENABLED=true` only after applying the exact request limits and retention/redistribution conditions from the written approval. Keep all collection on the backend, never in the browser extension. Do not bypass authentication, anti-bot controls, or other technical restrictions.
+GitHub Actions runs typecheck, build and tests on pushes and pull requests to `main`.
