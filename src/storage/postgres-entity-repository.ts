@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from "pg";
+import { Pool } from "pg";
 import type { CrikoraEntity, EntityRepository, EntityType, StoredEntity } from "../domain/entities.js";
 
 const TTL_SQL = "INTERVAL '10 minutes'";
@@ -101,5 +101,5 @@ export class PostgresEntityRepository implements EntityRepository {
   async close(): Promise<void> { await this.pool.end(); }
 
   /** Used by readiness checks; does not create or mutate schema. */
-  async ping(): Promise<void> { await this.pool.query("SELECT 1"); }
+  async ping(): Promise<void> { await this.pool.query("SELECT 1 FROM public.crikora_cache LIMIT 0"); }
 }
