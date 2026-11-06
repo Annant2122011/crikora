@@ -176,23 +176,6 @@ app.get("/v1/content", async (request, reply) => {
   };
 });
 
-app.get("/v1/content", async (request, reply) => {
-  const query = z.object({
-    kind: z.string().trim().min(1).max(80).optional(),
-    limit: z.coerce.number().int().min(1).max(500).default(100)
-  }).safeParse(request.query);
-  if (!query.success) return reply.code(400).send({ error: "Invalid content query" });
-  const rows = await repository.list("metadata", 500);
-  const data = rows
-    .filter(row => !query.data.kind || row.payload.pageKind === query.data.kind)
-    .slice(0, query.data.limit)
-    .map(present);
-  return {
-    data,
-    meta: { count: data.length, kind: query.data.kind ?? "all", retentionSeconds: 600, source: provider.id }
-  };
-});
-
 app.get("/v1/search", async (request, reply) => {
   const query = z.object({ q: z.string().trim().min(1).max(120), limit: z.coerce.number().int().min(1).max(100).default(30) }).safeParse(request.query);
   if (!query.success) return reply.code(400).send({ error: "Supply a search term q and an optional limit." });
