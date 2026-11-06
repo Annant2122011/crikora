@@ -355,6 +355,24 @@ async function getEntity(type: EntityType, sourceId: string, response: ApiRespon
   sendJson(response, 200, { data: present(row), meta: { retentionSeconds: 600 } });
 }
 
+async function listContent(url: URL, response: ApiResponse): Promise<void> {
+  const kind = url.searchParams.get("kind");
+  const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
+  if (limit === undefined) {
+    sendJson(response, 400, { error: "Invalid content limit." });
+    return;
+  }
+  const rows = await getRepository().list("metadata", 500);
+  const data = rows
+    .filter(row => !kind || row.payload.pageKind === kind)
+    .slice(0, limit)
+    .map(present);
+  sendJson(response, 200, {
+    data,
+    meta: { count: data.length, kind: kind ?? "all", retentionSeconds: 600, source: "cricbuzz" }
+  });
+}
+
 async function search(url: URL, response: ApiResponse): Promise<void> {
   const query = url.searchParams.get("q")?.trim() ?? "";
   const limit = parseLimit(url.searchParams.get("limit"), 30, 100);
@@ -440,6 +458,9 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
       return;
     }
     return getEntity(type, parts[3]!, response);
+  }
+  if (parts[1] === "content" && parts.length === 2 && method === "GET") {
+    return listContent(url, response);
   }
   if (parts[1] === "search" && parts.length === 2 && method === "GET") {
     return search(url, response);
