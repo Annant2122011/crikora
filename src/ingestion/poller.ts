@@ -3,6 +3,75 @@ import type { Match, MatchEvent } from "../domain/types.js";
 import { detectMilestoneEvents } from "../engine/events.js";
 import type { CricketProvider } from "../providers/provider.js";
 
+
+/**
+ * Index discovery runs more frequently than deep-page enrichment. Do not let
+ * a lightweight index stub erase scorecards, squads, facts, images or profile
+ * links collected on a previous cycle.
+ */
+function mergeMatchSnapshot(previous: Match | undefined, incoming: Match): Match {
+  if (!previous) return incoming;
+
+  const mergeNonEmpty = (
+    oldValues: Record<string, unknown> | undefined,
+    newValues: Record<string, unknown> | undefined
+  ): Record<string, unknown> => {
+    const result = { ...(oldValues ?? {}) };
+    for (const [key, value] of Object.entries(newValues ?? {})) {
+      if (value === undefined || value === null) continue;
+      if (typeof value === "string" && value.trim() === "") continue;
+      result[key] = value;
+    }
+    return result;
+  };
+
+  const hasObjects = (value: Record<string, unknown> | undefined): boolean =>
+    Boolean(value && Object.keys(value).length > 0);
+
+  return {
+    ...previous,
+    ...incoming,
+    competition: incoming.competition && incoming.competition !== "Cricket"
+      ? incoming.competition
+      : previous.competition,
+    homeTeam: incoming.homeTeam && incoming.homeTeam !== "Unknown"
+      ? incoming.homeTeam
+      : previous.homeTeam,
+    awayTeam: incoming.awayTeam && incoming.awayTeam !== "Unknown"
+      ? incoming.awayTeam
+      : previous.awayTeam,
+    format: incoming.format && incoming.format !== "Unknown"
+      ? incoming.format
+      : previous.format,
+    startTime: incoming.startTime || previous.startTime,
+    venue: incoming.venue || previous.venue,
+    description: incoming.description || previous.description,
+    sourceUrl: incoming.sourceUrl || previous.sourceUrl,
+    infoUrl: incoming.infoUrl || previous.infoUrl,
+    scorecardUrl: incoming.scorecardUrl || previous.scorecardUrl,
+    squadsUrl: incoming.squadsUrl || previous.squadsUrl,
+    commentaryUrl: incoming.commentaryUrl || previous.commentaryUrl,
+    toss: incoming.toss || previous.toss,
+    result: incoming.result || previous.result,
+    innings: incoming.innings?.length ? incoming.innings : previous.innings,
+    images: incoming.images?.length ? incoming.images : previous.images,
+    officials: hasObjects(incoming.officials)
+      ? { ...(previous.officials ?? {}), ...(incoming.officials ?? {}) }
+      : previous.officials,
+    squads: hasObjects(incoming.squads)
+      ? { ...(previous.squads ?? {}), ...(incoming.squads ?? {}) }
+      : previous.squads,
+    stats: mergeNonEmpty(
+      previous.stats as Record<string, unknown> | undefined,
+      incoming.stats as Record<string, unknown> | undefined
+    ),
+    events: incoming.events?.length ? incoming.events : previous.events,
+    // Status and updatedAt intentionally come from the newest index/detail fetch.
+    status: incoming.status,
+    updatedAt: incoming.updatedAt
+  };
+}
+
 export class Poller {
   private timer?: NodeJS.Timeout;
   private running = false;
@@ -39,7 +108,10 @@ export class Poller {
         for (const event of [...oldEvents, ...newEvents]) {
           uniqueEvents.set(event.sourceEventId || event.id, event);
         }
-        const enrichedMatch = { ...match, events: [...uniqueEvents.values()] };
+        const enrichedMatch = mergeMatchSnapshot(previousMatch, {
+          ...match,
+          events: [...uniqueEvents.values()]
+        });
 
         const sourceRecord = snapshot.entities.find(entity =>
           entity.entityType === "match" && entity.sourceId === match.sourceMatchId
