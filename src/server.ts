@@ -181,7 +181,7 @@ const cleanupTimer = setInterval(() => {
   void repository.cleanupExpired().then(count => {
     if (count) app.log.info({ count }, "Expired Crikora cache rows deleted");
   }).catch(error => app.log.error({ err: error }, "Crikora TTL cleanup failed"));
-}, 15_000);
+}, 5_000);
 cleanupTimer.unref();
 
 await app.listen({ host: env.HOST, port: env.PORT });
