@@ -477,6 +477,9 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   if (parts[1] === "content" && parts.length === 2 && method === "GET") {
     return listContent(url, response);
   }
+  if (parts[1] === "content" && parts.length === 2 && method === "GET") {
+    return listContent(url, response);
+  }
   if (parts[1] === "search" && parts.length === 2 && method === "GET") {
     return search(url, response);
   }
