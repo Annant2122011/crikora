@@ -79,7 +79,7 @@ export class Poller {
   constructor(
     private readonly provider: CricketProvider,
     private readonly repository: EntityRepository,
-    private readonly intervalMs: number,
+    private intervalMs: number,
     private readonly onError: (error: unknown) => void = () => undefined
   ) {}
 
@@ -145,6 +145,20 @@ export class Poller {
     } finally {
       this.running = false;
     }
+  }
+
+  get refreshIntervalMs(): number {
+    return this.intervalMs;
+  }
+
+  setRefreshIntervalSeconds(seconds: number): void {
+    if (![10, 15, 20, 30].includes(seconds)) {
+      throw new RangeError("Refresh interval must be one of 10, 15, 20 or 30 seconds.");
+    }
+    const wasRunning = Boolean(this.timer);
+    if (wasRunning) this.stop();
+    this.intervalMs = seconds * 1000;
+    if (wasRunning) this.start();
   }
 
   start(): void {
