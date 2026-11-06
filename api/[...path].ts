@@ -55,6 +55,7 @@ function getPoller(): Poller {
       maxTeamsPerPoll: Number(process.env.CRICBUZZ_MAX_TEAMS_PER_POLL ?? 2),
       maxSeriesPerPoll: Number(process.env.CRICBUZZ_MAX_SERIES_PER_POLL ?? 1),
       maxVenuesPerPoll: Number(process.env.CRICBUZZ_MAX_VENUES_PER_POLL ?? 1),
+      maxContentPagesPerPoll: Number(process.env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL ?? 2),
       timeoutMs: Number(process.env.CRICBUZZ_TIMEOUT_MS ?? 15_000),
       maxResponseBytes: Number(process.env.CRICBUZZ_MAX_RESPONSE_BYTES ?? 8_000_000),
       userAgent: process.env.CRICBUZZ_USER_AGENT ??
