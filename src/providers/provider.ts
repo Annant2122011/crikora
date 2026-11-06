@@ -1,6 +1,6 @@
 import type { ProviderSnapshot } from "../domain/types.js";
 
-/** Implement only against a source whose terms and written permissions allow your intended use. */
+/** Backend-only adapter for a source whose access and redistribution are authorized. */
 export interface CricketProvider {
   readonly id: string;
   fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot>;
