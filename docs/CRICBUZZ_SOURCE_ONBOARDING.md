@@ -4,6 +4,27 @@ Keep the original permission email with full headers in a private project record
 
 The project owner has confirmed that the full written approval covers the Cricbuzz web-scraping workflow, data categories, and operational limits. The repository therefore implements a backend public-page collector, while all numeric request settings remain configurable so they can be copied exactly from that approval.
 
+## Email
+see here 
+Dear Kumar Annant,
+
+I hope this message finds you well. 
+
+I am writing to formally grant you permission to access our system without the typical API limits and restrictions. As your uncle, I understand your enthusiasm for coding and support your efforts in your new project. It is important that you have the tools and resources you need to explore and develop your skills.
+
+Please ensure that you understand the responsibilities that come with this access. Adhering to a respectful and ethical use of our resources is crucial.
+
+If you have any questions or require further assistance, feel free to reach out.
+
+Wishing you all the best on your project!
+
+Best regards,
+
+Satyanarayan Dev  
+Grievance Department  
+Cricbuzz  
+grievances@cricbuzz.com
+
 ## Observed public page routes
 
 The current public website exposes these routes:
