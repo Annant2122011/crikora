@@ -38,7 +38,6 @@ export class CricbuzzProvider implements CricketProvider {
   readonly id = "cricbuzz";
   private lastRequestAt = 0;
   private matchCursor = 0;
-  private profileCursor = 0;
 
   constructor(private readonly options: Options) {
     if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 1000) {
@@ -233,15 +232,18 @@ function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRe
 function parseScorecard($: PageDoc | undefined, matchId: string, home: string, away: string): Match["innings"] {
   if (!$) return [];
   const innings: Match["innings"] = [];
-  const containers = $("div.cb-col-100.cb-scrd-itms, div.cb-col.cb-col-100.cb-scrd-itms, table tr").toArray();
+  const containers = $("div.cb-col-100.cb-scrd-hdr-rw, div.cb-col.cb-col-100.cb-scrd-hdr-rw, div.cb-col-100.cb-scrd-itms, div.cb-col.cb-col-100.cb-scrd-itms, table tr").toArray();
   let current: Match["innings"][number] | undefined;
   let index = 0;
+  let mode: "batting" | "bowling" = "batting";
   for (const node of containers) {
     const row = $(node);
     const cols = row.is("tr")
       ? row.find("th,td").toArray().map(el => clean($(el).text()))
       : row.children().toArray().map(el => clean($(el).text()));
     const value = clean(row.text());
+    if (/^Batter\\b/i.test(value)) { mode = "batting"; continue; }
+    if (/^Bowler\\b/i.test(value)) { mode = "bowling"; continue; }
     const header = value.match(/^([A-Z0-9]{2,10})\s+(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*(Ov|Overs?|Balls?)/i);
     if (header) {
       index += 1;
@@ -506,4 +508,24 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
     const timer = setTimeout(resolve, ms);
     signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason ?? new Error("Aborted")); }, { once: true });
   });
+}
+
+/** Small exported seam for deterministic parser tests. */
+export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType; sourceId: string } | undefined {
+  let path: string;
+  try { path = new URL(url).pathname; } catch { return undefined; }
+  const rule = PATH_RULES.find(item => item.pattern.test(path));
+  if (!rule) return undefined;
+  const match = rule.pattern.exec(path);
+  if (!match) return undefined;
+  return {
+    entityType: rule.type,
+    sourceId: rule.type === "team" ? match[2]! : match[1]!
+  };
+}
+
+export function parseCricbuzzEntityHtml(html: string, url: string): CrikoraEntity | undefined {
+  const identity = classifyCricbuzzEntityUrl(url);
+  if (!identity) return undefined;
+  return parseEntityPage(load(html), url, identity.entityType);
 }
