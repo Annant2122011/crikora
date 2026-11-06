@@ -46,7 +46,10 @@ describe("Cricbuzz HTML entity extraction", () => {
       expect.objectContaining({ url: "https://static.cricbuzz.com/images/player-100.jpg", alt: "Sample Player" })
     ]));
     expect((entity?.payload.tables as Array<{ headers: string[] }>).length).toBe(2);
-    expect(entity?.payload.meta).toMatchObject({ "og:title": "Sample Player" });\n    expect(entity?.payload.controls).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Batting", "data-tab": "batting" })]));
+    expect(entity?.payload.meta).toMatchObject({ "og:title": "Sample Player" });
+    expect(entity?.payload.controls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "Batting", "data-tab": "batting" })
+    ]));
     expect(entity?.payload.associations).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "/cricket-team/england/1" })
     ]));
