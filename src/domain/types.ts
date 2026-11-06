@@ -16,10 +16,28 @@ export interface Match {
   homeTeam: string; awayTeam: string; status: MatchStatus; format: string;
   startTime: string; venue?: string; description?: string; innings: Innings[];
   updatedAt: string;
+  sourceUrl?: string;
+  infoUrl?: string;
+  scorecardUrl?: string;
+  squadsUrl?: string;
+  commentaryUrl?: string;
+  toss?: string;
+  result?: string;
+  officials?: Record<string, string>;
+  squads?: Record<string, unknown>;
+  stats?: Record<string, unknown>;
+  images?: Array<{ url: string; alt?: string }>;
+  events?: MatchEvent[];
 }
 export interface MatchEvent {
   id: string; matchId: string; inningsId: string; type: EventType;
   teamName: string; playerName?: string; summary: string;
   over?: string; occurredAt: string; sourceEventId: string;
+  runs?: number; wickets?: number; dismissal?: string;
 }
-export interface ProviderSnapshot { matches: Match[]; events: MatchEvent[]; fetchedAt: string; }
+export interface ProviderSnapshot {
+  matches: Match[];
+  events: MatchEvent[];
+  fetchedAt: string;
+  entities: import("./entities.js").CrikoraEntity[];
+}
