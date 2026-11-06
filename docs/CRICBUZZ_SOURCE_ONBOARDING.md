@@ -48,8 +48,10 @@ Apply `migrations/001_crikora_cache.sql` to the Crikora project before enabling 
 
 Environment settings:
 
-- `POLL_INTERVAL_MS`
-- `CRICBUZZ_MIN_REQUEST_INTERVAL_MS`
+- `POLL_INTERVAL_SECONDS` (10, 15, 20 or 30; default 10)
+- `CRIKORA_ADMIN_SECRET`
+- `CRIKORA_REFRESH_SECRET`
+- `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` (separate from refresh cadence; default 0)
 - `CRICBUZZ_MAX_MATCHES_PER_POLL`
 - `CRICBUZZ_MAX_PROFILES_PER_POLL`
 - `CRICBUZZ_MAX_TEAMS_PER_POLL`
@@ -59,9 +61,9 @@ Environment settings:
 - `CRICBUZZ_MAX_RESPONSE_BYTES`
 - `CRICBUZZ_USER_AGENT`
 
-The checked-in defaults are intentionally conservative placeholders. Copy the exact limits from the original approval before enabling the collector.
+The refresh cadence defaults to 10 seconds and is user-selectable at 10, 15, 20 or 30 seconds. The project owner reports that the written approval does not impose a numerical per-request interval, so no artificial minimum is hard-coded. The collector still stops on source denials, throttling responses, redirects or access challenges.
 
-Requests are sequential and have host/path allowlists, HTTPS checks, timeouts, response-size limits and explicit User-Agent. HTTP 401/403/429, unexpected redirects and bot/access challenges stop the cycle. No CAPTCHA bypass, cookie replay, account automation, or anti-bot evasion is implemented.
+Requests are sequential and have host/path allowlists, HTTPS checks, timeouts, response-size limits and an identifying User-Agent. HTTP 401/403/429, unexpected redirects and bot/access challenges stop the cycle. No CAPTCHA bypass, cookie replay, account automation, or anti-bot evasion is implemented.
 
 ## Validation
 
