@@ -40,8 +40,8 @@ export class CricbuzzProvider implements CricketProvider {
   private readonly relatedCursors = new Map<EntityType, number>();
 
   constructor(private readonly options: Options) {
-    if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 1000) {
-      throw new Error("Cricbuzz request interval must be at least 1000ms.");
+    if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 0) {
+      throw new Error("Cricbuzz request interval must be a non-negative integer.");
     }
     if (options.maxMatchesPerPoll < 1 || options.maxMatchesPerPoll > 50) throw new Error("Invalid maxMatchesPerPoll.");
   }
