@@ -182,11 +182,11 @@ export class CricbuzzProvider implements CricketProvider {
       throw new Error(`Cricbuzz redirected ${url.pathname} (HTTP ${response.status}); automatic redirect following is disabled.`);
     }
     if (!response.ok) throw new Error(`Cricbuzz returned HTTP ${response.status} for ${url.pathname}`);
-    if (!(response.headers.get("content-type") ?? "").toLowerCase().includes("text/html")) {
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
       throw new Error(`Expected HTML from Cricbuzz at ${url.pathname}.`);
     }
-    const body = new Uint8Array(await response.arrayBuffer());
-    if (body.byteLength > this.options.maxResponseBytes) throw new Error(`Cricbuzz page exceeded ${this.options.maxResponseBytes} bytes.`);
+    const body = await readLimitedBody(response, this.options.maxResponseBytes);
     const html = new TextDecoder().decode(body);
     if (/captcha|robot check|access denied|unusual traffic/i.test(html.slice(0, 100_000))) {
       throw new Error("Cricbuzz presented an access challenge; the collector stopped without bypassing it.");
@@ -224,11 +224,11 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     try { return new URL(href, page.url).pathname === link.path; } catch { return false; }
   }).first();
   const context = clean(anchor.parent().parent().parent().text() || anchor.parent().parent().text() || link.text);
-  const titleCandidate = context.match(/([^|]{2,100}?\\s+vs\\s+[^|]{2,100}?)(?:\\s{2,}|$)/i)?.[1];
+  const titleCandidate = context.match(/([^|]{2,100}?\s+vs\s+[^|]{2,100}?)(?:\s{2,}|$)/i)?.[1];
   const title = clean(titleCandidate || link.text || context.slice(0, 180));
-  const teams = title.match(/^(.+?)\\s+vs\\s+(.+?)(?:,|$)/i);
+  const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
   const now = new Date().toISOString();
-  const format = /the hundred/i.test(context) ? "The Hundred" : /\\btest\\b/i.test(context) ? "Test" : /\\bodi\\b/i.test(context) ? "ODI" : /\\bt20\\b/i.test(context) ? "T20" : "Unknown";
+  const format = /the hundred/i.test(context) ? "The Hundred" : /\btest\b/i.test(context) ? "Test" : /\bodi\b/i.test(context) ? "ODI" : /\bt20\b/i.test(context) ? "T20" : "Unknown";
   const sourceUrl = link.url;
   return {
     id: `cricbuzz:${item.id}`,
@@ -457,6 +457,10 @@ function extractImages($: PageDoc): Array<{ url: string; alt?: string; width?: n
     add(node.attr("data-original"), alt, node.attr("width"), node.attr("height"));
     add(node.attr("data-lazy-src"), alt, node.attr("width"), node.attr("height"));
     add(node.attr("src"), alt, node.attr("width"), node.attr("height"));
+    for (const candidate of (node.attr("data-srcset") ?? "").split(",")) {
+      const [src, size] = candidate.trim().split(/\s+/);
+      add(src, alt, size?.endsWith("w") ? size.slice(0, -1) : undefined);
+    }
     for (const candidate of (node.attr("srcset") ?? "").split(",")) {
       const [src, size] = candidate.trim().split(/\s+/);
       add(src, alt, size?.endsWith("w") ? size.slice(0, -1) : undefined);
@@ -470,6 +474,12 @@ function extractImages($: PageDoc): Array<{ url: string; alt?: string; width?: n
   });
   $("meta[property='og:image'],meta[name='twitter:image'],meta[property='twitter:image']").each((_i, el) => {
     add($(el).attr("content"), $("h1").first().text());
+  });
+  $("[style*='background-image']").each((_i, el) => {
+    const style = $(el).attr("style") ?? "";
+    for (const match of style.matchAll(/background-image\s*:\s*url\((['"]?)(.*?)\1\)/gi)) {
+      add(match[2], $(el).attr("aria-label") ?? $(el).attr("title"));
+    }
   });
   return [...map.values()].slice(0, 500);
 }
@@ -538,19 +548,12 @@ function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> 
     if (!profileId) continue;
     const parent = $(`a[href="${link.path}"]`).first();
     const image = parent.find("img").first();
-    const imageSrc = image.attr("data-src") || image.attr("data-original") || image.attr("src");
-    let imageUrl: string | undefined;
-    if (imageSrc) {
-      try {
-        const parsed = new URL(imageSrc, baseUrl);
-        if (parsed.protocol === "https:" && (parsed.hostname === "cricbuzz.com" || parsed.hostname.endsWith(".cricbuzz.com"))) imageUrl = parsed.toString();
-      } catch { /* ignore malformed profile picture URL */ }
-    }
+    const playerImages = extractImages(load(parent.html() ?? ""));
     players.set(profileId, {
       sourceId: profileId,
       name: link.text || clean(image.attr("alt") ?? ""),
       url: link.url,
-      images: imageUrl ? [{ url: imageUrl, alt: clean(image.attr("alt") ?? "") }] : []
+      images: playerImages
     });
   }
   const sections = extractSections($).filter(section => /playing|squad|bench|support staff|coach|team/i.test(section.heading));
@@ -618,7 +621,7 @@ function getMainText($: PageDoc): string {
 }
 function labeledValue(text: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(`(?:^|\\s)${escaped}\\s+([^\\n]{1,250}?)(?=\\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\\s|$)`, "i");
+  const regex = new RegExp(`(?:^|\s)${escaped}\s+([^\\n]{1,250}?)(?=\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\s|$)`, "i");
   return clean(text.match(regex)?.[1] ?? "");
 }
 function parseDateTime(value: string): string | null {
@@ -641,11 +644,65 @@ function rotate<T>(items: T[], cursor: number, count: number): T[] {
   const limit = Math.min(items.length, count);
   return Array.from({ length: limit }, (_v, index) => items[(cursor + index) % items.length]!);
 }
+async function readLimitedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Cricbuzz page exceeded ${maxBytes} bytes.`);
+  }
+  if (!response.body) return new Uint8Array();
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("Response exceeded configured size limit").catch(() => undefined);
+        throw new Error(`Cricbuzz page exceeded ${maxBytes} bytes.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason ?? new Error("Aborted"));
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason ?? new Error("Aborted")); }, { once: true });
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error("Aborted"));
+      return;
+    }
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(signal?.reason ?? new Error("Aborted"));
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

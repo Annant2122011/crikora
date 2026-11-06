@@ -85,11 +85,6 @@ function present(row: StoredEntity): Record<string, unknown> {
     ttlSeconds: 600
   };
 }
-function parseLimit(value: unknown, fallback: number, max: number): number {
-  const parsed = Number(value ?? fallback);
-  return Number.isInteger(parsed) ? Math.max(1, Math.min(max, parsed)) : fallback;
-}
-
 app.get("/health", async (_request, reply) => {
   try {
     if (repository instanceof PostgresEntityRepository) await repository.ping();

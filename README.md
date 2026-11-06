@@ -39,6 +39,21 @@ All successful data endpoints return JSON with a `data` field and small `meta` o
 
 Match IDs in the API can be passed with or without the `cricbuzz:` prefix. Use the numeric Cricbuzz source ID for player/team/series/venue entity routes.
 
+## Browser extension and website integration
+
+The shared browser-safe API client lives at `src/client/crikora-api-client.ts`. Import it from the extension or website bundle and point it at the deployed Crikora API origin:
+
+```ts
+import { CrikoraApiClient } from "./client/crikora-api-client.js";
+
+const crikora = new CrikoraApiClient("https://YOUR-CRIKORA-API.example");
+const { data: liveMatches } = await crikora.listLiveMatches();
+const { data: match } = await crikora.getMatch(liveMatches[0]!.id);
+const { data: players } = await crikora.listPlayers();
+```
+
+The client exposes typed methods for live/upcoming/recent matches, match details and events, players, teams, series, venues, entity lookup, search and health checks. It uses JSON-only GET requests, disables browser HTTP caching, supports `AbortSignal`, URL-encodes IDs and surfaces structured HTTP errors. The browser must call the Crikora API, never Cricbuzz directly. Keep `DATABASE_URL`, source credentials and provider secrets on the backend only.
+
 ## Ten-minute retention
 
 Every JSON entity is assigned a database expiry exactly ten minutes after it is fetched/refreshed:
