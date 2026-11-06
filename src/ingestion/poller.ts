@@ -1,4 +1,6 @@
 import type { CrikoraEntity, EntityRepository } from "../domain/entities.js";
+import type { Match, MatchEvent } from "../domain/types.js";
+import { detectMilestoneEvents } from "../engine/events.js";
 import type { CricketProvider } from "../providers/provider.js";
 
 export class Poller {
@@ -19,11 +21,26 @@ export class Poller {
       const snapshot = await this.provider.fetchSnapshot();
       const records = new Map<string, CrikoraEntity>();
 
-      // Keep the complete match object, including innings, stats, images and
-      // normalized event timeline, as one predictable JSON resource.
+      // Index-page stubs keep every discovered live/upcoming/recent match in the API.
+      // Detailed records replace stubs as the rotating deep-page budget reaches them.
       for (const match of snapshot.matches) {
-        const matchEvents = snapshot.events.filter(event => event.matchId === match.id);
-        const enrichedMatch = { ...match, events: match.events?.length ? match.events : matchEvents };
+        const existing = await this.repository.get("match", match.sourceMatchId);
+        const previousMatch = existing?.payload as unknown as Match | undefined;
+        const generatedMilestones = detectMilestoneEvents(previousMatch, match);
+        const oldEvents = Array.isArray(existing?.payload.events)
+          ? existing.payload.events as MatchEvent[]
+          : [];
+        const newEvents = [
+          ...(Array.isArray(match.events) ? match.events : []),
+          ...snapshot.events.filter(event => event.matchId === match.id),
+          ...generatedMilestones
+        ];
+        const uniqueEvents = new Map<string, MatchEvent>();
+        for (const event of [...oldEvents, ...newEvents]) {
+          uniqueEvents.set(event.sourceEventId || event.id, event);
+        }
+        const enrichedMatch = { ...match, events: [...uniqueEvents.values()] };
+
         const sourceRecord = snapshot.entities.find(entity =>
           entity.entityType === "match" && entity.sourceId === match.sourceMatchId
         );
