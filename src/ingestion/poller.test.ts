@@ -69,6 +69,27 @@ function snapshot(match: Match): ProviderSnapshot {
   return { matches: [match], events: [], entities: [entity], fetchedAt };
 }
 
+describe("Poller refresh interval configuration", () => {
+  const provider: CricketProvider = {
+    id: "fixture",
+    async fetchSnapshot() {
+      return { matches: [], events: [], entities: [], fetchedAt: new Date().toISOString() };
+    }
+  };
+
+  it.each([10, 15, 20, 30])("accepts %i-second refresh intervals", seconds => {
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    poller.setRefreshIntervalSeconds(seconds);
+    expect(poller.refreshIntervalMs).toBe(seconds * 1000);
+  });
+
+  it("rejects unapproved interval values rather than silently coercing them", () => {
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    expect(() => poller.setRefreshIntervalSeconds(5)).toThrow(RangeError);
+    expect(() => poller.setRefreshIntervalSeconds(60)).toThrow(RangeError);
+  });
+});
+
 describe("Poller progressive match enrichment", () => {
   it("keeps detailed fields when a later cycle only rediscovers the index card", async () => {
     let current = snapshot(makeMatch(true, "upcoming"));
