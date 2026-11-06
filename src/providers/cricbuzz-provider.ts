@@ -33,11 +33,16 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
 const SECTION_INDEXES = [
   "/cricket-news",
   "/cricket-videos",
+  "/cricket-videos/categories",
+  "/cricket-videos/playlists",
   "/cricket-photo-gallery",
   "/cricket-team",
   "/profiles",
   "/cricket-schedule/series/all",
+  "/cricket-schedule/upcoming-series/international",
   "/cricket-stats/icc-rankings/men/batting",
+  "/cricket-stats/icc-rankings/women/batting",
+  "/cricket-stats/points-table/test/icc-world-test-championship",
   "/cricket-series/auctions",
   "/cricket-scorecard-archives"
 ];
@@ -55,13 +60,18 @@ const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = 
   { type: "metadata", kind: "series-catalog", pattern: /^\/cricket-series\/(?!\d+\/)(.+)$/ },
   { type: "metadata", kind: "news", pattern: /^\/cricket-news\/(\d+)\/[^/]+\/?$/ },
   { type: "metadata", kind: "news-index", pattern: /^\/cricket-news\/?$/ },
+  { type: "metadata", kind: "news-category", pattern: /^\/cricket-news\/(?!\d+\/)(.+)\/?$/ },
   { type: "metadata", kind: "video", pattern: /^\/cricket-videos\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "video-collection", pattern: /^\/cricket-videos\/collection\/(\d+)\/(.+)\/?$/ },
+  { type: "metadata", kind: "video-playlists", pattern: /^\/cricket-videos\/playlists\/?$/ },
+  { type: "metadata", kind: "video-categories", pattern: /^\/cricket-videos\/categories\/?$/ },
   { type: "metadata", kind: "video-index", pattern: /^\/cricket-videos\/?$/ },
   { type: "metadata", kind: "gallery", pattern: /^\/cricket-gallery\/(\d+)\/[^/]+\/?$/ },
   { type: "metadata", kind: "gallery-index", pattern: /^\/cricket-photo-gallery\/?$/ },
   { type: "metadata", kind: "ranking-or-statistics", pattern: /^\/cricket-stats(?:\/(.+))?\/?$/ },
   { type: "metadata", kind: "schedule", pattern: /^\/cricket-schedule(?:\/(.*))?\/?$/ },
-  { type: "metadata", kind: "scorecard-archives", pattern: /^\/cricket-scorecard-archives\/?$/ },
+  { type: "metadata", kind: "scorecard-archives", pattern: /^\/cricket-scorecard-archives(?:\/(.*))?\/?$/ },
+  { type: "metadata", kind: "commentary", pattern: /^\/live-cricket-full-commentary\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "match-forecast", pattern: /^\/cricket-match-forecast\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "player-match-highlights", pattern: /^\/player-match-highlights\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "over-by-over", pattern: /^\/live-cricket-over-by-over\/(\d+)\/(.+)$/ }
@@ -236,12 +246,25 @@ export class CricbuzzProvider implements CricketProvider {
       redirect: "manual"
     });
     if ([401, 403, 429].includes(response.status)) {
-      throw new Error(`Cricbuzz denied or throttled ${url.pathname} (HTTP ${response.status}). Stop and respect the source response.`);
+      throw createSourceHttpError(
+        `Cricbuzz denied or throttled ${url.pathname} (HTTP ${response.status}). Stop and respect the source response.`,
+        response.status,
+        response.headers.get("retry-after")
+      );
     }
     if (response.status >= 300 && response.status < 400) {
-      throw new Error(`Cricbuzz redirected ${url.pathname} (HTTP ${response.status}); automatic redirect following is disabled.`);
+      throw createSourceHttpError(
+        `Cricbuzz redirected ${url.pathname} (HTTP ${response.status}); automatic redirect following is disabled.`,
+        response.status
+      );
     }
-    if (!response.ok) throw new Error(`Cricbuzz returned HTTP ${response.status} for ${url.pathname}`);
+    if (!response.ok) {
+      throw createSourceHttpError(
+        `Cricbuzz returned HTTP ${response.status} for ${url.pathname}`,
+        response.status,
+        response.headers.get("retry-after")
+      );
+    }
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
     if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
       throw new Error(`Expected HTML from Cricbuzz at ${url.pathname}.`);
@@ -249,10 +272,26 @@ export class CricbuzzProvider implements CricketProvider {
     const body = await readLimitedBody(response, this.options.maxResponseBytes);
     const html = new TextDecoder().decode(body);
     if (/captcha|robot check|access denied|unusual traffic/i.test(html.slice(0, 100_000))) {
-      throw new Error("Cricbuzz presented an access challenge; the collector stopped without bypassing it.");
+      throw createSourceHttpError("Cricbuzz presented an access challenge; the collector stopped without bypassing it.", 403);
     }
     return { url: url.toString(), html, $: load(html) };
   }
+}
+
+function createSourceHttpError(message: string, status: number, retryAfter?: string | null): Error & { sourceStatus: number; retryAfterMs?: number } {
+  const error = new Error(message) as Error & { sourceStatus: number; retryAfterMs?: number };
+  error.sourceStatus = status;
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const dateMs = Date.parse(retryAfter);
+    const wait = Number.isFinite(seconds) && seconds >= 0
+      ? seconds * 1000
+      : Number.isFinite(dateMs)
+        ? Math.max(0, dateMs - Date.now())
+        : undefined;
+    if (wait !== undefined) error.retryAfterMs = wait;
+  }
+  return error;
 }
 
 function assertAllowedPageUrl(url: URL): void {
