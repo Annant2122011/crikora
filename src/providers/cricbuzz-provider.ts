@@ -548,7 +548,7 @@ function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> 
     if (!profileId) continue;
     const parent = $(`a[href="${link.path}"]`).first();
     const image = parent.find("img").first();
-    const playerImages = extractImages(parent);
+    const playerImages = extractImages(load(parent.html() ?? ""));
     players.set(profileId, {
       sourceId: profileId,
       name: link.text || clean(image.attr("alt") ?? ""),
