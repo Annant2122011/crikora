@@ -30,8 +30,8 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
 const PATH_RULES: Array<{ type: EntityType; pattern: RegExp }> = [
   { type: "player", pattern: /^\/profiles\/(\d+)(?:\/|$)/ },
   { type: "team", pattern: /^\/cricket-team\/([^/]+)\/(\d+)(?:\/|$)/ },
-  { type: "series", pattern: /^\/cricket-series\/(\d+)(?:\/|$)/ },
-  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)(?:\/|$)/ }
+  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)(?:\/|$)/ },
+  { type: "series", pattern: /^\/cricket-series\/(\d+)(?:\/|$)/ }
 ];
 
 export class CricbuzzProvider implements CricketProvider {
@@ -238,12 +238,12 @@ function parseScorecard($: PageDoc | undefined, matchId: string, home: string, a
   let mode: "batting" | "bowling" = "batting";
   for (const node of containers) {
     const row = $(node);
+    const value = clean(row.text());
     const cols = row.is("tr")
       ? row.find("th,td").toArray().map(el => clean($(el).text()))
       : row.children().toArray().map(el => clean($(el).text()));
-    const value = clean(row.text());
-    if (/^Batter\\b/i.test(value)) { mode = "batting"; continue; }
-    if (/^Bowler\\b/i.test(value)) { mode = "bowling"; continue; }
+    if (/^Batter\b/i.test(value)) { mode = "batting"; continue; }
+    if (/^Bowler\b/i.test(value)) { mode = "bowling"; continue; }
     const header = value.match(/^([A-Z0-9]{2,10})\s+(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*(Ov|Overs?|Balls?)/i);
     if (header) {
       index += 1;
@@ -253,6 +253,7 @@ function parseScorecard($: PageDoc | undefined, matchId: string, home: string, a
         runs: num(header[2]), wickets: num(header[3]), overs: header[4]!, batters: [], bowlers: []
       };
       innings.push(current);
+      mode = "batting";
       continue;
     }
     if (!current || cols.length < 4) continue;
@@ -262,14 +263,26 @@ function parseScorecard($: PageDoc | undefined, matchId: string, home: string, a
       if (total) { current.runs = num(total[1]); current.wickets = num(total[2]); current.overs = total[3]!; }
       continue;
     }
-    if (/^(Batter|Bowler|Extras|Fall of Wickets|Powerplays|Partnerships|Yet to Bat)$/i.test(first)) continue;
-    if (/^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "")) {
-      current.bowlers.push({ id: slug(first), name: first, overs: cols[1]!, runs: num(cols[3]), wickets: num(cols[4]) });
-    } else if (/^\d+$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "")) {
-      current.batters.push({
-        id: slug(first), name: first, runs: num(cols[1]), balls: num(cols[2]),
-        fours: num(cols[3]), sixes: num(cols[4]), out: !/not out|batting/i.test(value)
+    if (/^(Extras|Fall of Wickets|Powerplays|Partnerships|Yet to Bat)$/i.test(first)) continue;
+    if (mode === "bowling" && /^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "")) {
+      current.bowlers.push({
+        id: slug(first), name: first, overs: cols[1]!,
+        runs: num(cols[3]), wickets: num(cols[4])
       });
+    } else if (mode === "batting") {
+      const hasDismissal = /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "");
+      const simpleRow = /^\d+$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "");
+      if (hasDismissal) {
+        current.batters.push({
+          id: slug(first), name: first, runs: num(cols[2]), balls: num(cols[3]),
+          fours: num(cols[4]), sixes: num(cols[5]), out: !/not out|batting/i.test(value)
+        });
+      } else if (simpleRow) {
+        current.batters.push({
+          id: slug(first), name: first, runs: num(cols[1]), balls: num(cols[2]),
+          fours: num(cols[3]), sixes: num(cols[4]), out: !/not out|batting/i.test(value)
+        });
+      }
     }
   }
   return innings;
