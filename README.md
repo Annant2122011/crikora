@@ -22,20 +22,16 @@ All successful data endpoints return JSON with a `data` field and small `meta` o
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | API, source and storage readiness |
-| `GET /v1/matches?status=live|upcoming|completed&limit=100` | Match list |
-| `GET /v1/matches/live` | Live matches |
-| `GET /v1/matches/upcoming` | Upcoming matches |
-| `GET /v1/matches/recent` | Completed/recent matches |
-| `GET /v1/matches/:matchId` | Full match JSON |
-| `GET /v1/matches/:matchId/events` | Match event timeline |
-| `GET /v1/players?limit=100` | Player profiles and images |
-| `GET /v1/teams?limit=100` | Team data |
-| `GET /v1/series?limit=100` | Series pages |
-| `GET /v1/venues?limit=100` | Venue/location data |
-| `GET /v1/entities/:entityType` | Generic entity list |
-| `GET /v1/entities/:entityType/:sourceId` | One entity |
-| `GET /v1/search?q=india` | Search cached JSON payloads |
+| `GET /api/health` | Vercel API, Neon and crawler readiness |
+| `GET /api/settings` | Current refresh cadence and crawler status |
+| `PUT /api/settings` | Set refresh cadence (10, 15, 20 or 30 seconds) and enable/disable collection; server-side admin token required |
+| `POST /api/refresh` | Run one collection cycle; server-side refresh token required and cadence enforced in Neon |
+| `GET /api/v1/matches` | Match list with optional status and limit |
+| `GET /api/v1/matches/:matchId` | Match detail |
+| `GET /api/v1/matches/:matchId/events` | Match event timeline |
+| `GET /api/v1/players`, `/teams`, `/series`, `/venues` | Entity feeds |
+| `GET /api/v1/search?q=india` | Search cached JSON payloads |
+
 
 Match IDs in the API can be passed with or without the `cricbuzz:` prefix. Use the numeric Cricbuzz source ID for player/team/series/venue entity routes.
 
@@ -72,10 +68,10 @@ A separate Neon project named `crikora` was created for cricket data. The existi
 
 1. Apply `migrations/001_crikora_cache.sql` to the new Crikora database.
 2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
-3. Set `SOURCE_MODE=cricbuzz` and `CRICKET_SOURCE_ENABLED=true` only after the approved source request limits have been entered.
-4. Set `CORS_ORIGINS` to the exact deployed website origin and Chrome extension origin.
+3. Set `CRICBUZZ_AUTOMATION_AUTHORIZED=true` for the approved Cricbuzz workflow. No `SOURCE_MODE=demo` switch is used.
+4. Set `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` as Vercel server-only secrets. Set `CORS_ORIGINS` to exact deployed origins when browser calls are introduced.
 
-The API refuses to start in Cricbuzz mode without `DATABASE_URL`. Demo mode can run with the memory repository.
+The production API requires `DATABASE_URL` and uses Neon PostgreSQL as its only production store. The demo source-mode switch has been removed.
 
 ## Run locally
 
@@ -90,9 +86,19 @@ npm run build
 npm run dev
 ```
 
-## Scraper configuration
+## Refresh cadence and settings
 
-`POLL_INTERVAL_MS` controls how often an ingestion cycle starts. `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` spaces individual requests. Additional per-cycle limits keep the crawler bounded and allow match/profile collection to rotate across cycles. Defaults in `.env.example` are conservative placeholders; replace them with the exact numerical limits from the written Cricbuzz authorization. Do not lower the pacing or increase concurrency beyond those limits.
+The default refresh interval is **10 seconds**, the fastest supported option. The user can select 10, 15, 20 or 30 seconds. The selected interval is persisted in `public.crikora_crawler_settings` and enforced by the API before a refresh can start.
+
+- `GET /api/settings` returns the current interval and enable state.
+- `PUT /api/settings` updates `refreshIntervalSeconds` and/or `enabled`. It requires `Authorization: Bearer <CRIKORA_ADMIN_SECRET>`.
+- `POST /api/refresh` executes one collection cycle. It requires `Authorization: Bearer <CRIKORA_REFRESH_SECRET>`.
+- The refresh endpoint has a database-backed lease and minimum-interval gate, so concurrent Vercel instances cannot overlap collection cycles.
+- `src/client/refresh-controller.ts` provides a client-side 10/15/20/30-second scheduler. The future extension/backend should call the Crikora API through this controller; it must never call Cricbuzz directly or contain source credentials.
+
+Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` controls the local long-running server. `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` controls spacing between individual source requests and defaults to zero because the approved workflow supplied by the project owner did not specify a numerical floor. HTTP 401, 403, 429, redirects and access challenges still stop the collection cycle; the crawler does not evade them.
+
+**Vercel hosting note:** Vercel Cron is not a 10-second scheduler on the current Hobby team. The Vercel API is request-driven; a running extension/backend (or a separate always-on worker) drives the chosen 10-second cadence. Vercel Cron on Hobby cannot replace that scheduler.
 
 ## Technical safety and known limits
 
