@@ -163,6 +163,12 @@ for (const [route, type] of [
     const rows = await repository.list(type, query.data.limit);
     return { data: rows.map(present), meta: { count: rows.length, retentionSeconds: 600 } };
   });
+  app.get(`${route}/:sourceId`, async (request, reply) => {
+    const { sourceId } = request.params as { sourceId: string };
+    const row = await repository.get(type, sourceId);
+    if (!row) return reply.code(404).send({ error: "Entity not found or expired" });
+    return { data: present(row), meta: { retentionSeconds: 600 } };
+  });
 }
 app.get("/v1/search", async (request, reply) => {
   const query = z.object({ q: z.string().trim().min(1).max(120), limit: z.coerce.number().int().min(1).max(100).default(30) }).safeParse(request.query);
