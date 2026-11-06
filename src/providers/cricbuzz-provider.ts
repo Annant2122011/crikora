@@ -558,8 +558,8 @@ function parseDateTime(value: string): string | null {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
-function num(value: string): number {
-  const parsed = Number.parseFloat(value.replace(/[^\d.-]/g, ""));
+function num(value: string | undefined): number {
+  const parsed = Number.parseFloat((value ?? "").replace(/[^\d.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 function clean(value: string): string { return value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim(); }
