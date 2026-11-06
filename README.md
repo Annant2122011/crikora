@@ -2,6 +2,34 @@
 
 Crikora is a cricket data collector and JSON API for the Crikora browser extension and website.
 
+## Sitemap-backed content inventory
+
+On 6 November 2026, a sitemap-only URL map of Cricbuzz returned **4,430 URLs** (the request cap was 10,000). The saved, machine-readable inventory is [`docs/cricbuzz-sitemap-inventory.json`](./docs/cricbuzz-sitemap-inventory.json). It contains URL/title pairs and counts by route family. This is the sitemap result, not proof that every public or dynamically generated URL is listed or that every page body was fetched.
+
+| Route family | Mapped URLs |
+| --- | ---: |
+| Series, competition and auction pages | 1,328 |
+| Team pages | 983 |
+| News articles | 757 |
+| Videos | 566 |
+| Player profiles | 256 |
+| Match pages | 129 |
+| Match facts | 129 |
+| Scorecards | 129 |
+| Squads | 129 |
+| Photo galleries | 10 |
+| Statistics/rankings/points tables | 4 |
+| Schedules | 2 |
+| Contact/advertising info | 2 |
+| Match forecast | 1 |
+| Subscription account page | 1 |
+| Scorecard archive index | 1 |
+| Photo gallery index | 1 |
+| Careers page | 1 |
+| Home page | 1 |
+
+The crawler's generic metadata feed stores public HTML pages by `pageKind` (news, video, gallery, ranking/statistics, schedule, archive, forecast and related profile/team/series subpages). Use `GET /api/v1/content?kind=news` or `GET /api/v1/content?kind=video` to filter them. Each page payload includes title, canonical URL, meta tags, image URLs, media references, links, tables, labels, sections, controls, JSON-LD and bounded visible text where present.
+
 ## What the collector reads
 
 The backend discovers every match card exposed by Cricbuzz's live, upcoming and recent indexes and immediately returns a lightweight JSON record for each discovered match. Detailed match facts, scorecard, squads, commentary and linked profiles are deep-scraped in a rotating, bounded request budget; deeper records replace their index-only stubs as the collector reaches them. It follows the navigation links exposed by each match page, rather than guessing private API endpoints:
@@ -30,6 +58,7 @@ All successful data endpoints return JSON with a `data` field and small `meta` o
 | `GET /api/v1/matches/:matchId` | Match detail |
 | `GET /api/v1/matches/:matchId/events` | Match event timeline |
 | `GET /api/v1/players`, `/teams`, `/series`, `/venues` | Entity feeds |
+| `GET /api/v1/content?kind=news&limit=100` | Metadata-backed content feed (news/video/gallery/rankings/schedule/archive/etc.) |
 | `GET /api/v1/search?q=india` | Search cached JSON payloads |
 
 
