@@ -477,7 +477,7 @@ function extractImages($: PageDoc): Array<{ url: string; alt?: string; width?: n
   });
   $("[style*='background-image']").each((_i, el) => {
     const style = $(el).attr("style") ?? "";
-    for (const match of style.matchAll(/background-image\\s*:\\s*url\\((['"]?)(.*?)\\1\\)/gi)) {
+    for (const match of style.matchAll(/background-image\s*:\s*url\((['"]?)(.*?)\1\)/gi)) {
       add(match[2], $(el).attr("aria-label") ?? $(el).attr("title"));
     }
   });
