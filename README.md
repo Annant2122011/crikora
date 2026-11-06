@@ -42,10 +42,13 @@ The shared browser-safe API client lives at `src/client/crikora-api-client.ts`. 
 ```ts
 import { CrikoraApiClient } from "./client/crikora-api-client.js";
 
-const crikora = new CrikoraApiClient("https://YOUR-CRIKORA-API.example");
+const crikora = new CrikoraApiClient("https://YOUR-CRIKORA-API.example/api");
 const { data: liveMatches } = await crikora.listLiveMatches();
 const { data: match } = await crikora.getMatch(liveMatches[0]!.id);
 const { data: players } = await crikora.listPlayers();
+
+// Refresh is a protected server-to-server POST, not a browser request.
+// The API's CRIKORA_REFRESH_SECRET must never be bundled into the extension.
 ```
 
 The client exposes typed methods for live/upcoming/recent matches, match details and events, players, teams, series, venues, entity lookup, search and health checks. It uses JSON-only GET requests, disables browser HTTP caching, supports `AbortSignal`, URL-encodes IDs and surfaces structured HTTP errors. The browser must call the Crikora API, never Cricbuzz directly. Keep `DATABASE_URL`, source credentials and provider secrets on the backend only.
