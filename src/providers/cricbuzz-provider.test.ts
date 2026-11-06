@@ -27,6 +27,27 @@ describe("Cricbuzz source URL classification", () => {
       .toEqual({ entityType: "metadata", sourceId: "match-forecast:161234" });
   });
 
+  it("classifies video collection, playlist and category pages", () => {
+    const collection = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-videos/collection/1/latest-videos");
+    expect(collection?.entityType).toBe("metadata");
+    expect(collection?.sourceId).toMatch(/^video-collection:1:/);
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-videos/playlists"))
+      .toEqual({ entityType: "metadata", sourceId: expect.stringContaining("video-playlists:") });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-videos/categories"))
+      .toEqual({ entityType: "metadata", sourceId: expect.stringContaining("video-categories:") });
+  });
+
+  it("classifies stream landing pages and player match performance subpages", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/live-cricket-stream/175617/paku19-vs-uaeu19"))
+      .toEqual({ entityType: "metadata", sourceId: "live-stream-page:175617" });
+    const batting = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/player-match-performance/match/22509/player/9647/batting");
+    const bowling = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/player-match-performance/match/22509/player/9647/bowling");
+    expect(batting?.entityType).toBe("metadata");
+    expect(batting?.sourceId).toContain("player-match-performance:22509:");
+    expect(bowling?.sourceId).toContain("player-match-performance:22509:");
+    expect(batting?.sourceId).not.toBe(bowling?.sourceId);
+  });
+
   it("uses the numeric team ID in distinct team subpage keys", () => {
     const squad = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-team/india/2/squad");
     const results = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-team/india/2/results");
