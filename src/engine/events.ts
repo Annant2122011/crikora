@@ -1,32 +1,68 @@
 import type { Innings, Match, MatchEvent } from "../domain/types.js";
 
-/** Stable, deterministic milestone detection from successive scorecard snapshots. */
-export function detectEvents(previous: Match | undefined, current: Match): MatchEvent[] {
+/** Detect only scorecard milestones whose crossing can be safely inferred from snapshots. */
+export function detectMilestoneEvents(previous: Match | undefined, current: Match): MatchEvent[] {
+  if (!previous) return [];
   const out: MatchEvent[] = [];
-  const oldInnings = new Map((previous?.innings ?? []).map(i => [i.id, i]));
-  const now = current.updatedAt;
-  for (const innings of current.innings) {
+  const oldInnings = new Map((previous.innings ?? []).map(innings => [innings.id, innings]));
+  const occurredAt = current.updatedAt;
+
+  for (const innings of current.innings ?? []) {
     const before = oldInnings.get(innings.id);
-    if (!before) continue; // A baseline snapshot is not evidence of a newly occurring event.
-    const oldBatters = new Map(before.batters.map(b => [b.id, b]));
-    for (const batter of innings.batters) {
+    if (!before) continue;
+
+    const oldBatters = new Map((before.batters ?? []).map(batter => [batter.id, batter]));
+    for (const batter of innings.batters ?? []) {
       const prior = oldBatters.get(batter.id);
       if (!prior) continue;
-      if (batter.runs > prior.runs) {
-        const delta = batter.runs - prior.runs;
-        if (delta >= 6 && batter.sixes > prior.sixes) out.push(event(current, innings, "six", batter.name, batter.runs, now));
-        else if (delta >= 4 && batter.fours > prior.fours) out.push(event(current, innings, "four", batter.name, batter.runs, now));
+      if (prior.runs < 100 && batter.runs >= 100) {
+        out.push(makeEvent(current, innings, "century", batter.id, batter.name, batter.runs, occurredAt));
+      } else if (prior.runs < 50 && batter.runs >= 50) {
+        out.push(makeEvent(current, innings, "fifty", batter.id, batter.name, batter.runs, occurredAt));
       }
-      if (prior.runs < 100 && batter.runs >= 100) out.push(event(current, innings, "century", batter.name, batter.runs, now));
-      else if (prior.runs < 50 && batter.runs >= 50) out.push(event(current, innings, "fifty", batter.name, batter.runs, now));
-      if (!prior.out && batter.out) out.push(event(current, innings, "wicket", batter.name, batter.runs, now));
+    }
+
+    const oldBowlers = new Map((before.bowlers ?? []).map(bowler => [bowler.id, bowler]));
+    for (const bowler of innings.bowlers ?? []) {
+      const prior = oldBowlers.get(bowler.id);
+      if (prior && prior.wickets < 5 && bowler.wickets >= 5) {
+        out.push(makeEvent(current, innings, "five_wicket_haul", bowler.id, bowler.name, bowler.wickets, occurredAt));
+      }
     }
   }
   return out;
 }
-function event(match: Match, innings: Innings, type: MatchEvent["type"], player: string, runs: number, at: string): MatchEvent {
-  const sourceEventId = [match.id, innings.id, type, player, runs].join(":");
-  const labels = { four: "hit a four", six: "hit a six", wicket: "was dismissed", fifty: "reached 50", century: "reached 100", five_wicket_haul: "took five wickets", other: "milestone" };
-  return { id: sourceEventId, sourceEventId, matchId: match.id, inningsId: innings.id, type,
-    teamName: innings.teamName, playerName: player, summary: `${player} ${labels[type]}`, occurredAt: at };
+
+function makeEvent(
+  match: Match,
+  innings: Innings,
+  type: MatchEvent["type"],
+  subjectId: string,
+  playerName: string,
+  value: number,
+  occurredAt: string
+): MatchEvent {
+  const labels = {
+    fifty: "reached 50",
+    century: "reached 100",
+    five_wicket_haul: "took five wickets",
+    four: "hit a four",
+    six: "hit a six",
+    wicket: "was dismissed",
+    other: "reached a milestone"
+  };
+  const sourceEventId = [match.id, innings.id, type, subjectId].join(":");
+  return {
+    id: sourceEventId,
+    sourceEventId,
+    matchId: match.id,
+    inningsId: innings.id,
+    type,
+    teamName: innings.teamName,
+    playerName,
+    summary: `${playerName} ${labels[type]}`,
+    runs: type === "fifty" || type === "century" ? value : undefined,
+    wickets: type === "five_wicket_haul" ? value : undefined,
+    occurredAt
+  };
 }
