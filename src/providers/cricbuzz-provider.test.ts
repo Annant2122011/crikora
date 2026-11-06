@@ -27,6 +27,15 @@ describe("Cricbuzz source URL classification", () => {
       .toEqual({ entityType: "metadata", sourceId: "match-forecast:161234" });
   });
 
+  it("uses the numeric team ID in distinct team subpage keys", () => {
+    const squad = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-team/india/2/squad");
+    const results = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-team/india/2/results");
+    expect(squad?.entityType).toBe("metadata");
+    expect(squad?.sourceId).toMatch(/^team-subpage:2:/);
+    expect(results?.sourceId).toMatch(/^team-subpage:2:/);
+    expect(squad?.sourceId).not.toBe(results?.sourceId);
+  });
+
   it("uses distinct stable IDs for different player and series subpages", () => {
     const playerBatting = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/326/mohammad-asif/all-matches/batting");
     const playerBowling = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/326/mohammad-asif/all-matches/bowling");
