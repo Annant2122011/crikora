@@ -47,12 +47,15 @@ export class CricbuzzProvider implements CricketProvider {
 
   async fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
     const discovered = new Map<string, DiscoveredMatch>();
+    const indexRecords = new Map<string, Match>();
     for (const index of INDEXES) {
       const page = await this.fetchPage(new URL(index.path, ORIGIN), signal);
       for (const link of getLinks(page.$, page.url)) {
         const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (match?.[1] && !discovered.has(match[1])) {
-          discovered.set(match[1], { id: match[1], path: link.path, bucket: index.bucket });
+          const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
+          discovered.set(match[1], item);
+          indexRecords.set(match[1], parseMatchIndexStub(item, page, link));
         }
       }
     }
@@ -61,9 +64,18 @@ export class CricbuzzProvider implements CricketProvider {
     const selected = rotate(allMatches, this.matchCursor, this.options.maxMatchesPerPoll);
     if (allMatches.length) this.matchCursor = (this.matchCursor + selected.length) % allMatches.length;
 
-    const matches: Match[] = [];
+    const matches: Match[] = [...indexRecords.values()];
     const events: MatchEvent[] = [];
     const entities = new Map<string, CrikoraEntity>();
+    for (const [sourceId, stub] of indexRecords) {
+      addEntity(
+        entities,
+        "match",
+        sourceId,
+        stub.sourceUrl ?? `https://www.cricbuzz.com/live-cricket-scores/${sourceId}`,
+        stub as unknown as Record<string, unknown>
+      );
+    }
     const profileLinks = new Map<string, LinkRecord>();
     const teamLinks = new Map<string, LinkRecord>();
     const seriesLinks = new Map<string, LinkRecord>();
@@ -81,7 +93,9 @@ export class CricbuzzProvider implements CricketProvider {
       const match = parseMatch(discoveredMatch, base, info, scorecard, squads);
       const matchEvents = commentary ? parseEvents(commentary.$, match) : parseEvents(base.$, match);
       match.events = matchEvents;
-      matches.push(match);
+      const existingIndex = matches.findIndex(existing => existing.sourceMatchId === match.sourceMatchId);
+      if (existingIndex >= 0) matches[existingIndex] = match;
+      else matches.push(match);
       events.push(...matchEvents);
 
       const combinedPages = [base, info, scorecard, squads, commentary].filter((p): p is PageRecord => Boolean(p));
@@ -197,6 +211,37 @@ function collectMatchNavigation($: PageDoc, pageUrl: string, matchId: string): {
     if (link.path.startsWith("/live-cricket-full-commentary/")) found.commentary ??= link.url;
   }
   return found;
+}
+
+function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: LinkRecord): Match {
+  const anchor = page.$("a[href]").filter((_i, element) => {
+    const href = page.$(element).attr("href");
+    if (!href) return false;
+    try { return new URL(href, page.url).pathname === link.path; } catch { return false; }
+  }).first();
+  const context = clean(anchor.parent().parent().parent().text() || anchor.parent().parent().text() || link.text);
+  const titleCandidate = context.match(/([^|]{2,100}?\\s+vs\\s+[^|]{2,100}?)(?:\\s{2,}|$)/i)?.[1];
+  const title = clean(titleCandidate || link.text || context.slice(0, 180));
+  const teams = title.match(/^(.+?)\\s+vs\\s+(.+?)(?:,|$)/i);
+  const now = new Date().toISOString();
+  const format = /the hundred/i.test(context) ? "The Hundred" : /\\btest\\b/i.test(context) ? "Test" : /\\bodi\\b/i.test(context) ? "ODI" : /\\bt20\\b/i.test(context) ? "T20" : "Unknown";
+  const sourceUrl = link.url;
+  return {
+    id: `cricbuzz:${item.id}`,
+    source: "cricbuzz",
+    sourceMatchId: item.id,
+    competition: "Cricket",
+    homeTeam: clean(teams?.[1] ?? "") || "Unknown",
+    awayTeam: clean(teams?.[2] ?? "") || "Unknown",
+    status: item.bucket,
+    format,
+    startTime: "",
+    innings: [],
+    updatedAt: now,
+    sourceUrl,
+    description: title,
+    stats: { indexCardText: context.slice(0, 2500), discoveredFrom: item.bucket }
+  };
 }
 
 function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRecord, scorecard?: PageRecord, squadsPage?: PageRecord): Match {
