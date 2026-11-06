@@ -12,7 +12,7 @@ The backend discovers every match card exposed by Cricbuzz's live, upcoming and 
 - Squads: playing XI, bench/support-staff headings, player links and team images.
 - Full commentary: visible delivery commentary and explicit boundary/wicket events.
 - Player profiles: profile images, flag images, personal details, teams, summary and available career/stat tables.
-- Team and series pages: visible page metadata, image URLs, tables, labels, buttons/tabs, links, sections, JSON-LD and page text. Where the page exposes same-host tabs for matches, stats, squads, venues, tables, players or results as ordinary links, those pages are also collected and merged into the parent entity's `supplementalPages` JSON. Venue pages can include location, city, capacity, timezone, home team and records when exposed by the page.
+- Team and series pages: visible page metadata, image URLs, tables, labels, controls, links, sections, JSON-LD and page text. The JSON records the same-host links and tab controls exposed in the HTML. The collector does not recursively fetch every team/series tab or merge those pages into a `supplementalPages` field; related entity pages are fetched only when independently discovered through the bounded match-page collection cycle. Venue pages can include location, city, capacity, timezone, home team and records when an allowed venue page is discovered and the fields are present in its HTML.
 
 Image assets are returned as Cricbuzz-hosted HTTPS URLs and metadata. The collector does not download video, replay streams, or bypass login, anti-bot checks or access controls. Generic page extraction preserves structured page content without claiming every page has the same schema.
 
@@ -101,7 +101,7 @@ npm run dev
 - Links are host-checked and constrained to the Cricbuzz match, profile, team, series and venue page routes.
 - Images are exposed as external URLs. They are not copied to Crikora object storage.
 - HTML schemas can change. Keep representative fixtures and re-run the parser tests when Cricbuzz changes markup.
-- Some player profile tabs or chart data may be loaded dynamically and won't exist in the initial static HTML. The collector returns all page content and links it can verify, but does not fabricate missing values.
+- This is a static-HTML collector, not a full browser automation engine. It does not execute Cricbuzz client-side JavaScript, trigger interactive tabs, or retrieve data that only appears after browser-side hydration. Some profile tabs, charts, or statistics may therefore be absent. The collector returns fields and links it can verify in the fetched HTML and does not fabricate missing values.
 - The database cache is a ten-minute feed cache, not a historical score archive.
 
 ## CI
