@@ -36,6 +36,22 @@ describe("CrikoraApiClient", () => {
     expect(response.meta?.retentionSeconds).toBe(600);
   });
 
+  it("requests generic content pages with an optional kind filter", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      data: [{ id: "news:140765", pageKind: "news" }],
+      meta: { count: 1, kind: "news", retentionSeconds: 600 }
+    })) as unknown as typeof fetch;
+    const client = new CrikoraApiClient("https://api.crikora.example/api", fetcher);
+
+    const response = await client.listContent({ kind: "news", limit: 25 });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://api.crikora.example/api/v1/content?kind=news&limit=25",
+      expect.any(Object)
+    );
+    expect(response.data[0]?.id).toBe("news:140765");
+  });
+
   it("normalizes Cricbuzz-prefixed match IDs and URL-encodes them", async () => {
     const fetcher = vi.fn(async () => jsonResponse({ data: { id: "123" } })) as unknown as typeof fetch;
     const client = new CrikoraApiClient("https://api.crikora.example", fetcher);
