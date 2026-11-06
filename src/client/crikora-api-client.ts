@@ -127,14 +127,14 @@ export class CrikoraApiClient {
 
   getMatch(matchId: string, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraMatch>> {
     return this.request<CrikoraEnvelope<CrikoraMatch>>(
-      `/v1/matches/${encodeURIComponent(matchId.replace(/^crikbuzz:/, ""))}`,
+      `/v1/matches/${encodeURIComponent(matchId.replace(/^cricbuzz:/, ""))}`,
       signal
     );
   }
 
   getMatchEvents(matchId: string, signal?: AbortSignal): Promise<CrikoraEnvelope<unknown[]>> {
     return this.request<CrikoraEnvelope<unknown[]>>(
-      `/v1/matches/${encodeURIComponent(matchId.replace(/^crikbuzz:/, ""))}/events`,
+      `/v1/matches/${encodeURIComponent(matchId.replace(/^cricbuzz:/, ""))}/events`,
       signal
     );
   }
