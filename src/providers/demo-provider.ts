@@ -23,7 +23,7 @@ export class DemoProvider implements CricketProvider {
           bowlers: [{ id: "demo-bowler-1", name: "C. Placeholder", overs: "2.4", runs: 21, wickets: 1 }]
         }]
       }],
-      events: []
+      events: [], entities: []
     };
   }
 }
