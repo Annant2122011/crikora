@@ -65,6 +65,11 @@ export interface MatchQuery {
   limit?: number;
 }
 
+export interface ContentQuery {
+  kind?: string;
+  limit?: number;
+}
+
 export class CrikoraApiError extends Error {
   constructor(
     message: string,
@@ -160,6 +165,14 @@ export class CrikoraApiClient {
       `/v1/entities/${encodeURIComponent(entityType)}/${encodeURIComponent(sourceId)}`,
       signal
     );
+  }
+
+  listContent(query: ContentQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    const params = new URLSearchParams();
+    if (query.kind) params.set("kind", query.kind);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/content${suffix}`, signal);
   }
 
   search(query: string, limit = 30, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
