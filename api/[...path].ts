@@ -203,6 +203,8 @@ async function updateSettings(request: ApiRequest, response: ApiResponse): Promi
     `UPDATE public.crikora_crawler_settings
         SET refresh_interval_seconds = COALESCE($1, refresh_interval_seconds),
             enabled = COALESCE($2, enabled),
+            lease_until = CASE WHEN $2::boolean IS TRUE THEN NULL ELSE lease_until END,
+            last_started_at = CASE WHEN $2::boolean IS TRUE THEN NULL ELSE last_started_at END,
             updated_at = now()
       WHERE id = 1
       RETURNING refresh_interval_seconds, enabled, last_started_at, last_completed_at,
@@ -292,13 +294,39 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 1000) : "Unknown collection error";
+    const sourceStatus =
+      error && typeof error === "object" && "sourceStatus" in error
+        ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+        : undefined;
+    const retryAfterMs =
+      error && typeof error === "object" && "retryAfterMs" in error
+        ? Number((error as { retryAfterMs?: unknown }).retryAfterMs)
+        : undefined;
+    const retrySeconds = sourceStatus === 429
+      ? Math.max(1, Math.min(3600, Math.ceil((Number.isFinite(retryAfterMs) ? retryAfterMs! : 60_000) / 1000)))
+      : sourceStatus && sourceStatus >= 500
+        ? 30
+        : undefined;
+    const disableCollector = sourceStatus === 401 || sourceStatus === 403;
     await pool.query(
       `UPDATE public.crikora_crawler_settings
-          SET lease_until = NULL, last_error = $1, updated_at = now()
+          SET enabled = CASE WHEN $2::boolean THEN false ELSE enabled END,
+              lease_until = CASE WHEN $3::integer IS NULL THEN NULL
+                                 ELSE now() + make_interval(secs => $3) END,
+              last_error = $1,
+              updated_at = now()
         WHERE id = 1`,
-      [message]
+      [message, disableCollector, retrySeconds ?? null]
     );
-    sendJson(response, 502, { ok: false, error: "Cricbuzz collection failed.", details: message });
+    if (retrySeconds) response.setHeader("retry-after", String(retrySeconds));
+    sendJson(response, sourceStatus === 429 ? 429 : 502, {
+      ok: false,
+      error: "Cricbuzz collection failed.",
+      details: message,
+      sourceStatus: sourceStatus ?? null,
+      retryAfterSeconds: retrySeconds ?? null,
+      collectorDisabled: disableCollector
+    });
   }
 }
 
@@ -371,20 +399,6 @@ async function listContent(url: URL, response: ApiResponse): Promise<void> {
   });
 }
 
-async function listContent(url: URL, response: ApiResponse): Promise<void> {
-  const kind = url.searchParams.get("kind");
-  const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
-  if (limit === undefined) {
-    sendJson(response, 400, { error: "Invalid content limit." });
-    return;
-  }
-  const rows = await getRepository().list("metadata", 500);
-  const data = rows.filter(row => !kind || row.payload.pageKind === kind).slice(0, limit).map(present);
-  sendJson(response, 200, {
-    data,
-    meta: { count: data.length, kind: kind ?? "all", retentionSeconds: 600, source: "cricbuzz" }
-  });
-}
 
 async function search(url: URL, response: ApiResponse): Promise<void> {
   const query = url.searchParams.get("q")?.trim() ?? "";
@@ -471,9 +485,6 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
       return;
     }
     return getEntity(type, parts[3]!, response);
-  }
-  if (parts[1] === "content" && parts.length === 2 && method === "GET") {
-    return listContent(url, response);
   }
   if (parts[1] === "content" && parts.length === 2 && method === "GET") {
     return listContent(url, response);
