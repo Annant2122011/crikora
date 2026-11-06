@@ -38,6 +38,7 @@ const SECTION_INDEXES = [
   "/profiles",
   "/cricket-schedule/series/all",
   "/cricket-stats/icc-rankings/men/batting",
+  "/cricket-series/auctions",
   "/cricket-scorecard-archives"
 ];
 
@@ -168,9 +169,6 @@ export class CricbuzzProvider implements CricketProvider {
       }
     }
 
-    await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, signal);
-    await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, signal);
-    await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, signal);
     for (const page of sectionPages) {
       const related = collectRelatedLinks(page.$, page.url);
       mergeLinks(profileLinks, related.profiles);
@@ -182,6 +180,9 @@ export class CricbuzzProvider implements CricketProvider {
       if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
     }
 
+    await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, signal);
+    await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, signal);
+    await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, signal);
     await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, signal);
     await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, signal);
 
