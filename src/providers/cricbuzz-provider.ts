@@ -369,26 +369,45 @@ function extractMeta($: PageDoc): Record<string, string> {
 }
 function extractImages($: PageDoc): Array<{ url: string; alt?: string; width?: number; height?: number }> {
   const map = new Map<string, { url: string; alt?: string; width?: number; height?: number }>();
+  const add = (value: string | undefined, alt?: string, width?: string, height?: string) => {
+    if (!value || /^data:/i.test(value)) return;
+    try {
+      const parsed = new URL(value, ORIGIN);
+      const isCricbuzzHost = parsed.hostname === "cricbuzz.com" || parsed.hostname.endsWith(".cricbuzz.com");
+      if (parsed.protocol !== "https:" || !isCricbuzzHost) return;
+      map.set(parsed.toString(), {
+        url: parsed.toString(),
+        alt: clean(alt ?? "") || undefined,
+        width: width ? num(width) : undefined,
+        height: height ? num(height) : undefined
+      });
+    } catch { /* malformed or relative-only values that cannot be resolved are skipped */ }
+  };
+
   $("img").each((_i, el) => {
     const node = $(el);
-    const src = node.attr("data-src") || node.attr("data-original") || node.attr("data-lazy-src") || node.attr("src");
-    if (!src || /^data:/i.test(src)) return;
-    const candidates = [src, ...(node.attr("srcset") ?? "").split(",").map(item => item.trim().split(/\s+/)[0] ?? "")];
-    for (const candidate of candidates) {
-      try {
-        const parsed = new URL(candidate, ORIGIN);
-        if (!/^https?:$/.test(parsed.protocol) || !IMAGE_HOSTS.has(parsed.hostname)) continue;
-        map.set(parsed.toString(), {
-          url: parsed.toString(),
-          alt: clean(node.attr("alt") ?? "") || undefined,
-          width: num(node.attr("width") ?? ""),
-          height: num(node.attr("height") ?? "")
-        });
-      } catch { /* malformed image URLs are skipped */ }
+    const alt = node.attr("alt");
+    add(node.attr("data-src"), alt, node.attr("width"), node.attr("height"));
+    add(node.attr("data-original"), alt, node.attr("width"), node.attr("height"));
+    add(node.attr("data-lazy-src"), alt, node.attr("width"), node.attr("height"));
+    add(node.attr("src"), alt, node.attr("width"), node.attr("height"));
+    for (const candidate of (node.attr("srcset") ?? "").split(",")) {
+      const [src, size] = candidate.trim().split(/\\s+/);
+      add(src, alt, size?.endsWith("w") ? size.slice(0, -1) : undefined);
     }
   });
-  return [...map.values()].slice(0, 300);
+  $("source[srcset]").each((_i, el) => {
+    for (const candidate of ($(el).attr("srcset") ?? "").split(",")) {
+      const [src] = candidate.trim().split(/\\s+/);
+      add(src);
+    }
+  });
+  $("meta[property='og:image'],meta[name='twitter:image'],meta[property='twitter:image']").each((_i, el) => {
+    add($(el).attr("content"), $("h1").first().text());
+  });
+  return [...map.values()].slice(0, 500);
 }
+
 function extractTables($: PageDoc): Array<{ headers: string[]; rows: string[][] }> {
   const output: Array<{ headers: string[]; rows: string[][] }> = [];
   $("table").each((_i, table) => {
@@ -453,11 +472,19 @@ function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> 
     if (!profileId) continue;
     const parent = $(`a[href="${link.path}"]`).first();
     const image = parent.find("img").first();
+    const imageSrc = image.attr("data-src") || image.attr("data-original") || image.attr("src");
+    let imageUrl: string | undefined;
+    if (imageSrc) {
+      try {
+        const parsed = new URL(imageSrc, baseUrl);
+        if (parsed.protocol === "https:" && (parsed.hostname === "cricbuzz.com" || parsed.hostname.endsWith(".cricbuzz.com"))) imageUrl = parsed.toString();
+      } catch { /* ignore malformed profile picture URL */ }
+    }
     players.set(profileId, {
       sourceId: profileId,
       name: link.text || clean(image.attr("alt") ?? ""),
       url: link.url,
-      images: image.length ? [{ url: new URL(image.attr("data-src") || image.attr("src") || "", baseUrl).toString(), alt: clean(image.attr("alt") ?? "") }] : []
+      images: imageUrl ? [{ url: imageUrl, alt: clean(image.attr("alt") ?? "") }] : []
     });
   }
   const sections = extractSections($).filter(section => /playing|squad|bench|support staff|coach|team/i.test(section.heading));
