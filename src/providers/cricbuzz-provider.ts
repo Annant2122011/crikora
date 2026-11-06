@@ -433,9 +433,10 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   const entityType = expected ?? rule?.type;
   if (!entityType) return undefined;
+  const identity = classifyCricbuzzEntityUrl(url);
   const match = rule?.pattern.exec(path);
-  const sourceId = match?.[2] && entityType === "team" ? match[2]
-    : match?.[1] ?? `${entityType}:${stableHash(path)}`;
+  const sourceId = identity?.sourceId ??
+    (match?.[2] && entityType === "team" ? match[2] : match?.[1] ?? `${entityType}:${stableHash(path)}`);
   const data = extractPageData($, url);
   const contentKind = rule?.kind ?? entityType;
   const payload: Record<string, unknown> = {
@@ -518,6 +519,10 @@ function extractMediaReferences($: PageDoc, baseUrl: string): Array<Record<strin
     const node = $(element);
     const poster = node.attr("poster");
     if (poster) add(poster, "video", "poster", node.attr("title"));
+  });
+  $("meta[property='og:video'],meta[property='og:video:url'],meta[name='twitter:player']").each((_i, element) => {
+    const node = $(element);
+    add(node.attr("content"), "meta", "video", $("h1").first().text());
   });
   return [...items.values()].slice(0, 100);
 }
@@ -823,11 +828,13 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   const match = rule.pattern.exec(path);
   if (!match) return undefined;
   const rawId = rule.type === "team" ? match[2] : match[1];
+  const pathHash = stableHash(path);
+  const isSubpage = Boolean(rule.kind?.includes("subpage") || rule.kind?.includes("stats"));
   const sourceId = rule.kind
-    ? `${rule.kind}:${rawId ?? stableHash(path)}`
+    ? `${rule.kind}:${rawId ?? pathHash}${isSubpage ? `:${pathHash}` : ""}`
     : rule.type === "team"
       ? match[2]!
-      : rawId ?? `${rule.type}:${stableHash(path)}`;
+      : rawId ?? `${rule.type}:${pathHash}`;
   return { entityType: rule.type, sourceId };
 }
 
