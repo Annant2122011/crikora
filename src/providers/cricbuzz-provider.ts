@@ -21,7 +21,6 @@ interface PageRecord { url: string; html: string; $: PageDoc; }
 interface LinkRecord { url: string; path: string; text: string; }
 
 const ORIGIN = "https://www.cricbuzz.com";
-const IMAGE_HOSTS = new Set(["www.cricbuzz.com", "static.cricbuzz.com", "img.cricbuzz.com"]);
 const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores", bucket: "live" },
   { path: "/cricket-match/live-scores/upcoming-matches", bucket: "upcoming" },
@@ -585,8 +584,10 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 
 /** Small exported seam for deterministic parser tests. */
 export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType; sourceId: string } | undefined {
-  let path: string;
-  try { path = new URL(url).pathname; } catch { return undefined; }
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { return undefined; }
+  if (parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "www.cricbuzz.com") return undefined;
+  const path = parsedUrl.pathname;
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
