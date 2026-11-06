@@ -79,7 +79,7 @@ export class CricbuzzProvider implements CricketProvider {
       const squads = navigation.squads ? await this.fetchPage(new URL(navigation.squads, ORIGIN), signal) : undefined;
       const commentary = navigation.commentary ? await this.fetchPage(new URL(navigation.commentary, ORIGIN), signal) : undefined;
 
-      const match = parseMatch(discoveredMatch, base, info, scorecard);
+      const match = parseMatch(discoveredMatch, base, info, scorecard, squads);
       const matchEvents = commentary ? parseEvents(commentary.$, match) : parseEvents(base.$, match);
       match.events = matchEvents;
       matches.push(match);
@@ -127,9 +127,17 @@ export class CricbuzzProvider implements CricketProvider {
     const candidates = [...links.values()].slice(0, limit);
     for (const link of candidates) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      const page = await this.fetchPage(new URL(link.url), signal);
-      const parsed = parseEntityPage(page.$, page.url, expectedType);
-      if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
+      try {
+        const page = await this.fetchPage(new URL(link.url), signal);
+        const parsed = parseEntityPage(page.$, page.url, expectedType);
+        if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("HTTP 404")) {
+          console.warn("Cricbuzz related page no longer exists", { url: link.url });
+          continue;
+        }
+        throw error;
+      }
     }
   }
 
@@ -192,7 +200,7 @@ function collectMatchNavigation($: PageDoc, pageUrl: string, matchId: string): {
   return found;
 }
 
-function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRecord, scorecard?: PageRecord): Match {
+function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRecord, scorecard?: PageRecord, squadsPage?: PageRecord): Match {
   const $ = base.$;
   const title = clean($("h1").first().text() || $("title").text()).replace(/\s+-\s+(?:Commentary|Live|Scorecard).*$/i, "");
   const pair = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
@@ -221,10 +229,10 @@ function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRe
     squadsUrl: getLinks(base.$, base.url).find(l => l.path.startsWith("/cricket-match-squads/"))?.url,
     commentaryUrl: getLinks(base.$, base.url).find(l => l.path.startsWith("/live-cricket-full-commentary/"))?.url,
     toss: toss || undefined, result,
-    stats: { liveSummary: body.slice(0, 5000), scorecardText: scoreText.slice(0, 12000), infoText: infoText.slice(0, 12000) },
+    stats: { liveSummary: body.slice(0, 5000), scorecardText: scoreText.slice(0, 12000), infoText: infoText.slice(0, 12000), seriesUrl: seriesLink?.url, dateTimeText, seriesName: competition },
     images,
     officials: info ? extractLabels(info.$) : undefined,
-    squads: undefined,
+    squads: squadsPage ? extractSquadData(squadsPage.$, squadsPage.url) : undefined,
     events: []
   };
 }
@@ -438,6 +446,31 @@ function extractStructuredData($: PageDoc): unknown[] {
   });
   return data;
 }
+function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> {
+  const players = new Map<string, { sourceId: string; name: string; url: string; images: ReturnType<typeof extractImages> }>();
+  for (const link of getLinks($, baseUrl)) {
+    const profileId = link.path.match(/^\\/profiles\\/(\\d+)(?:\\/|$)/)?.[1];
+    if (!profileId) continue;
+    const parent = $(`a[href="${link.path}"]`).first();
+    const image = parent.find("img").first();
+    players.set(profileId, {
+      sourceId: profileId,
+      name: link.text || clean(image.attr("alt") ?? ""),
+      url: link.url,
+      images: image.length ? [{ url: new URL(image.attr("data-src") || image.attr("src") || "", baseUrl).toString(), alt: clean(image.attr("alt") ?? "") }] : []
+    });
+  }
+  const sections = extractSections($).filter(section => /playing|squad|bench|support staff|coach|team/i.test(section.heading));
+  const teamNames = $("h2,h3,h4").toArray().map(el => clean($(el).text())).filter(Boolean);
+  return {
+    teams: teamNames,
+    sections,
+    players: [...players.values()],
+    images: extractImages($),
+    text: getMainText($).slice(0, 20000)
+  };
+}
+
 function extractPlayerDetails($: PageDoc): Record<string, unknown> {
   const labels = extractLabels($);
   const text = getMainText($);
