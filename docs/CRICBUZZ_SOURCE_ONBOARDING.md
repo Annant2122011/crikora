@@ -5,7 +5,6 @@ Keep the original permission email with full headers in a private project record
 The project owner has confirmed that the full written approval covers the Cricbuzz web-scraping workflow, data categories, and operational limits. The repository therefore implements a backend public-page collector, while all numeric request settings remain configurable so they can be copied exactly from that approval.
 
 ## Email
-see here 
 Dear Kumar Annant,
 
 I hope this message finds you well. 
