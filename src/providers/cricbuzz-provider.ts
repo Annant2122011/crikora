@@ -389,6 +389,23 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
   return { entityType, sourceId, sourceUrl: url, payload, fetchedAt: new Date().toISOString() };
 }
 
+function extractControls($: PageDoc): Array<Record<string, string>> {
+  const controls: Array<Record<string, string>> = [];
+  $("button,[role='tab'],[role='button'],[data-tab]").each((_i, el) => {
+    const node = $(el);
+    const entry: Record<string, string> = {
+      tag: (el as { tagName?: string }).tagName ?? "control",
+      label: clean(node.text())
+    };
+    for (const name of ["id", "class", "role", "type", "aria-label", "aria-controls", "aria-selected", "data-tab", "data-target", "data-url", "href", "title"]) {
+      const value = node.attr(name);
+      if (value) entry[name] = clean(value);
+    }
+    if (entry.label || Object.keys(entry).length > 2) controls.push(entry);
+  });
+  return controls.slice(0, 100);
+}
+
 function extractPageData($: PageDoc, url: string): Record<string, unknown> {
   const title = clean($("h1").first().text() || $("title").text());
   const mainText = getMainText($);
@@ -402,6 +419,7 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     tables: extractTables($),
     sections: extractSections($),
     structuredData: extractStructuredData($),
+    controls: extractControls($),
     text: mainText.slice(0, 30000)
   };
 }
