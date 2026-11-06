@@ -72,6 +72,8 @@ const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = 
   { type: "metadata", kind: "schedule", pattern: /^\/cricket-schedule(?:\/(.*))?\/?$/ },
   { type: "metadata", kind: "scorecard-archives", pattern: /^\/cricket-scorecard-archives(?:\/(.*))?\/?$/ },
   { type: "metadata", kind: "commentary", pattern: /^\/live-cricket-full-commentary\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "live-stream-page", pattern: /^\/live-cricket-stream\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "player-match-performance", pattern: /^\/player-match-performance\/match\/(\d+)\/player\/(\d+)\/(batting|bowling)\/?$/ },
   { type: "metadata", kind: "match-forecast", pattern: /^\/cricket-match-forecast\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "player-match-highlights", pattern: /^\/player-match-highlights\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "over-by-over", pattern: /^\/live-cricket-over-by-over\/(\d+)\/(.+)$/ }
@@ -869,7 +871,11 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   if (!match) return undefined;
   const rawId = rule.type === "team" || rule.kind?.startsWith("team-") ? match[2] : match[1];
   const pathHash = stableHash(path);
-  const isSubpage = Boolean(rule.kind?.includes("subpage") || rule.kind?.includes("stats"));
+  const isSubpage = Boolean(
+    rule.kind?.includes("subpage") ||
+    rule.kind?.includes("stats") ||
+    rule.kind === "player-match-performance"
+  );
   const sourceId = rule.kind
     ? `${rule.kind}:${rawId ?? pathHash}${isSubpage ? `:${pathHash}` : ""}`
     : rule.type === "team"
