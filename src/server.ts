@@ -41,6 +41,7 @@ if (env.SOURCE_MODE === "cricbuzz" && !env.DATABASE_URL) {
   throw new Error("DATABASE_URL is required for Cricbuzz collection; the collector must persist to PostgreSQL.");
 }
 
+async function startServer(): Promise<void> {
 const app = Fastify({ logger: { level: env.LOG_LEVEL }, requestIdHeader: "x-request-id" });
 const repository: EntityRepository = env.DATABASE_URL
   ? new PostgresEntityRepository(env.DATABASE_URL)
@@ -202,3 +203,10 @@ const close = async () => {
 };
 process.once("SIGINT", () => void close());
 process.once("SIGTERM", () => void close());
+
+}
+
+void startServer().catch(error => {
+  console.error("Crikora startup failed", error);
+  process.exitCode = 1;
+});
