@@ -37,6 +37,7 @@ export class CricbuzzProvider implements CricketProvider {
   readonly id = "cricbuzz";
   private lastRequestAt = 0;
   private matchCursor = 0;
+  private readonly relatedCursors = new Map<EntityType, number>();
 
   constructor(private readonly options: Options) {
     if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 1000) {
@@ -137,7 +138,10 @@ export class CricbuzzProvider implements CricketProvider {
     signal?: AbortSignal
   ): Promise<void> {
     if (!limit || !links.size) return;
-    const candidates = [...links.values()].slice(0, limit);
+    const allLinks = [...links.values()];
+    const cursor = this.relatedCursors.get(expectedType) ?? 0;
+    const candidates = rotate(allLinks, cursor, limit);
+    if (allLinks.length) this.relatedCursors.set(expectedType, (cursor + candidates.length) % allLinks.length);
     for (const link of candidates) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
       try {
