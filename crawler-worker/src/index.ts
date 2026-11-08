@@ -93,8 +93,6 @@ async function startLoop(): Promise<{ started: boolean; reason?: string }> {
   try {
     await start(crikoraRefreshLoop, [
       env("CRIKORA_API_BASE_URL"),
-      env("CRIKORA_REFRESH_SECRET"),
-      databaseUrl,
       leaseToken
     ]);
     return { started: true };
