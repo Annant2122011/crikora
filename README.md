@@ -86,8 +86,8 @@ Every JSON entity is assigned a database expiry exactly ten minutes after it is 
 
 - PostgreSQL stores normalized records as JSONB.
 - Reads always filter out records whose `expires_at` is in the past.
-- The cleanup worker physically deletes expired rows every 5 seconds while the API is running.
-- Startup cleanup removes expired rows left behind during a restart or outage.
+- The local long-running API deletes expired rows every 5 seconds and performs cleanup on startup.
+- On Vercel, expired rows are never returned by reads; the collector physically deletes them during successful refresh cycles, so deletion can be delayed while collection is disabled or failing.
 - Upserts refresh the ten-minute window for records seen again.
 
 The in-memory development repository follows the same ten-minute expiry contract. No permanent historical archive is kept by this cache.
@@ -124,7 +124,7 @@ The default refresh interval is **10 seconds**, the fastest supported option. Th
 - `PUT /api/settings` updates `refreshIntervalSeconds` and/or `enabled`. It requires `Authorization: Bearer <CRIKORA_ADMIN_SECRET>`.
 - `POST /api/refresh` executes one collection cycle. It requires `Authorization: Bearer <CRIKORA_REFRESH_SECRET>`.
 - The refresh endpoint has a database-backed lease and minimum-interval gate, so concurrent Vercel instances cannot overlap collection cycles. The separate `crawler-worker/` Nitro project starts a durable Vercel Workflow that sleeps and resumes at the persisted cadence; it is not an in-memory timer inside a Function.
-- `src/client/refresh-controller.ts` provides a client-side 10/15/20/30-second scheduler. The future extension/backend should call the Crikora API through this controller; it must never call Cricbuzz directly or contain source credentials.
+- The Vercel durable worker owns the production 10/15/20/30-second schedule. The future extension should read the JSON API using `CrikoraApiClient`; it must not run a second scraper or call Cricbuzz directly. `src/client/refresh-controller.ts` remains available for an explicitly client-driven/local refresh workflow, not as the production Vercel scheduler.
 
 Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` controls the local long-running server. On Vercel, the durable worker reads `refresh_interval_seconds` from Neon. `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` controls spacing between individual source requests and defaults to zero; the supplied email transcription does not state a numerical request interval. HTTP 401, 403, 429, redirects and access challenges still stop or pause the collection cycle; the crawler does not evade them.
 
