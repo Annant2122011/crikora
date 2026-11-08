@@ -2,7 +2,7 @@
 
 Keep the original permission email with full headers in a private project record. Do not commit private correspondence, cookies, credentials, or provider tokens.
 
-The project owner has confirmed that the full written approval covers the Cricbuzz web-scraping workflow, data categories, and operational limits. The repository therefore implements a backend public-page collector, while all numeric request settings remain configurable so they can be copied exactly from that approval.
+The project owner reports a family connection to a Cricbuzz commentator and says access has been granted. The `Email` section below is a text transcription in repository documentation, not the original message with transport headers or authenticated sender metadata. Its wording grants access without the typical API limits and restrictions, but does not define a numeric request interval, concurrency budget, or separate media/app API scope. The collector therefore uses the user's requested 10-second default and remains response-aware: HTTP denials, throttling, redirects and access challenges are not bypassed.
 
 ## Email
 
@@ -54,8 +54,10 @@ The collector discovers tab URLs from each match page's own links. It does not c
 - Match pages link to facts, scorecard, squads and commentary.
 - Match facts and squad pages link to player, team, series and venue records.
 - Player/profile pages provide image URLs, flag images, personal details, teams, career summaries and any visible statistical tables.
-- Generic profile/team/series/venue extraction captures title, canonical URL, meta tags, image URLs, links, labels, tables, sections, JSON-LD and bounded visible page text.
+- Generic player/team/series/venue extraction captures title, canonical URL, meta tags, absolute image URLs, media/poster URLs, links, labels, tables, sections, JSON-LD, interactive tab labels and bounded visible page text.
+- Generic HTML metadata records also cover news articles/categories, video pages/collections/categories/playlists, galleries, rankings, schedules, archives, auctions, commentary, live graphs, match forecasts/highlights, player match performance/highlights and Wicket Zone pages.
 - Match JSON preserves innings, player scorecard rows, match facts, squad extraction, images, visible commentary and normalized boundary/wicket events.
+- Current route coverage and the distinction between HTML pages and app/media services are documented in `docs/CRICBUZZ_HTML_AND_NON_HTML_COVERAGE.md`.
 
 ## Retention and database
 
@@ -67,7 +69,7 @@ The collector discovers tab URLs from each match page's own links. It does not c
 - Re-seen records are upserted and their ten-minute TTL restarts.
 - The cache is not a permanent statistics archive.
 
-Apply `migrations/001_crikora_cache.sql` to the Crikora project before enabling PostgreSQL storage. Use the pooled Neon connection string in the backend's `DATABASE_URL` environment variable. Never place it in the extension bundle.
+Apply `migrations/001_crikora_cache.sql`, `migrations/002_crikora_crawler_settings.sql` and `migrations/003_crikora_worker_state.sql` to the Crikora project before enabling the Vercel worker. Use the pooled Neon connection string in server-only `DATABASE_URL` environment variables. Never place it in the extension bundle.
 
 ## Operational controls
 
@@ -85,6 +87,7 @@ Environment settings:
 - `CRICBUZZ_TIMEOUT_MS`
 - `CRICBUZZ_MAX_RESPONSE_BYTES`
 - `CRICBUZZ_USER_AGENT`
+- Worker-only `CRIKORA_API_BASE_URL`, `CRIKORA_WORKER_ADMIN_SECRET`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` (see `crawler-worker/README.md`)
 
 The refresh cadence defaults to 10 seconds and is user-selectable at 10, 15, 20 or 30 seconds. The project owner reports that the written approval does not impose a numerical per-request interval, so no artificial minimum is hard-coded. The collector still stops on source denials, throttling responses, redirects or access challenges.
 
@@ -92,6 +95,6 @@ Requests are sequential and have host/path allowlists, HTTPS checks, timeouts, r
 
 ## Validation
 
-The repository includes parser tests for player, venue, team and series URL classification, profile image extraction, JSON metadata, tables and associations, plus exact ten-minute in-memory expiration and cleanup. Add saved HTML fixtures from representative authorized pages as they are verified. Typecheck, test and build must pass before deployment.
+The repository includes parser tests for player, venue, team and series URL classification, profile image extraction, JSON metadata, tables and associations, plus exact ten-minute in-memory expiration and cleanup. Add saved HTML fixtures from representative authorized pages as they are verified. Typecheck, test and build must pass before deployment. The nested `crawler-worker` project has its own Nitro build; it is intended to be built and deployed as a separate Vercel project with root directory `crawler-worker`.
 
 The current extraction covers content present in the accessible HTML and page navigation. Content rendered only after a browser-side interaction, unavailable due to access restrictions, or delivered through separate protected services is not fabricated or guessed. Image URLs are returned, not downloaded; video/audio streams are not fetched by this JSON collector.
