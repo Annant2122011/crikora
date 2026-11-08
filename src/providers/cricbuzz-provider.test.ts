@@ -37,6 +37,17 @@ describe("Cricbuzz source URL classification", () => {
       .toEqual({ entityType: "metadata", sourceId: expect.stringContaining("video-categories:") });
   });
 
+  it("classifies match highlights, live graphs and Wicket Zone pages", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-match-highlights/161256/nz-vs-ind"))
+      .toEqual({ entityType: "metadata", sourceId: "match-highlights:161256" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/live-cricket-graphs/161256/nz-vs-ind"))
+      .toEqual({ entityType: "metadata", sourceId: "live-graphs:161256" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/special-content/wicket-zone/11209/icc-under-19-world-cup-2026"))
+      .toEqual({ entityType: "metadata", sourceId: "wicket-zone:11209" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-series/ipl-2013/auction/players/8284"))
+      .toMatchObject({ entityType: "metadata", sourceId: expect.stringContaining("series-auction:ipl-2013:") });
+  });
+
   it("classifies stream landing pages and player match performance subpages", () => {
     expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/live-cricket-stream/175617/paku19-vs-uaeu19"))
       .toEqual({ entityType: "metadata", sourceId: "live-stream-page:175617" });
@@ -98,6 +109,18 @@ describe("Cricbuzz HTML entity extraction", () => {
     ]));
     expect(entity?.payload.media).toEqual(expect.arrayContaining([
       expect.objectContaining({ url: "https://video.cricbuzz.com/highlight.mp4" })
+    ]));
+  });
+
+  it("returns video poster and image_src references as absolute image URLs", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><head><link rel="image_src" href="//static.cricbuzz.com/poster.jpg"></head>
+        <body><main><h1>Video</h1><video poster="/images/highlight-poster.jpg"></video></main></body></html>`,
+      "https://www.cricbuzz.com/cricket-videos/217038/highlight"
+    );
+    expect(entity?.payload.images).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: "https://static.cricbuzz.com/poster.jpg" }),
+      expect.objectContaining({ url: "https://www.cricbuzz.com/images/highlight-poster.jpg" })
     ]));
   });
 
