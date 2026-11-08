@@ -47,12 +47,12 @@ async function readSettingsStep(apiBaseUrl: string): Promise<CrawlerSettings> {
   return normalizeSettings(await response.json());
 }
 
-async function refreshStep(apiBaseUrl: string, refreshSecret: string): Promise<RefreshOutcome> {
+async function refreshStep(apiBaseUrl: string): Promise<RefreshOutcome> {
   "use step";
   const response = await fetch(new URL("refresh", ensureTrailingSlash(apiBaseUrl)), {
     method: "POST",
     headers: {
-      authorization: `Bearer ${refreshSecret}`,
+      authorization: `Bearer ${requiredEnv("CRIKORA_REFRESH_SECRET")}`,
       accept: "application/json"
     },
     cache: "no-store",
@@ -87,10 +87,10 @@ async function refreshStep(apiBaseUrl: string, refreshSecret: string): Promise<R
   return { stop: false };
 }
 
-async function renewWorkerLeaseStep(databaseUrl: string, leaseToken: string, leaseSeconds: number): Promise<boolean> {
+async function renewWorkerLeaseStep(leaseToken: string, leaseSeconds: number): Promise<boolean> {
   "use step";
   const pool = new Pool({
-    connectionString: databaseUrl,
+    connectionString: requiredEnv("DATABASE_URL"),
     max: 1,
     connectionTimeoutMillis: 8_000,
     idleTimeoutMillis: 1_000,
@@ -100,7 +100,7 @@ async function renewWorkerLeaseStep(databaseUrl: string, leaseToken: string, lea
   try {
     const result = await pool.query(
       `UPDATE public.crikora_worker_state
-          SET lease_until = now() + make_interval(secs => $1),
+          SET lease_until = now() + make_interval(secs => $2),
               updated_at = now()
         WHERE id = 1 AND lease_token = $1 AND lease_until > now()
         RETURNING id`,
@@ -112,7 +112,7 @@ async function renewWorkerLeaseStep(databaseUrl: string, leaseToken: string, lea
   }
 }
 
-async function releaseWorkerLeaseStep(databaseUrl: string, leaseToken: string): Promise<void> {
+async function releaseWorkerLeaseStep(leaseToken: string): Promise<void> {
   "use step";
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -125,7 +125,7 @@ async function releaseWorkerLeaseStep(databaseUrl: string, leaseToken: string): 
   try {
     await pool.query(
       `UPDATE public.crikora_worker_state
-          SET lease_until = NULL, updated_at = now()
+          SET lease_until = NULL, lease_token = NULL, updated_at = now()
         WHERE id = 1 AND lease_token = $1`,
       [leaseToken]
     );
@@ -140,8 +140,6 @@ async function releaseWorkerLeaseStep(databaseUrl: string, leaseToken: string): 
  */
 export async function crikoraRefreshLoop(
   apiBaseUrl: string,
-  refreshSecret: string,
-  databaseUrl: string,
   leaseToken: string
 ): Promise<{ status: "stopped" | "disabled" | "lease-lost"; message?: string }> {
   "use workflow";
@@ -152,13 +150,13 @@ export async function crikoraRefreshLoop(
         return { status: "disabled" };
       }
 
-      const ownsLease = await renewWorkerLeaseStep(databaseUrl, leaseToken, 120);
+      const ownsLease = await renewWorkerLeaseStep(leaseToken, 120);
       if (!ownsLease) {
         return { status: "lease-lost" };
       }
 
       const cycleStartedAt = Date.now();
-      const outcome = await refreshStep(apiBaseUrl, refreshSecret);
+      const outcome = await refreshStep(apiBaseUrl);
       if (outcome.stop) {
         return { status: "stopped", message: outcome.message };
       }
@@ -175,15 +173,21 @@ export async function crikoraRefreshLoop(
         Math.min(7_200, outcome.retryAfterSeconds ?? configuredDelay)
       );
       const leaseSeconds = waitSeconds + 120;
-      const renewed = await renewWorkerLeaseStep(databaseUrl, leaseToken, leaseSeconds);
+      const renewed = await renewWorkerLeaseStep(leaseToken, leaseSeconds);
       if (!renewed) {
         return { status: "lease-lost" };
       }
       await sleep(`${waitSeconds}s`);
     }
   } finally {
-    await releaseWorkerLeaseStep(databaseUrl, leaseToken);
+    await releaseWorkerLeaseStep(leaseToken);
   }
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
 }
 
 function validDelay(value: number | undefined): number | undefined {
