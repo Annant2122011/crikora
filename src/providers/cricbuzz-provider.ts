@@ -924,7 +924,8 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
     rule.kind?.includes("subpage") ||
     rule.kind?.includes("stats") ||
     rule.kind === "player-match-performance" ||
-    rule.kind === "series-auction"
+    rule.kind === "series-auction" ||
+    rule.kind === "video-collection"
   );
   const sourceId = rule.kind
     ? `${rule.kind}:${rawId ?? pathHash}${isSubpage ? `:${pathHash}` : ""}`
