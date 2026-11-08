@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Pool } from "pg";
 import { Hono } from "hono";
 import { start } from "workflow/api";
@@ -72,13 +72,17 @@ async function startLoop(): Promise<{ started: boolean; reason?: string }> {
     allowExitOnIdle: true,
     application_name: "crikora-worker-start"
   });
+  const leaseToken = randomUUID();
   let claimed = false;
   try {
     const lock = await pool.query(
       `UPDATE public.crikora_worker_state
-          SET lease_until = now() + interval '120 seconds', updated_at = now()
+          SET lease_token = $1,
+              lease_until = now() + interval '120 seconds',
+              updated_at = now()
         WHERE id = 1 AND (lease_until IS NULL OR lease_until <= now())
-        RETURNING id`
+        RETURNING id`,
+      [leaseToken]
     );
     claimed = lock.rowCount === 1;
   } finally {
@@ -90,7 +94,8 @@ async function startLoop(): Promise<{ started: boolean; reason?: string }> {
     await start(crikoraRefreshLoop, [
       env("CRIKORA_API_BASE_URL"),
       env("CRIKORA_REFRESH_SECRET"),
-      databaseUrl
+      databaseUrl,
+      leaseToken
     ]);
     return { started: true };
   } catch (error) {
@@ -98,8 +103,9 @@ async function startLoop(): Promise<{ started: boolean; reason?: string }> {
     try {
       await release.query(
         `UPDATE public.crikora_worker_state
-            SET lease_until = NULL, updated_at = now()
-          WHERE id = 1`
+            SET lease_until = NULL, lease_token = NULL, updated_at = now()
+          WHERE id = 1 AND lease_token = $1`,
+        [leaseToken]
       );
     } finally {
       await release.end();
