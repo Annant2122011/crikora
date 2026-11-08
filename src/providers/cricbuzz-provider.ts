@@ -57,6 +57,7 @@ const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = 
   { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)\/?$/ },
   { type: "series", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/?$/ },
   { type: "metadata", kind: "series-subpage", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/(.+)$/ },
+  { type: "metadata", kind: "series-auction", pattern: /^\/cricket-series\/([^/]+)\/auction(?:\/(.+))?\/?$/ },
   { type: "metadata", kind: "series-catalog", pattern: /^\/cricket-series\/(?!\d+\/)(.+)$/ },
   { type: "metadata", kind: "news", pattern: /^\/cricket-news\/(\d+)\/[^/]+\/?$/ },
   { type: "metadata", kind: "news-index", pattern: /^\/cricket-news\/?$/ },
@@ -908,7 +909,8 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   const isSubpage = Boolean(
     rule.kind?.includes("subpage") ||
     rule.kind?.includes("stats") ||
-    rule.kind === "player-match-performance"
+    rule.kind === "player-match-performance" ||
+    rule.kind === "series-auction"
   );
   const sourceId = rule.kind
     ? `${rule.kind}:${rawId ?? pathHash}${isSubpage ? `:${pathHash}` : ""}`
