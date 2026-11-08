@@ -4,31 +4,29 @@ Crikora is a cricket data collector and JSON API for the Crikora browser extensi
 
 ## Sitemap-backed content inventory
 
-On 6 November 2026, a sitemap-only URL map of Cricbuzz returned **4,430 URLs** (the request cap was 10,000). The saved, machine-readable inventory is [`docs/cricbuzz-sitemap-inventory.json`](./docs/cricbuzz-sitemap-inventory.json). It contains URL/title pairs and counts by route family. This is the sitemap result, not proof that every public or dynamically generated URL is listed or that every page body was fetched.
+On 8 November 2026, the latest sitemap-included URL map returned **4,721 unique URLs** (the request cap was 10,000). The saved inventory is [`docs/cricbuzz-sitemap-inventory.json`](./docs/cricbuzz-sitemap-inventory.json). This is an indexed URL map, not a full HTML-body crawl or a guarantee that every dynamically generated or authenticated URL is listed. The count changes as Cricbuzz updates its sitemap.
 
-| Route family | Mapped URLs |
+| Route family | URLs in latest map |
 | --- | ---: |
-| Series, competition and auction pages | 1,328 |
-| Team pages | 983 |
-| News articles | 757 |
-| Videos | 566 |
-| Player profiles | 256 |
-| Match pages | 129 |
-| Match facts | 129 |
-| Scorecards | 129 |
-| Squads | 129 |
-| Photo galleries | 10 |
-| Statistics/rankings/points tables | 4 |
-| Schedules | 2 |
-| Contact/advertising info | 2 |
-| Match forecast | 1 |
-| Subscription account page | 1 |
-| Scorecard archive index | 1 |
-| Photo gallery index | 1 |
-| Careers page | 1 |
-| Home page | 1 |
+| Series, subpages and auctions | 1,379 |
+| Team pages and tabs | 989 |
+| News articles and categories | 776 |
+| Videos, collections, categories and playlists | 584 |
+| Player profiles | 304 |
+| Match scorecards | 189 |
+| Match overview pages | 179 |
+| Match facts | 126 |
+| Squads | 120 |
+| Player match-performance pages | 12 |
+| Galleries and photo-gallery index | 11 |
+| Live-stream landing pages | 6 |
+| Rankings/statistics | 5 |
+| Match forecasts | 5 |
+| Other match highlights, schedules, archives, commentary, graphs and special-content pages | Remaining mapped routes |
 
-The crawler's generic metadata feed stores public HTML pages by `pageKind` (news, video, gallery, ranking/statistics, schedule, archive, forecast and related profile/team/series subpages). Use `GET /api/v1/content?kind=news` or `GET /api/v1/content?kind=video` to filter them. Each page payload includes title, canonical URL, meta tags, image URLs, media references, links, tables, labels, sections, controls, JSON-LD and bounded visible text where present.
+Representative public pages were fetched successfully, but a full HTML-body crawl of all mapped URLs was not completed. See [`docs/CRICBUZZ_HTML_AND_NON_HTML_COVERAGE.md`](./docs/CRICBUZZ_HTML_AND_NON_HTML_COVERAGE.md) for the route audit, tested page samples, image URL coverage and app/media content not represented by ordinary HTML.
+
+The crawler's generic metadata feed stores public HTML pages by `pageKind` (news, video, gallery, ranking/statistics, schedule, archive, forecast, commentary, match graphs/highlights, player performance and related profile/team/series subpages). Use `GET /api/v1/content?kind=news` or `GET /api/v1/content?kind=video` to filter them. Each page payload includes title, canonical URL, meta tags, image URLs, media references, links, tables, labels, sections, controls, JSON-LD and bounded visible text where present.
 
 ## What the collector reads
 
@@ -98,7 +96,7 @@ The in-memory development repository follows the same ten-minute expiry contract
 
 A separate Neon project named `crikora` was created for cricket data. The existing `resolvX` support-bot database was left untouched.
 
-1. Apply `migrations/001_crikora_cache.sql` to the new Crikora database.
+1. Apply `migrations/001_crikora_cache.sql`, `migrations/002_crikora_crawler_settings.sql` and `migrations/003_crikora_worker_state.sql` to the new Crikora database.
 2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
 3. Set `CRICBUZZ_AUTOMATION_AUTHORIZED=true` for the approved Cricbuzz workflow. The collector uses the Cricbuzz provider directly.
 4. Set `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` as Vercel server-only secrets. Set `CORS_ORIGINS` to exact deployed origins when browser calls are introduced.
@@ -125,18 +123,18 @@ The default refresh interval is **10 seconds**, the fastest supported option. Th
 - `GET /api/settings` returns the current interval and enable state.
 - `PUT /api/settings` updates `refreshIntervalSeconds` and/or `enabled`. It requires `Authorization: Bearer <CRIKORA_ADMIN_SECRET>`.
 - `POST /api/refresh` executes one collection cycle. It requires `Authorization: Bearer <CRIKORA_REFRESH_SECRET>`.
-- The refresh endpoint has a database-backed lease and minimum-interval gate, so concurrent Vercel instances cannot overlap collection cycles.
+- The refresh endpoint has a database-backed lease and minimum-interval gate, so concurrent Vercel instances cannot overlap collection cycles. The separate `crawler-worker/` Nitro project starts a durable Vercel Workflow that sleeps and resumes at the persisted cadence; it is not an in-memory timer inside a Function.
 - `src/client/refresh-controller.ts` provides a client-side 10/15/20/30-second scheduler. The future extension/backend should call the Crikora API through this controller; it must never call Cricbuzz directly or contain source credentials.
 
-Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` controls the local long-running server. `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` controls spacing between individual source requests and defaults to zero because the approved workflow supplied by the project owner did not specify a numerical floor. HTTP 401, 403, 429, redirects and access challenges still stop the collection cycle; the crawler does not evade them.
+Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` controls the local long-running server. On Vercel, the durable worker reads `refresh_interval_seconds` from Neon. `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` controls spacing between individual source requests and defaults to zero; the supplied email transcription does not state a numerical request interval. HTTP 401, 403, 429, redirects and access challenges still stop or pause the collection cycle; the crawler does not evade them.
 
-**Vercel hosting note:** Vercel Cron is not a 10-second scheduler on the current Hobby team. The Vercel API is request-driven; a running extension/backend (or a separate always-on worker) drives the chosen 10-second cadence. Vercel Cron on Hobby cannot replace that scheduler.
+**Vercel hosting note:** deploy the API from the repository root and the scheduler as a separate Vercel project with root directory `crawler-worker`. Vercel Cron on the current Hobby team is not a 10-second scheduler, so the worker uses the durable Workflow SDK instead. The Vercel project-creation API returned HTTP 403 in this session; the repository is prepared, but the Vercel projects have not been created or deployed. See [`crawler-worker/README.md`](./crawler-worker/README.md).
 
 ## Technical safety and known limits
 
 - All page requests are sequential, same-host HTTPS, timeout bounded, and response-size bounded.
 - 401, 403, 429, unexpected redirects and CAPTCHA/anti-bot pages fail closed. The scraper does not attempt to evade them.
-- Links are host-checked and constrained to the Cricbuzz match, profile, team, series and venue page routes.
+- Links are host-checked and constrained to known Cricbuzz match, profile, team, series, news, video, gallery, statistics, schedule, commentary and special-content route families.
 - Images are exposed as external URLs. They are not copied to Crikora object storage.
 - HTML schemas can change. Keep representative fixtures and re-run the parser tests when Cricbuzz changes markup.
 - This is a static-HTML collector, not a full browser automation engine. It does not execute Cricbuzz client-side JavaScript, trigger interactive tabs, or retrieve data that only appears after browser-side hydration. Some profile tabs, charts, or statistics may therefore be absent. The collector returns fields and links it can verify in the fetched HTML and does not fabricate missing values.
