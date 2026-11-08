@@ -115,7 +115,7 @@ async function renewWorkerLeaseStep(leaseToken: string, leaseSeconds: number): P
 async function releaseWorkerLeaseStep(leaseToken: string): Promise<void> {
   "use step";
   const pool = new Pool({
-    connectionString: databaseUrl,
+    connectionString: requiredEnv("DATABASE_URL"),
     max: 1,
     connectionTimeoutMillis: 8_000,
     idleTimeoutMillis: 1_000,
