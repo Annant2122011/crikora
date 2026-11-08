@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS public.crikora_worker_state (
   id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   lease_until timestamptz,
+  lease_token text,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
