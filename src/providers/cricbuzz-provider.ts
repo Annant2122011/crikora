@@ -249,7 +249,13 @@ export class CricbuzzProvider implements CricketProvider {
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
       const status = readSourceStatus(error);
-      if (status === 401 || status === 403 || status === 429 || (status !== undefined && status >= 500)) {
+      if (
+        status === 401 ||
+        status === 403 ||
+        status === 429 ||
+        (status !== undefined && status >= 300 && status < 400) ||
+        (status !== undefined && status >= 500)
+      ) {
         throw error;
       }
       console.warn("Crikora skipped an unavailable Cricbuzz page", {
