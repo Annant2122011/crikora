@@ -166,18 +166,20 @@ export async function crikoraRefreshLoop(
         return { status: "disabled" };
       }
 
-      const configuredDelay = latestSettings.refreshIntervalSeconds -
-        Math.floor((Date.now() - cycleStartedAt) / 1000);
-      const waitSeconds = Math.max(
-        1,
-        Math.min(7_200, outcome.retryAfterSeconds ?? configuredDelay)
+      const configuredDelayMs =
+        latestSettings.refreshIntervalSeconds * 1000 - (Date.now() - cycleStartedAt);
+      const waitMilliseconds = Math.max(
+        1_000,
+        Math.min(7_200_000, outcome.retryAfterSeconds === undefined
+          ? configuredDelayMs
+          : outcome.retryAfterSeconds * 1000)
       );
-      const leaseSeconds = waitSeconds + 120;
+      const leaseSeconds = Math.ceil(waitMilliseconds / 1000) + 120;
       const renewed = await renewWorkerLeaseStep(leaseToken, leaseSeconds);
       if (!renewed) {
         return { status: "lease-lost" };
       }
-      await sleep(`${waitSeconds}s`);
+      await sleep(`${waitMilliseconds}ms`);
     }
   } finally {
     await releaseWorkerLeaseStep(leaseToken);
