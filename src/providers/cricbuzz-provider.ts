@@ -99,7 +99,8 @@ export class CricbuzzProvider implements CricketProvider {
     const discovered = new Map<string, DiscoveredMatch>();
     const indexRecords = new Map<string, Match>();
     for (const index of INDEXES) {
-      const page = await this.fetchPage(new URL(index.path, ORIGIN), signal);
+      const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
+      if (!page) continue;
       for (const link of getLinks(page.$, page.url)) {
         const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (match?.[1] && !discovered.has(match[1])) {
@@ -116,7 +117,8 @@ export class CricbuzzProvider implements CricketProvider {
     const sectionPages: PageRecord[] = [];
     for (const path of sectionPaths) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      sectionPages.push(await this.fetchPage(new URL(path, ORIGIN), signal));
+      const page = await this.tryFetchPage(new URL(path, ORIGIN), "section-index", signal);
+      if (page) sectionPages.push(page);
     }
 
     const allMatches = [...discovered.values()];
@@ -143,12 +145,21 @@ export class CricbuzzProvider implements CricketProvider {
 
     for (const discoveredMatch of selected) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      const base = await this.fetchPage(new URL(discoveredMatch.path, ORIGIN), signal);
+      const base = await this.tryFetchPage(new URL(discoveredMatch.path, ORIGIN), "match", signal);
+      if (!base) continue;
       const navigation = collectMatchNavigation(base.$, base.url, discoveredMatch.id);
-      const info = navigation.info ? await this.fetchPage(new URL(navigation.info, ORIGIN), signal) : undefined;
-      const scorecard = navigation.scorecard ? await this.fetchPage(new URL(navigation.scorecard, ORIGIN), signal) : undefined;
-      const squads = navigation.squads ? await this.fetchPage(new URL(navigation.squads, ORIGIN), signal) : undefined;
-      const commentary = navigation.commentary ? await this.fetchPage(new URL(navigation.commentary, ORIGIN), signal) : undefined;
+      const info = navigation.info
+        ? await this.tryFetchPage(new URL(navigation.info, ORIGIN), "match-facts", signal)
+        : undefined;
+      const scorecard = navigation.scorecard
+        ? await this.tryFetchPage(new URL(navigation.scorecard, ORIGIN), "scorecard", signal)
+        : undefined;
+      const squads = navigation.squads
+        ? await this.tryFetchPage(new URL(navigation.squads, ORIGIN), "squads", signal)
+        : undefined;
+      const commentary = navigation.commentary
+        ? await this.tryFetchPage(new URL(navigation.commentary, ORIGIN), "commentary", signal)
+        : undefined;
 
       const match = parseMatch(discoveredMatch, base, info, scorecard, squads);
       const matchEvents = commentary ? parseEvents(commentary.$, match) : parseEvents(base.$, match);
@@ -216,17 +227,34 @@ export class CricbuzzProvider implements CricketProvider {
     if (allLinks.length) this.relatedCursors.set(expectedType, (cursor + candidates.length) % allLinks.length);
     for (const link of candidates) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      try {
-        const page = await this.fetchPage(new URL(link.url), signal);
-        const parsed = parseEntityPage(page.$, page.url, expectedType);
-        if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("HTTP 404")) {
-          console.warn("Cricbuzz related page no longer exists", { url: link.url });
-          continue;
-        }
+      const page = await this.tryFetchPage(new URL(link.url), `related:${expectedType}`, signal);
+      if (!page) continue;
+      const parsed = parseEntityPage(page.$, page.url, expectedType);
+      if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
+    }
+  }
+
+  /**
+   * Keep a cycle useful when an individual content page disappears or is
+   * temporarily unavailable. Explicit source denials, throttling, aborts and
+   * upstream 5xx still stop the cycle so the worker can pause/back off.
+   */
+  private async tryFetchPage(url: URL, context: string, signal?: AbortSignal): Promise<PageRecord | undefined> {
+    try {
+      return await this.fetchPage(url, signal);
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      const status = readSourceStatus(error);
+      if (status === 401 || status === 403 || status === 429 || (status !== undefined && status >= 500)) {
         throw error;
       }
+      console.warn("Crikora skipped an unavailable Cricbuzz page", {
+        context,
+        url: url.toString(),
+        status: status ?? null,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      return undefined;
     }
   }
 
@@ -278,6 +306,12 @@ export class CricbuzzProvider implements CricketProvider {
     }
     return { url: url.toString(), html, $: load(html) };
   }
+}
+
+function readSourceStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object" || !("sourceStatus" in error)) return undefined;
+  const value = Number((error as { sourceStatus?: unknown }).sourceStatus);
+  return Number.isInteger(value) ? value : undefined;
 }
 
 function createSourceHttpError(message: string, status: number, retryAfter?: string | null): Error & { sourceStatus: number; retryAfterMs?: number } {
