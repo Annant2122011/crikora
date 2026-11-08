@@ -36,7 +36,7 @@ function normalizeSettings(value: unknown): CrawlerSettings {
 
 async function readSettingsStep(apiBaseUrl: string): Promise<CrawlerSettings> {
   "use step";
-  const response = await fetch(new URL("/settings", ensureTrailingSlash(apiBaseUrl)), {
+  const response = await fetch(new URL("settings", ensureTrailingSlash(apiBaseUrl)), {
     headers: { accept: "application/json" },
     cache: "no-store",
     signal: AbortSignal.timeout(10_000)
@@ -49,7 +49,7 @@ async function readSettingsStep(apiBaseUrl: string): Promise<CrawlerSettings> {
 
 async function refreshStep(apiBaseUrl: string, refreshSecret: string): Promise<RefreshOutcome> {
   "use step";
-  const response = await fetch(new URL("/refresh", ensureTrailingSlash(apiBaseUrl)), {
+  const response = await fetch(new URL("refresh", ensureTrailingSlash(apiBaseUrl)), {
     method: "POST",
     headers: {
       authorization: `Bearer ${refreshSecret}`,
@@ -87,7 +87,7 @@ async function refreshStep(apiBaseUrl: string, refreshSecret: string): Promise<R
   return { stop: false };
 }
 
-async function renewWorkerLeaseStep(databaseUrl: string, leaseSeconds: number): Promise<boolean> {
+async function renewWorkerLeaseStep(databaseUrl: string, leaseToken: string, leaseSeconds: number): Promise<boolean> {
   "use step";
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -102,9 +102,9 @@ async function renewWorkerLeaseStep(databaseUrl: string, leaseSeconds: number): 
       `UPDATE public.crikora_worker_state
           SET lease_until = now() + make_interval(secs => $1),
               updated_at = now()
-        WHERE id = 1 AND lease_until > now()
+        WHERE id = 1 AND lease_token = $1 AND lease_until > now()
         RETURNING id`,
-      [Math.max(60, Math.min(7_200, Math.ceil(leaseSeconds)))]
+      [leaseToken, Math.max(60, Math.min(8_000, Math.ceil(leaseSeconds)))]
     );
     return result.rowCount === 1;
   } finally {
@@ -112,7 +112,7 @@ async function renewWorkerLeaseStep(databaseUrl: string, leaseSeconds: number): 
   }
 }
 
-async function releaseWorkerLeaseStep(databaseUrl: string): Promise<void> {
+async function releaseWorkerLeaseStep(databaseUrl: string, leaseToken: string): Promise<void> {
   "use step";
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -126,7 +126,8 @@ async function releaseWorkerLeaseStep(databaseUrl: string): Promise<void> {
     await pool.query(
       `UPDATE public.crikora_worker_state
           SET lease_until = NULL, updated_at = now()
-        WHERE id = 1`
+        WHERE id = 1 AND lease_token = $1`,
+      [leaseToken]
     );
   } finally {
     await pool.end();
@@ -140,7 +141,8 @@ async function releaseWorkerLeaseStep(databaseUrl: string): Promise<void> {
 export async function crikoraRefreshLoop(
   apiBaseUrl: string,
   refreshSecret: string,
-  databaseUrl: string
+  databaseUrl: string,
+  leaseToken: string
 ): Promise<{ status: "stopped" | "disabled" | "lease-lost"; message?: string }> {
   "use workflow";
   try {
@@ -150,7 +152,7 @@ export async function crikoraRefreshLoop(
         return { status: "disabled" };
       }
 
-      const ownsLease = await renewWorkerLeaseStep(databaseUrl, 120);
+      const ownsLease = await renewWorkerLeaseStep(databaseUrl, leaseToken, 120);
       if (!ownsLease) {
         return { status: "lease-lost" };
       }
@@ -173,14 +175,14 @@ export async function crikoraRefreshLoop(
         Math.min(7_200, outcome.retryAfterSeconds ?? configuredDelay)
       );
       const leaseSeconds = waitSeconds + 120;
-      const renewed = await renewWorkerLeaseStep(databaseUrl, leaseSeconds);
+      const renewed = await renewWorkerLeaseStep(databaseUrl, leaseToken, leaseSeconds);
       if (!renewed) {
         return { status: "lease-lost" };
       }
       await sleep(`${waitSeconds}s`);
     }
   } finally {
-    await releaseWorkerLeaseStep(databaseUrl);
+    await releaseWorkerLeaseStep(databaseUrl, leaseToken);
   }
 }
 
