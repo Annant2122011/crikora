@@ -54,7 +54,7 @@ const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = 
   { type: "team", pattern: /^\/cricket-team\/([^/]+)\/(\d+)\/?$/ },
   { type: "metadata", kind: "team-subpage", pattern: /^\/cricket-team\/([^/]+)\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "team-directory", pattern: /^\/cricket-team\/?$/ },
-  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)\/?$/ },
+  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)(?:\/[^/]+)?\/?$/ },
   { type: "series", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/?$/ },
   { type: "metadata", kind: "series-subpage", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/(.+)$/ },
   { type: "metadata", kind: "series-auction", pattern: /^\/cricket-series\/([^/]+)\/auction(?:\/(.+))?\/?$/ },
