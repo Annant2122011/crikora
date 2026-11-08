@@ -89,7 +89,7 @@ Environment settings:
 - `CRICBUZZ_USER_AGENT`
 - Worker-only `CRIKORA_API_BASE_URL`, `CRIKORA_WORKER_ADMIN_SECRET`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` (see `crawler-worker/README.md`)
 
-The refresh cadence defaults to 10 seconds and is user-selectable at 10, 15, 20 or 30 seconds. The project owner reports that the written approval does not impose a numerical per-request interval, so no artificial minimum is hard-coded. The collector still stops on source denials, throttling responses, redirects or access challenges.
+The refresh cadence defaults to 10 seconds and is user-selectable at 10, 15, 20 or 30 seconds. The email transcription does not state a numerical per-request interval, and the project owner reports that access was granted without typical API limits. The default per-request delay is 0 ms; the scheduler's separate refresh cadence defaults to 10 seconds. Runtime source responses still control backoff and hard-stop behavior: 401/403 stop collection, 429 honors Retry-After, and redirects/access challenges are not bypassed.
 
 Requests are sequential and have host/path allowlists, HTTPS checks, timeouts, response-size limits and an identifying User-Agent. HTTP 401/403/429, unexpected redirects and bot/access challenges stop the cycle. No CAPTCHA bypass, cookie replay, account automation, or anti-bot evasion is implemented.
 
