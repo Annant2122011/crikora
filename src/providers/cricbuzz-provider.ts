@@ -75,6 +75,9 @@ const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = 
   { type: "metadata", kind: "commentary", pattern: /^\/live-cricket-full-commentary\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "live-stream-page", pattern: /^\/live-cricket-stream\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "player-match-performance", pattern: /^\/player-match-performance\/match\/(\d+)\/player\/(\d+)\/(batting|bowling)\/?$/ },
+  { type: "metadata", kind: "match-highlights", pattern: /^\/cricket-match-highlights\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "live-graphs", pattern: /^\/live-cricket-graphs\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "wicket-zone", pattern: /^\/special-content\/wicket-zone\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "match-forecast", pattern: /^\/cricket-match-forecast\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "player-match-highlights", pattern: /^\/player-match-highlights\/(\d+)\/(.+)$/ },
   { type: "metadata", kind: "over-by-over", pattern: /^\/live-cricket-over-by-over\/(\d+)\/(.+)$/ }
@@ -655,6 +658,11 @@ function extractImages($: PageDoc): Array<{ url: string; alt?: string; width?: n
   $("meta[property='og:image'],meta[name='twitter:image'],meta[property='twitter:image']").each((_i, el) => {
     add($(el).attr("content"), $("h1").first().text());
   });
+  $("video[poster]").each((_i, el) => {
+    const node = $(el);
+    add(node.attr("poster"), node.attr("aria-label") ?? node.attr("title"));
+  });
+  $("link[rel='image_src']").each((_i, el) => add($(el).attr("href")));
   $("[style*='background-image']").each((_i, el) => {
     const style = $(el).attr("style") ?? "";
     for (const match of style.matchAll(/background-image\s*:\s*url\((['"]?)(.*?)\1\)/gi)) {
