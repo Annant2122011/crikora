@@ -278,7 +278,8 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
   }
 
   try {
-    await getPoller().tick();
+    // Leave ten seconds inside Vercel's 60-second function limit for Neon writes and error cleanup.
+    await getPoller().tick(AbortSignal.timeout(50_000));
     await pool.query(
       `UPDATE public.crikora_crawler_settings
           SET last_completed_at = now(), lease_until = NULL, last_error = NULL, updated_at = now()
