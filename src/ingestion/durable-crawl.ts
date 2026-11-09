@@ -188,6 +188,28 @@ export class DurableCrawlService {
     return row ? this.readSummary(row.id) : undefined;
   }
 
+  async enqueueDiscoveredUrls(values: string[]): Promise<number> {
+    const urls = [...new Set(values.filter(url => this.provider.isAllowedCrawlUrl(url)))];
+    if (!urls.length) return 0;
+    const latest = await this.pool.query<{ id: string; status: RunStatus }>(
+      "SELECT id, status FROM public.crikora_crawl_runs ORDER BY created_at DESC LIMIT 1"
+    );
+    const run = latest.rows[0];
+    if (!run || run.status === "paused") return 0;
+    const inserted = await this.pool.query(
+      "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, 'live-index' FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
+      [run.id, urls, "discovered"]
+    );
+    const added = inserted.rowCount ?? 0;
+    if (added) {
+      await this.pool.query(
+        "UPDATE public.crikora_crawl_runs SET status = CASE WHEN status = 'completed' THEN 'running' ELSE status END, completed_at = NULL, discovered_url_count = discovered_url_count + $2 WHERE id = $1",
+        [run.id, added]
+      );
+    }
+    return added;
+  }
+
   async processBatch(signal?: AbortSignal): Promise<CrawlStepResult> {
     const latest = await this.pool.query<{ id: string; status: RunStatus }>(
       "SELECT id, status FROM public.crikora_crawl_runs WHERE status IN ('queued','running') ORDER BY created_at DESC LIMIT 1"
