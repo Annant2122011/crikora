@@ -150,13 +150,14 @@ export class Poller {
     } catch (error) {
       const sourceStatus = readErrorNumber(error, "sourceStatus");
       const retryAfterMs = readErrorNumber(error, "retryAfterMs");
-      if (sourceStatus === 401 || sourceStatus === 403) {
+      if (sourceStatus === 401 || sourceStatus === 403 ||
+          (sourceStatus !== undefined && sourceStatus >= 300 && sourceStatus < 400)) {
         this.sourceDenied = true;
         this.stop();
         this.onError({
           level: "error",
           sourceStatus,
-          message: "Cricbuzz denied collection. Automatic polling is stopped until the source authorization is reviewed."
+          message: "Cricbuzz denied or redirected collection. Automatic polling is stopped until the source response is reviewed."
         });
       } else if (sourceStatus === 429) {
         const waitMs = Math.max(1_000, Math.min(3_600_000, retryAfterMs ?? 60_000));
