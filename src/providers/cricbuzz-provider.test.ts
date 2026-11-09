@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
+import { classifyCricbuzzEntityUrl, classifyMatchFormat, isWomensFixtureText, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
 
+describe("Crikora cricket scope and format classification", () => {
+  it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
+    expect(classifyMatchFormat("The Hundred - Manchester Originals vs Trent Rockets")).toBe("The Hundred");
+    expect(classifyMatchFormat("Abu Dhabi T10 - Team A vs Team B")).toBe("T10");
+    expect(classifyMatchFormat("Hong Kong Sixes - India vs Pakistan")).toBe("Sixes");
+    expect(classifyMatchFormat("ICC Men's T20 World Cup")).toBe("T20");
+  });
+
+  it("filters women's fixtures and women's team-code variants", () => {
+    expect(isWomensFixtureText("India Women vs Australia Women")).toBe(true);
+    expect(isWomensFixtureText("WPL 2026 Final")).toBe(true);
+    expect(isWomensFixtureText("IND-W vs AUS-W")).toBe(true);
+    expect(isWomensFixtureText("India vs Australia, Men's T20")).toBe(false);
+  });
+});
 describe("Cricbuzz source URL classification", () => {
   it("identifies player profiles by their stable numeric ID", () => {
     expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/11527/paul-walter"))
