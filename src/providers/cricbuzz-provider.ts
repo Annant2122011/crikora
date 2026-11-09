@@ -27,6 +27,11 @@ export interface CrawledPageResult {
   skipped: boolean;
 }
 
+export interface CricbuzzSitemapDiscoveryResult {
+  sitemapUrls: string[];
+  pageUrls: string[];
+}
+
 const ORIGIN = "https://www.cricbuzz.com";
 const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores", bucket: "live" },
@@ -238,6 +243,40 @@ export class CricbuzzProvider implements CricketProvider {
   }
 
   /**
+   * Read Cricbuzz's public sitemap documents and return only allowed cricket pages.
+   * Sitemap XML is discovery metadata; it is never stored as a cricket entity.
+   */
+  async discoverSitemapUrls(signal?: AbortSignal): Promise<CricbuzzSitemapDiscoveryResult> {
+    const pending = [new URL("/sitemap.xml", ORIGIN)];
+    const sitemapUrls = new Set<string>();
+    const pageUrls = new Set<string>();
+
+    while (pending.length) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz sitemap discovery aborted.");
+      if (sitemapUrls.size >= 50) {
+        throw new Error("Cricbuzz sitemap discovery exceeded the 50-document safety limit.");
+      }
+      const sitemapUrl = pending.shift()!;
+      const canonicalSitemapUrl = sitemapUrl.toString();
+      if (sitemapUrls.has(canonicalSitemapUrl)) continue;
+      if (!isAllowedCricbuzzSitemapUrl(canonicalSitemapUrl)) {
+        throw new Error("Refusing to fetch a sitemap outside the Cricbuzz sitemap allowlist.");
+      }
+
+      const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+      sitemapUrls.add(canonicalSitemapUrl);
+      const discovered = parseCricbuzzSitemapXml(xml, canonicalSitemapUrl);
+      for (const child of discovered.sitemapUrls) {
+        if (!sitemapUrls.has(child)) pending.push(new URL(child));
+      }
+      for (const pageUrl of discovered.pageUrls) pageUrls.add(pageUrl);
+    }
+
+    if (!pageUrls.size) throw new Error("Cricbuzz sitemap discovery returned no allowed cricket page URLs.");
+    return { sitemapUrls: [...sitemapUrls], pageUrls: [...pageUrls] };
+  }
+
+  /**
    * Fetch and normalize one page for the durable sitemap crawl. The caller
    * persists the payload through the normal ten-minute entity cache.
    */
@@ -349,6 +388,59 @@ export class CricbuzzProvider implements CricketProvider {
     }
   }
 
+  private async fetchSitemapDocument(url: URL, signal?: AbortSignal): Promise<string> {
+    if (!isAllowedCricbuzzSitemapUrl(url.toString())) {
+      throw new Error("Refusing to request a non-Cricbuzz sitemap URL.");
+    }
+    const waitMs = Math.max(0, this.options.minRequestIntervalMs - (Date.now() - this.lastRequestAt));
+    if (waitMs) await delay(waitMs, signal);
+    this.lastRequestAt = Date.now();
+
+    const timeout = AbortSignal.timeout(this.options.timeoutMs);
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const response = await fetch(url, {
+      signal: combined,
+      headers: {
+        "user-agent": this.options.userAgent,
+        accept: "application/xml,text/xml;q=0.9,text/plain;q=0.5"
+      },
+      redirect: "manual"
+    });
+    if ([401, 403, 429].includes(response.status)) {
+      throw createSourceHttpError(
+        "Cricbuzz denied or throttled sitemap " + url.pathname + " (HTTP " + response.status + "). Stop and respect the source response.",
+        response.status,
+        response.headers.get("retry-after")
+      );
+    }
+    if (response.status >= 300 && response.status < 400) {
+      throw createSourceHttpError(
+        "Cricbuzz redirected sitemap " + url.pathname + " (HTTP " + response.status + "); automatic redirect following is disabled.",
+        response.status
+      );
+    }
+    if (!response.ok) {
+      throw createSourceHttpError(
+        "Cricbuzz returned HTTP " + response.status + " for sitemap " + url.pathname,
+        response.status,
+        response.headers.get("retry-after")
+      );
+    }
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    if (contentType && !contentType.includes("xml") && !contentType.includes("text/plain")) {
+      throw new Error("Expected XML from Cricbuzz sitemap at " + url.pathname + ".");
+    }
+    const body = await readLimitedBody(response, this.options.maxResponseBytes);
+    const xml = new TextDecoder().decode(body);
+    if (/captcha|robot check|access denied|unusual traffic/i.test(xml.slice(0, 100_000))) {
+      throw createSourceHttpError("Cricbuzz presented an access challenge while reading its sitemap; discovery stopped.", 403);
+    }
+    if (!/<(?:\?xml\b|urlset\b|sitemapindex\b)/i.test(xml)) {
+      throw new Error("Cricbuzz sitemap " + url.pathname + " did not contain a recognized XML sitemap document.");
+    }
+    return xml;
+  }
+
   private async fetchPage(url: URL, signal?: AbortSignal): Promise<PageRecord> {
     assertAllowedPageUrl(url);
     const waitMs = Math.max(0, this.options.minRequestIntervalMs - (Date.now() - this.lastRequestAt));
@@ -419,6 +511,49 @@ function createSourceHttpError(message: string, status: number, retryAfter?: str
     if (wait !== undefined) error.retryAfterMs = wait;
   }
   return error;
+}
+
+export function isAllowedCricbuzzSitemapUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "www.cricbuzz.com" &&
+      !url.username && !url.password && /^\/(?:sitemap\.xml|sitemap\/[a-z0-9-]+\.xml)$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#([0-9]+);/g, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+/** Separate allowed Cricbuzz sitemap documents from allowed cricket page URLs. */
+export function parseCricbuzzSitemapXml(xml: string, sitemapUrl = "https://www.cricbuzz.com/sitemap.xml"): CricbuzzSitemapDiscoveryResult {
+  const sitemapUrls = new Set<string>();
+  const pageUrls = new Set<string>();
+  for (const match of xml.matchAll(/<loc\b[^>]*>([\s\S]*?)<\/loc>/gi)) {
+    const raw = decodeXmlText(match[1] ?? "").trim();
+    if (!raw) continue;
+    try {
+      const url = new URL(raw, sitemapUrl);
+      if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) continue;
+      url.hash = "";
+      const canonical = url.toString();
+      if (isAllowedCricbuzzSitemapUrl(canonical)) sitemapUrls.add(canonical);
+      else if (isAllowedCricbuzzPageUrl(canonical)) pageUrls.add(canonical);
+    } catch {
+      // Invalid or non-HTTP loc entries are ignored, never fetched.
+    }
+  }
+  return { sitemapUrls: [...sitemapUrls], pageUrls: [...pageUrls] };
 }
 
 function assertAllowedPageUrl(url: URL): void {
