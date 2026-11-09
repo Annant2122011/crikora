@@ -310,6 +310,9 @@ export class CricbuzzProvider implements CricketProvider {
       const commentary = commentaryUrl ? await this.tryFetchPage(new URL(commentaryUrl), "durable:commentary", signal) : undefined;
       pages = [page, info, scorecard, squadsPage, commentary].filter((item): item is PageRecord => Boolean(item));
       const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage);
+      match.infoUrl = info?.url;
+      match.scorecardUrl = scorecard?.url;
+      match.squadsUrl = squadsPage?.url;
       match.commentaryUrl = commentary?.url;
       entity = {
         entityType: "match",
