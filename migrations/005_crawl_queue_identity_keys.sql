@@ -40,8 +40,8 @@ WITH classified AS (
         THEN 'team:' || (regexp_match(canonical_url, '/cricket-team/[^/]+/([0-9]+)/'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[^/]+/auction(/|$)'
         THEN 'metadata:series-auction:' ||
-          (regexp_match(canonical_url, '/cricket-series/([^/]+)/auction'))[1] || ':' ||
-          trim(trailing '/' from coalesce((regexp_match(canonical_url, '/auction/([^?#]+)'))[1], 'index'))
+          lower((regexp_match(canonical_url, '/cricket-series/([^/]+)/auction'))[1]) || ':' ||
+          lower(trim(trailing '/' from coalesce((regexp_match(canonical_url, '/auction/([^?#]+)'))[1], 'index')))
       WHEN canonical_url ~ '/venues/[0-9]+(/|[?#]|$)'
         THEN 'venue:' || (regexp_match(canonical_url, '/venues/([0-9]+)'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[0-9]+/[^/]+/.+'
