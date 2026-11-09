@@ -369,11 +369,18 @@ export class CricbuzzProvider implements CricketProvider {
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;
       const status = readSourceStatus(error);
+      if (status !== undefined && status >= 300 && status < 400) {
+        console.warn("Crikora skipped a redirected Cricbuzz page without following the redirect", {
+          context,
+          url: url.toString(),
+          status
+        });
+        return undefined;
+      }
       if (
         status === 401 ||
         status === 403 ||
         status === 429 ||
-        (status !== undefined && status >= 300 && status < 400) ||
         (status !== undefined && status >= 500)
       ) {
         throw error;
@@ -560,8 +567,13 @@ function assertAllowedPageUrl(url: URL): void {
   if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
-  const allowed = /^\/(?:cricket-match(?:-facts|-squads|\/)|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
-  if (!allowed) throw new Error("Page path is outside the Cricbuzz crawler allowlist: " + url.pathname);
+  const cricketPage = /^\/(?:cricket-match(?:-facts|-squads|\/)|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
+  // Additional public pages explicitly listed in Cricbuzz's sitemap index.
+  // Requests are unauthenticated; redirects are recorded as skipped, never followed.
+  const sitemapListedSitePage = /^\/$|^\/info(?:\/|$)|^\/careers\/?$|^\/premium-subscription\/user\/account-info\/?$/.test(url.pathname);
+  if (!cricketPage && !sitemapListedSitePage) {
+    throw new Error("Page path is outside the Cricbuzz crawler allowlist: " + url.pathname);
+  }
 }
 
 export function isAllowedCricbuzzPageUrl(value: string): boolean {
