@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.api.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "worker:local": "tsx src/ingestion/worker-cli.ts"
+    "worker:local": "tsx src/ingestion/worker-cli.ts",
+    "sitemap:audit": "tsx src/ingestion/sitemap-audit-cli.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",
