@@ -155,3 +155,22 @@ The initial crawl uses the sitemap inventory in `docs/cricbuzz-sitemap-inventory
 - The collector reads static HTML and only public pages it can fetch. It does not execute browser JavaScript, authenticate into restricted areas, bypass CAPTCHA or source denials, or download video streams.
 
 See [the durable crawl runbook](./docs/DURABLE_FULL_CRAWL.md) for the complete route and deployment setup.
+
+## Standalone worker
+
+The core API can be paired with a persistent Node.js worker without creating another Vercel project. This runner belongs to this repository and uses the Neon worker lease to prevent two schedulers from running at once.
+
+```bash
+npm ci
+npm run worker:local
+```
+
+To seed or resume the full sitemap crawl and then drain its durable queue:
+
+```bash
+npm run worker:local -- --start-crawl
+```
+
+`worker:local -- --once` performs one scheduler pass and exits. The standalone worker reads the enabled flag and refresh cadence from the API/Neon, follows API `Retry-After` responses, refreshes its Neon lease while sleeping, and stops cleanly on Ctrl+C. It does not start source collection while crawler settings are disabled.
+
+The machine running this process must stay online for continuous scraping. It requires `DATABASE_URL`, `CRIKORA_API_BASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` in the local server-only `.env` file. Never put these values in the browser extension or commit `.env`.
