@@ -47,6 +47,50 @@ async function readSettingsStep(apiBaseUrl: string): Promise<CrawlerSettings> {
   return normalizeSettings(await response.json());
 }
 
+interface CrawlOutcome {
+  active: boolean;
+  stop?: boolean;
+  retryAfterSeconds?: number;
+  message?: string;
+}
+
+async function crawlStep(apiBaseUrl: string): Promise<CrawlOutcome> {
+  "use step";
+  const response = await fetch(new URL("crawl/step", ensureTrailingSlash(apiBaseUrl)), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${requiredEnv("CRIKORA_REFRESH_SECRET")}`,
+      accept: "application/json"
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(55_000)
+  });
+  const body = await response.json().catch(() => ({})) as {
+    active?: boolean;
+    status?: string;
+    retryAfterSeconds?: number;
+    error?: string;
+  };
+  if (response.status === 401 || response.status === 403 || response.status === 409) {
+    return { stop: true, active: false, message: body.error ?? `Crawl step returned HTTP ${response.status}.` };
+  }
+  if (response.status === 429) {
+    const headerRetry = Number(response.headers.get("retry-after"));
+    return {
+      active: true,
+      retryAfterSeconds: validDelay(body.retryAfterSeconds) ?? validDelay(headerRetry) ?? 30,
+      message: body.error
+    };
+  }
+  if (!response.ok) {
+    return { active: true, retryAfterSeconds: 30, message: body.error ?? `Crawl step returned HTTP ${response.status}.` };
+  }
+  if (body.status === "paused") {
+    return { stop: true, active: false, message: body.error ?? "The full crawl paused after a source denial." };
+  }
+  return { active: body.active === true, retryAfterSeconds: validDelay(body.retryAfterSeconds) };
+}
+
 async function refreshStep(apiBaseUrl: string): Promise<RefreshOutcome> {
   "use step";
   const response = await fetch(new URL("refresh", ensureTrailingSlash(apiBaseUrl)), {
@@ -153,6 +197,21 @@ export async function crikoraRefreshLoop(
       const ownsLease = await renewWorkerLeaseStep(leaseToken, 120);
       if (!ownsLease) {
         return { status: "lease-lost" };
+      }
+
+      const crawl = await crawlStep(apiBaseUrl);
+      if (crawl.stop) {
+        return { status: "stopped", message: crawl.message };
+      }
+      if (crawl.active) {
+        const waitMilliseconds = Math.max(
+          1_000,
+          Math.min(7_200_000, (crawl.retryAfterSeconds ?? 1) * 1000)
+        );
+        const renewed = await renewWorkerLeaseStep(leaseToken, Math.ceil(waitMilliseconds / 1000) + 120);
+        if (!renewed) return { status: "lease-lost" };
+        await sleep(`${waitMilliseconds}ms`);
+        continue;
       }
 
       const cycleStartedAt = Date.now();

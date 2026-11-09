@@ -150,6 +150,29 @@ app.put("/v1/settings", async c => {
   }
 });
 
+app.post("/v1/crawl/start", async c => {
+  if (!authorized(c.req.header("authorization"))) return c.json({ error: "Unauthorized" }, 401);
+  try {
+    const response = await fetch(apiUrl("crawl/start"), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env("CRIKORA_ADMIN_SECRET")}`,
+        accept: "application/json"
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000)
+    });
+    const crawl = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok) {
+      return c.json({ error: typeof crawl.error === "string" ? crawl.error : `Crikora crawl start returned HTTP ${response.status}.`, details: crawl }, response.status as 400);
+    }
+    const worker = await startLoop();
+    return c.json({ ok: true, crawl, worker }, worker.started ? 202 : 200);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Unable to start the full crawl." }, 502);
+  }
+});
+
 app.post("/v1/loop/start", async c => {
   if (!authorized(c.req.header("authorization"))) return c.json({ error: "Unauthorized" }, 401);
   try {

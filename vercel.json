@@ -2,7 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/[...path].ts": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": [
+        "docs/cricbuzz-sitemap-inventory.json"
+      ]
     }
   }
 }

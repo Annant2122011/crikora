@@ -1,10 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Pool } from "pg";
 import { ENTITY_TYPES, type EntityType, type StoredEntity } from "../src/domain/entities.js";
 import { Poller } from "../src/ingestion/poller.js";
 import { CricbuzzProvider } from "../src/providers/cricbuzz-provider.js";
 import { PostgresEntityRepository } from "../src/storage/postgres-entity-repository.js";
+import { DurableCrawlService } from "../src/ingestion/durable-crawl.js";
 
 type ApiRequest = IncomingMessage & { body?: unknown };
 type ApiResponse = ServerResponse;
@@ -23,6 +26,9 @@ interface CrawlerSettings {
 let settingsPool: Pool | undefined;
 let repository: PostgresEntityRepository | undefined;
 let poller: Poller | undefined;
+let provider: CricbuzzProvider | undefined;
+let durableCrawl: DurableCrawlService | undefined;
+let sitemapUrls: string[] | undefined;
 
 function getDatabaseUrl(): string {
   const value = process.env.DATABASE_URL;
@@ -46,24 +52,51 @@ function getRepository(): PostgresEntityRepository {
   return repository;
 }
 
+function getProvider(): CricbuzzProvider {
+  provider ??= new CricbuzzProvider({
+    minRequestIntervalMs: Number(process.env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS ?? 1_000),
+    maxMatchesPerPoll: Number(process.env.CRICBUZZ_MAX_MATCHES_PER_POLL ?? 2),
+    maxProfilesPerPoll: Number(process.env.CRICBUZZ_MAX_PROFILES_PER_POLL ?? 2),
+    maxTeamsPerPoll: Number(process.env.CRICBUZZ_MAX_TEAMS_PER_POLL ?? 2),
+    maxSeriesPerPoll: Number(process.env.CRICBUZZ_MAX_SERIES_PER_POLL ?? 1),
+    maxVenuesPerPoll: Number(process.env.CRICBUZZ_MAX_VENUES_PER_POLL ?? 1),
+    maxContentPagesPerPoll: Number(process.env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL ?? 2),
+    timeoutMs: Number(process.env.CRICBUZZ_TIMEOUT_MS ?? 15_000),
+    maxResponseBytes: Number(process.env.CRICBUZZ_MAX_RESPONSE_BYTES ?? 8_000_000),
+    userAgent: process.env.CRICBUZZ_USER_AGENT ?? "Crikora/0.1 (+https://github.com/Annant2122011/crikora)"
+  });
+  return provider;
+}
+
 function getPoller(): Poller {
-  if (!poller) {
-    const provider = new CricbuzzProvider({
-      minRequestIntervalMs: Number(process.env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS ?? 0),
-      maxMatchesPerPoll: Number(process.env.CRICBUZZ_MAX_MATCHES_PER_POLL ?? 2),
-      maxProfilesPerPoll: Number(process.env.CRICBUZZ_MAX_PROFILES_PER_POLL ?? 2),
-      maxTeamsPerPoll: Number(process.env.CRICBUZZ_MAX_TEAMS_PER_POLL ?? 2),
-      maxSeriesPerPoll: Number(process.env.CRICBUZZ_MAX_SERIES_PER_POLL ?? 1),
-      maxVenuesPerPoll: Number(process.env.CRICBUZZ_MAX_VENUES_PER_POLL ?? 1),
-      maxContentPagesPerPoll: Number(process.env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL ?? 2),
-      timeoutMs: Number(process.env.CRICBUZZ_TIMEOUT_MS ?? 15_000),
-      maxResponseBytes: Number(process.env.CRICBUZZ_MAX_RESPONSE_BYTES ?? 8_000_000),
-      userAgent: process.env.CRICBUZZ_USER_AGENT ??
-        "Crikora/0.1 (+https://github.com/Annant2122011/crikora)"
-    });
-    poller = new Poller(provider, getRepository(), 10_000);
-  }
+  poller ??= new Poller(getProvider(), getRepository(), 10_000);
   return poller;
+}
+
+function getDurableCrawl(): DurableCrawlService {
+  if (!durableCrawl) {
+    durableCrawl = new DurableCrawlService(
+      getPool(),
+      getProvider(),
+      getRepository(),
+      Number(process.env.CRIKORA_CRAWL_BATCH_SIZE ?? 2),
+      Number(process.env.CRIKORA_CRAWL_MAX_ATTEMPTS ?? 4),
+      75
+    );
+  }
+  return durableCrawl;
+}
+
+function getSitemapUrls(): string[] {
+  if (sitemapUrls) return sitemapUrls;
+  const path = join(process.cwd(), "docs", "cricbuzz-sitemap-inventory.json");
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as { urls?: Array<string | { url?: string }> };
+  if (!Array.isArray(parsed.urls)) throw new Error("The Crikora sitemap inventory has no URL list.");
+  sitemapUrls = parsed.urls
+    .map(item => typeof item === "string" ? item : item.url ?? "")
+    .filter(value => Boolean(value) && getProvider().isAllowedCrawlUrl(value));
+  if (!sitemapUrls.length) throw new Error("No sitemap URLs passed the Crikora crawler allowlist.");
+  return sitemapUrls;
 }
 
 function sendJson(response: ApiResponse, status: number, data: unknown): void {
@@ -153,6 +186,11 @@ async function health(response: ApiResponse): Promise<void> {
       refreshIntervalSeconds: settings.refresh_interval_seconds,
       enabled: settings.enabled,
       automationAuthorized: process.env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+      secretsConfigured: {
+        databaseUrl: Boolean(process.env.DATABASE_URL),
+        adminSecret: Boolean(process.env.CRIKORA_ADMIN_SECRET),
+        refreshSecret: Boolean(process.env.CRIKORA_REFRESH_SECRET)
+      },
       lastStartedAt: settings.last_started_at,
       lastCompletedAt: settings.last_completed_at,
       lastError: settings.last_error
@@ -280,6 +318,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
   try {
     // Leave ten seconds inside Vercel's 60-second function limit for Neon writes and error cleanup.
     await getPoller().tick(AbortSignal.timeout(50_000));
+    const queuedFollowups = await getDurableCrawl().enqueueDiscoveredUrls(getProvider().getPendingRelatedUrls());
     await pool.query(
       `UPDATE public.crikora_crawler_settings
           SET last_completed_at = now(), lease_until = NULL, last_error = NULL, updated_at = now()
@@ -291,7 +330,8 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
       refreshIntervalSeconds: claim.rows[0].refresh_interval_seconds,
       fetchedAt: new Date().toISOString(),
       retentionSeconds: 600,
-      images: "URLs"
+      images: "URLs",
+      queuedFollowups
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 1000) : "Unknown collection error";
@@ -330,6 +370,53 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
       collectorDisabled: disableCollector
     });
   }
+}
+
+async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promise<void> {
+  const expected = process.env.CRIKORA_ADMIN_SECRET;
+  if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
+  if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
+  if (process.env.CRICBUZZ_AUTOMATION_AUTHORIZED !== "true") {
+    return sendJson(response, 403, { error: "Cricbuzz collection is not enabled in the server environment." });
+  }
+  const result = await getDurableCrawl().startFullCrawl(getSitemapUrls());
+  sendJson(response, result.created ? 202 : 200, {
+    ok: true,
+    created: result.created,
+    resumed: result.resumed,
+    data: result.run,
+    meta: { inventoryUrlCount: getSitemapUrls().length, contentRetentionSeconds: 600 }
+  });
+}
+
+async function crawlStatus(request: ApiRequest, response: ApiResponse): Promise<void> {
+  const expected = process.env.CRIKORA_ADMIN_SECRET;
+  if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
+  if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
+  const run = await getDurableCrawl().getLatestStatus();
+  sendJson(response, 200, { data: run ?? null, meta: { contentRetentionSeconds: 600 } });
+}
+
+async function crawlStep(request: ApiRequest, response: ApiResponse): Promise<void> {
+  const expected = process.env.CRIKORA_REFRESH_SECRET;
+  if (!expected) return sendJson(response, 503, { error: "CRIKORA_REFRESH_SECRET is not configured." });
+  if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
+  if (process.env.CRICBUZZ_AUTOMATION_AUTHORIZED !== "true") {
+    return sendJson(response, 403, { error: "Cricbuzz collection is not enabled in the server environment." });
+  }
+  const settings = await getSettings();
+  if (!settings.enabled) return sendJson(response, 409, { error: "The crawler is currently disabled." });
+  const result = await getDurableCrawl().processBatch(AbortSignal.timeout(50_000));
+  if (result.retryAfterSeconds) response.setHeader("retry-after", String(result.retryAfterSeconds));
+  sendJson(response, 200, { ok: true, ...result, meta: { contentRetentionSeconds: 600 } });
+}
+
+async function cleanupCache(request: ApiRequest, response: ApiResponse): Promise<void> {
+  const expected = process.env.CRIKORA_REFRESH_SECRET;
+  if (!expected) return sendJson(response, 503, { error: "CRIKORA_REFRESH_SECRET is not configured." });
+  if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
+  const deletedRows = await getRepository().cleanupExpired();
+  sendJson(response, 200, { ok: true, deletedRows, retentionSeconds: 600 });
 }
 
 async function listMatches(url: URL, response: ApiResponse): Promise<void> {
@@ -458,6 +545,10 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   }
   if (path === "settings" && method === "PUT") return updateSettings(request, response);
   if (path === "refresh" && method === "POST") return refresh(request, response);
+  if (path === "crawl/start" && method === "POST") return startFullCrawl(request, response);
+  if (path === "crawl/status" && method === "GET") return crawlStatus(request, response);
+  if (path === "crawl/step" && method === "POST") return crawlStep(request, response);
+  if (path === "cleanup" && method === "POST") return cleanupCache(request, response);
 
   if (parts[0] !== "v1") {
     sendJson(response, 404, { error: "Route not found." });

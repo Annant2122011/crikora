@@ -21,6 +21,12 @@ interface DiscoveredMatch { id: string; path: string; bucket: MatchBucket; }
 interface PageRecord { url: string; html: string; $: PageDoc; }
 interface LinkRecord { url: string; path: string; text: string; }
 
+export interface CrawledPageResult {
+  entity?: CrikoraEntity;
+  discoveredUrls: string[];
+  skipped: boolean;
+}
+
 const ORIGIN = "https://www.cricbuzz.com";
 const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores", bucket: "live" },
@@ -48,6 +54,10 @@ const SECTION_INDEXES = [
 ];
 
 const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = [
+  { type: "match", pattern: /^\/live-cricket-scores\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "match-facts", pattern: /^\/cricket-match-facts\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "match-squads", pattern: /^\/cricket-match-squads\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "match-scorecard", pattern: /^\/live-cricket-scorecard\/(\d+)\/[^/]+\/?$/ },
   { type: "player", pattern: /^\/profiles\/(\d+)\/[^/]+\/?$/ },
   { type: "metadata", kind: "player-stats", pattern: /^\/profiles\/(\d+)\/[^/]+\/(?:all-matches|batting|bowling|stats)(?:\/.*)?$/ },
   { type: "metadata", kind: "player-directory", pattern: /^\/profiles\/?$/ },
@@ -219,6 +229,63 @@ export class CricbuzzProvider implements CricketProvider {
     return { matches, events, entities: [...entities.values()], fetchedAt };
   }
 
+  isAllowedCrawlUrl(value: string): boolean {
+    return isAllowedCricbuzzPageUrl(value);
+  }
+
+  getPendingRelatedUrls(): string[] {
+    return [...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]);
+  }
+
+  /**
+   * Fetch and normalize one page for the durable sitemap crawl. The caller
+   * persists the payload through the normal ten-minute entity cache.
+   */
+  async fetchCrawlPage(value: string, signal?: AbortSignal): Promise<CrawledPageResult> {
+    const url = new URL(value);
+    assertAllowedPageUrl(url);
+    const page = await this.tryFetchPage(url, "durable-full-crawl", signal);
+    if (!page) return { discoveredUrls: [], skipped: true };
+
+    const identity = classifyCricbuzzEntityUrl(page.url);
+    let entity: CrikoraEntity | undefined;
+    if (identity?.entityType === "match") {
+      const body = getMainText(page.$);
+      const bucket: MatchBucket = /\b(?:won by|match abandoned|match drawn|match tied|no result)\b/i.test(body)
+        ? "completed"
+        : /\b(?:upcoming|scheduled|starts at|will start)\b/i.test(body)
+          ? "upcoming"
+          : "live";
+      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page);
+      entity = {
+        entityType: "match",
+        sourceId: identity.sourceId,
+        sourceUrl: page.url,
+        payload: { ...match, pageKind: "match-overview" },
+        fetchedAt: new Date().toISOString()
+      };
+    } else if (identity) {
+      entity = parseEntityPage(page.$, page.url, identity.entityType);
+    }
+
+    if (!entity) {
+      const path = new URL(page.url).pathname.replace(/\/+$/, "") || "/";
+      entity = {
+        entityType: "metadata",
+        sourceId: "page:" + stableHash(path),
+        sourceUrl: page.url,
+        payload: { ...extractPageData(page.$, page.url), entityType: "metadata", pageKind: "unclassified-public-page" },
+        fetchedAt: new Date().toISOString()
+      };
+    }
+
+    const discoveredUrls = getLinks(page.$, page.url)
+      .map(link => link.url)
+      .filter(linkUrl => isAllowedCricbuzzPageUrl(linkUrl))
+      .slice(0, 250);
+    return { entity, discoveredUrls, skipped: false };
+  }
+
   private async fetchRelatedEntities(
     links: Map<string, LinkRecord>,
     limit: number,
@@ -358,10 +425,18 @@ function assertAllowedPageUrl(url: URL): void {
   if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
-  const allowed = /^\/(?:cricket-match\/|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
-  if (!allowed) throw new Error(`Page path is outside the Cricbuzz crawler allowlist: ${url.pathname}`);
+  const allowed = /^\/(?:cricket-match(?:-facts|-squads|\/)|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
+  if (!allowed) throw new Error("Page path is outside the Cricbuzz crawler allowlist: " + url.pathname);
 }
 
+export function isAllowedCricbuzzPageUrl(value: string): boolean {
+  try {
+    assertAllowedPageUrl(new URL(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
 function collectMatchNavigation($: PageDoc, pageUrl: string, matchId: string): {
   info?: string; scorecard?: string; squads?: string; commentary?: string;
 } {
