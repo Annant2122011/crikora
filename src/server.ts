@@ -59,6 +59,30 @@ await app.register(helmet);
 const origins = env.CORS_ORIGINS.split(",").map(value => value.trim()).filter(Boolean);
 await app.register(cors, { origin: origins.length ? origins : false });
 
+// Root discovery route: this is an API service, not the Crikora web frontend.
+app.get("/", async () => ({
+  ok: true,
+  service: "crikora-api",
+  source: provider.id,
+  storage: "postgres",
+  retentionSeconds: 600,
+  automationAuthorized: env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+  health: "/health",
+  apiBasePath: "/v1",
+  endpoints: {
+    matches: "/v1/matches",
+    liveMatches: "/v1/matches/live",
+    upcomingMatches: "/v1/matches/upcoming",
+    recentMatches: "/v1/matches/recent",
+    players: "/v1/players",
+    teams: "/v1/teams",
+    series: "/v1/series",
+    venues: "/v1/venues",
+    content: "/v1/content",
+    search: "/v1/search"
+  }
+}));
+
 function present(row: StoredEntity): Record<string, unknown> {
   return {
     ...row.payload,
