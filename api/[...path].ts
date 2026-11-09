@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Pool } from "pg";
 import { ENTITY_TYPES, type EntityType, type StoredEntity } from "../src/domain/entities.js";
 import { Poller } from "../src/ingestion/poller.js";
-import { CricbuzzProvider } from "../src/providers/cricbuzz-provider.js";
+import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "../src/providers/cricbuzz-provider.js";
 import { PostgresEntityRepository } from "../src/storage/postgres-entity-repository.js";
 import { DurableCrawlService } from "../src/ingestion/durable-crawl.js";
 
@@ -384,7 +384,9 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
   // Sitemap XML requests use the same source allowlist, spacing, timeout and denial handling.
   const savedInventoryUrls = getSitemapUrls();
   const liveSitemap = await getProvider().discoverSitemapUrls(AbortSignal.timeout(45_000));
-  const crawlUrls = [...new Set([...savedInventoryUrls, ...liveSitemap.pageUrls])];
+  // Current sitemap URLs take precedence over saved aliases with stale or malformed slugs.
+  const mergedCandidateUrls = [...new Set([...liveSitemap.pageUrls, ...savedInventoryUrls])];
+  const crawlUrls = dedupeCricbuzzPageUrls(mergedCandidateUrls);
   const result = await getDurableCrawl().startFullCrawl(crawlUrls);
   sendJson(response, result.created ? 202 : 200, {
     ok: true,
@@ -395,7 +397,10 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
       savedInventoryUrlCount: savedInventoryUrls.length,
       liveSitemapDocumentCount: liveSitemap.sitemapUrls.length,
       liveSitemapUrlCount: liveSitemap.pageUrls.length,
+      rawInventoryUrlCount: mergedCandidateUrls.length,
       inventoryUrlCount: crawlUrls.length,
+      dedupeRemovedUrlCount: mergedCandidateUrls.length - crawlUrls.length,
+      queueTotalCount: result.run.totalCount,
       contentRetentionSeconds: 600
     }
   });
