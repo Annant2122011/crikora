@@ -50,7 +50,7 @@ The route mix includes matches, match facts, scorecards, squads, team pages, pla
 ## Changes made on this branch
 
 1. Added a dedicated sitemap-document allowlist. It accepts only HTTPS URLs on the exact `www.cricbuzz.com` host and only `/sitemap.xml` or direct `/sitemap/*.xml` documents.
-2. Added recursive sitemap XML parsing. It separates child sitemap documents from cricket page URLs, decodes XML entities, rejects external hosts and sends page URLs through the existing cricket-page allowlist.
+2. Added recursive sitemap XML parsing. It separates child sitemap documents from page URLs, decodes XML entities, rejects external hosts and validates page URLs against the exact-host sitemap seed allowlist.
 3. Added live sitemap discovery to the protected full-crawl start endpoint. It unions the latest public sitemap page URLs with the saved 8 November snapshot; it does not discard historical URLs simply because they are no longer listed today.
 4. Expanded the sitemap seed allowlist to include the exact additional public page paths present in the current sitemap index (homepage, information pages, careers and the account-info landing URL). The account-info path is requested without credentials; any redirect is recorded as skipped and is not followed.
 5. Added queue merging for already queued/running and paused crawl runs, with database uniqueness preventing duplicate URL jobs.
