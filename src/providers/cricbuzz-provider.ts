@@ -227,7 +227,7 @@ export class CricbuzzProvider implements CricketProvider {
     entities: Map<string, CrikoraEntity>,
     signal?: AbortSignal
   ): Promise<void> {
-    if (!limit || !links.size) return;
+    if (!limit) return;
     let pending = this.pendingRelatedLinks.get(expectedType);
     if (!pending) {
       pending = new Map<string, LinkRecord>();
