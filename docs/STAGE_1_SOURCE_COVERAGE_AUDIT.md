@@ -11,7 +11,7 @@ The existing 8 November saved URL map contains 4,721 unique URLs across 30 route
 
 A fresh sitemap-only map on 9 November returned 4,393 unique URLs. After URL normalization, 85 URLs appeared in the fresh map but not the saved snapshot, while 413 URLs from the saved snapshot were absent from the fresh map. Those 413 are not assumed to be dead; the implementation retains the saved snapshot and unions it with the newly discovered public sitemap URLs.
 
-The current map had 4,388 URLs accepted by the crawler's cricket-page allowlist. Five out-of-scope URLs (the homepage, a premium account page, two information pages and a careers page) were excluded. The previous saved snapshot had 4,703 URLs accepted by that same page allowlist; its 18 excluded entries included sitemap documents and non-cricket pages.
+The first cricket-only allowlist accepted 4,388 of the 4,393 current map URLs and left out five sitemap-listed site pages (the homepage, a public premium account-info landing route, two information pages and a careers page). Stage 1 now explicitly accepts those exact public sitemap-index page paths as generic metadata pages too. The current sitemap-only map's 4,393 unique page URLs are therefore all seed-eligible after exact-host and HTTPS validation. This does not authenticate a user or follow redirects; redirected pages are recorded as skipped. Sitemap XML documents remain discovery metadata rather than page entities.
 
 ## Current public sitemap documents inspected
 
@@ -52,10 +52,13 @@ The route mix includes matches, match facts, scorecards, squads, team pages, pla
 1. Added a dedicated sitemap-document allowlist. It accepts only HTTPS URLs on the exact `www.cricbuzz.com` host and only `/sitemap.xml` or direct `/sitemap/*.xml` documents.
 2. Added recursive sitemap XML parsing. It separates child sitemap documents from cricket page URLs, decodes XML entities, rejects external hosts and sends page URLs through the existing cricket-page allowlist.
 3. Added live sitemap discovery to the protected full-crawl start endpoint. It unions the latest public sitemap page URLs with the saved 8 November snapshot; it does not discard historical URLs simply because they are no longer listed today.
-4. Added queue merging for already queued/running and paused crawl runs, with database uniqueness preventing duplicate URL jobs.
-5. Added unit tests for sitemap parsing, entity decoding, allowed page URLs and exact-host/HTTPS sitemap validation.
+4. Expanded the sitemap seed allowlist to include the exact additional public page paths present in the current sitemap index (homepage, information pages, careers and the account-info landing URL). The account-info path is requested without credentials; any redirect is recorded as skipped and is not followed.
+5. Added queue merging for already queued/running and paused crawl runs, with database uniqueness preventing duplicate URL jobs.
+6. Added unit tests for sitemap parsing, entity decoding, sitemap-listed page paths and exact-host/HTTPS sitemap validation.
+7. Increased the local worker's crawl-start request timeout to accommodate the API's 45-second live sitemap discovery budget.
+8. Changed individual page redirects to be recorded as skipped without following them; source denials and throttling still stop the run.
 
-Sitemap requests use the provider's existing request-interval setting, request timeout and response-size limit. HTTP 401/403, 429, redirects and access challenges stop discovery; no CAPTCHA, login, paywall or source restriction is bypassed. Sitemap XML is discovery metadata and is not stored as a cricket entity.
+Sitemap requests use the provider's existing request-interval setting, request timeout and response-size limit. HTTP 401/403, 429, sitemap redirects and access challenges stop discovery. For page URLs, HTTP 401/403/429 and access challenges stop the run; individual 3xx page redirects are recorded as skipped and are not followed. No CAPTCHA, login or paywall is bypassed. Sitemap XML is discovery metadata and is not stored as a cricket entity.
 
 ## Important limits
 
