@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, classifyMatchFormat, isWomensFixtureText, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
+import { classifyCricbuzzEntityUrl, classifyMatchFormat, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
 
 describe("Crikora cricket scope and format classification", () => {
   it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
@@ -9,12 +9,6 @@ describe("Crikora cricket scope and format classification", () => {
     expect(classifyMatchFormat("ICC Men's T20 World Cup")).toBe("T20");
   });
 
-  it("filters women's fixtures and women's team-code variants", () => {
-    expect(isWomensFixtureText("India Women vs Australia Women")).toBe(true);
-    expect(isWomensFixtureText("WPL 2026 Final")).toBe(true);
-    expect(isWomensFixtureText("IND-W vs AUS-W")).toBe(true);
-    expect(isWomensFixtureText("India vs Australia, Men's T20")).toBe(false);
-  });
 });
 describe("Cricbuzz source URL classification", () => {
   it("identifies player profiles by their stable numeric ID", () => {
@@ -94,8 +88,8 @@ describe("Cricbuzz source URL classification", () => {
     expect(seriesStats?.sourceId).not.toBe(seriesSquads?.sourceId);
   });
 
-  it("excludes women-only ranking URLs from the men-only data scope", () => {
-    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeUndefined();
+  it("includes women-only ranking URLs in Crikora cricket data", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeDefined();
   });
   it("rejects URLs that are not known entity routes", () => {
     expect(classifyCricbuzzEntityUrl("https://example.com/profiles/11527/paul-walter")).toBeUndefined();
