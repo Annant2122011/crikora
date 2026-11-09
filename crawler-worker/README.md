@@ -6,7 +6,9 @@ This is the Vercel-hosted scheduler for the Crikora Cricbuzz HTML collector. It 
 
 - The worker runs a durable loop and sleeps for the configured 10, 15, 20 or 30 seconds.
 - The loop reads persistent settings from the core Crikora API before each cycle.
-- It calls the core API's authenticated `POST /refresh` endpoint; that endpoint runs the existing HTML collector and writes JSONB into Neon.
+- When a durable sitemap crawl is active, it calls authenticated `POST /crawl/step` and drains the Neon-backed URL queue in small, bounded batches.
+- After the initial queue completes, it calls authenticated `POST /refresh` on the configured cadence for live/upcoming/recent match monitoring.
+- URL/job metadata is durable in Neon; scraped entity payloads are written to `crikora_cache` and retain the normal ten-minute TTL.
 - Neon holds a singleton lease so concurrent start requests cannot create overlapping durable loops.
 - The refresh API serializes scraper cycles using `crikora_crawler_settings`.
 - A 429 response is delayed using `Retry-After`; 401/403 stops the loop; a hard source denial disables the collector through the core API.
@@ -39,6 +41,7 @@ Run migration `migrations/003_crikora_worker_state.sql` once against the Crikora
 
 All management endpoints require `Authorization: Bearer <CRIKORA_WORKER_ADMIN_SECRET>`.
 
+- `POST /v1/crawl/start` seeds/resumes the complete allowlisted sitemap crawl and starts the durable workflow.
 - `GET /health`
 - `GET /v1/settings`
 - `PUT /v1/settings` with `{"refreshIntervalSeconds":10}`, `15`, `20` or `30`
@@ -51,4 +54,4 @@ The default persistent cadence is 10 seconds. The interval is measured from the 
 
 ## Important
 
-The worker only schedules requests to the existing public-HTML collector. It does not call undocumented app endpoints, reverse-engineer private media APIs, download stream segments, bypass access challenges or evade source denials.
+The worker only schedules requests to the existing public-HTML collector and the durable URL queue. Apply migration `004_crikora_durable_crawl.sql` before using `POST /v1/crawl/start`. It does not call undocumented app endpoints, reverse-engineer private media APIs, download stream segments, bypass access challenges or evade source denials.
