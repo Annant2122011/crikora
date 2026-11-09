@@ -300,14 +300,14 @@ export class CricbuzzProvider implements CricketProvider {
       const fallback = matchCompanionUrls(page.url, identity.sourceId);
       // Prefer links published by the page; only synthesize same-ID companion paths
       // when the page omits a tab link. Requests remain sequential and same-host.
-      const info = await this.tryFetchPage(new URL(navigation.info ?? fallback.info ?? "", ORIGIN), "durable:match-facts", signal)
-        .catch(error => { if (!navigation.info && !fallback.info) return undefined; throw error; });
-      const scorecard = await this.tryFetchPage(new URL(navigation.scorecard ?? fallback.scorecard ?? "", ORIGIN), "durable:scorecard", signal)
-        .catch(error => { if (!navigation.scorecard && !fallback.scorecard) return undefined; throw error; });
-      const squadsPage = await this.tryFetchPage(new URL(navigation.squads ?? fallback.squads ?? "", ORIGIN), "durable:squads", signal)
-        .catch(error => { if (!navigation.squads && !fallback.squads) return undefined; throw error; });
-      const commentary = await this.tryFetchPage(new URL(navigation.commentary ?? fallback.commentary ?? "", ORIGIN), "durable:commentary", signal)
-        .catch(error => { if (!navigation.commentary && !fallback.commentary) return undefined; throw error; });
+      const infoUrl = navigation.info ?? fallback.info;
+      const scorecardUrl = navigation.scorecard ?? fallback.scorecard;
+      const squadsUrl = navigation.squads ?? fallback.squads;
+      const commentaryUrl = navigation.commentary ?? fallback.commentary;
+      const info = infoUrl ? await this.tryFetchPage(new URL(infoUrl), "durable:match-facts", signal) : undefined;
+      const scorecard = scorecardUrl ? await this.tryFetchPage(new URL(scorecardUrl), "durable:scorecard", signal) : undefined;
+      const squadsPage = squadsUrl ? await this.tryFetchPage(new URL(squadsUrl), "durable:squads", signal) : undefined;
+      const commentary = commentaryUrl ? await this.tryFetchPage(new URL(commentaryUrl), "durable:commentary", signal) : undefined;
       pages = [page, info, scorecard, squadsPage, commentary].filter((item): item is PageRecord => Boolean(item));
       const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage);
       match.commentaryUrl = commentary?.url;
