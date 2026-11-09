@@ -26,6 +26,11 @@ export default {
         signal: AbortSignal.timeout(25_000)
       });
       const body = await response.json().catch(() => ({}));
+      console.info("Crikora cache cleanup API response", {
+        status: response.status,
+        ok: response.ok,
+        deletedRows: typeof body.deletedRows === "number" ? body.deletedRows : null
+      });
       return Response.json({
         ...body,
         ok: response.ok && body.ok === true,
