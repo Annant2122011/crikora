@@ -127,8 +127,8 @@ export class DurableCrawlService {
         "SELECT * FROM public.crikora_crawl_runs WHERE status IN ('queued','running') ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
       );
       if (active.rows[0]) {
-        const summary = await this.readSummary(client, active.rows[0].id);
         await client.query("COMMIT");
+        const summary = await this.readSummary(active.rows[0].id);
         return { created: false, resumed: false, run: summary };
       }
 
@@ -148,8 +148,8 @@ export class DurableCrawlService {
         await client.query(
           "UPDATE public.crikora_crawler_settings SET enabled = true, last_error = NULL, lease_until = NULL, updated_at = now() WHERE id = 1"
         );
-        const summary = await this.readSummary(client, runId);
         await client.query("COMMIT");
+        const summary = await this.readSummary(runId);
         return { created: false, resumed: true, run: summary };
       }
 
@@ -169,8 +169,8 @@ export class DurableCrawlService {
       await client.query(
         "UPDATE public.crikora_crawler_settings SET enabled = true, last_error = NULL, lease_until = NULL, updated_at = now() WHERE id = 1"
       );
-      const summary = await this.readSummary(client, runId);
       await client.query("COMMIT");
+      const summary = await this.readSummary(runId);
       return { created: true, resumed: false, run: summary };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -185,7 +185,7 @@ export class DurableCrawlService {
       "SELECT * FROM public.crikora_crawl_runs ORDER BY created_at DESC LIMIT 1"
     );
     const row = result.rows[0];
-    return row ? this.readSummary(this.pool, row.id) : undefined;
+    return row ? this.readSummary(row.id) : undefined;
   }
 
   async processBatch(signal?: AbortSignal): Promise<CrawlStepResult> {
@@ -249,7 +249,7 @@ export class DurableCrawlService {
             "UPDATE public.crikora_crawler_settings SET enabled = false, lease_until = NULL, last_error = $1, updated_at = now() WHERE id = 1",
             [message]
           );
-          const run = await this.readSummary(this.pool, active.id);
+          const run = await this.readSummary(active.id);
           return { active: false, status: "paused", processedThisBatch: processed, run };
         }
 
@@ -271,7 +271,7 @@ export class DurableCrawlService {
           [delayMs, message, row.id, active.id, leaseToken]
         );
         await this.releaseClaimed(active.id, leaseToken);
-        const run = await this.readSummary(this.pool, active.id);
+        const run = await this.readSummary(active.id);
         return {
           active: true,
           status: "running",
@@ -300,25 +300,25 @@ export class DurableCrawlService {
   }
 
   private async refreshProgress(runId: string): Promise<CrawlRunSummary> {
-    const summary = await this.readSummary(this.pool, runId);
+    const summary = await this.readSummary(runId);
     if (summary.pendingCount === 0 && summary.processingCount === 0 && summary.status !== "paused") {
       await this.pool.query(
         "UPDATE public.crikora_crawl_runs SET status = 'completed', completed_at = COALESCE(completed_at, now()), last_error = NULL WHERE id = $1 AND status <> 'paused'",
         [runId]
       );
     }
-    const final = await this.readSummary(this.pool, runId);
+    const final = await this.readSummary(runId);
     return final;
   }
 
-  private async readSummary(executor: Pick<Pool, "query"> | { query: Pool["query"] }, runId: string): Promise<CrawlRunSummary> {
-    const result = await executor.query<RunRow>(
+  private async readSummary(runId: string): Promise<CrawlRunSummary> {
+    const result = await this.pool.query<RunRow>(
       "SELECT * FROM public.crikora_crawl_runs WHERE id = $1",
       [runId]
     );
     const row = result.rows[0];
     if (!row) throw new Error("Crikora crawl run was not found.");
-    const counts = await executor.query<QueueCounts>(
+    const counts = await this.pool.query<QueueCounts>(
       "SELECT count(*) AS total_count, count(*) FILTER (WHERE status = 'pending') AS pending_count, count(*) FILTER (WHERE status = 'processing') AS processing_count, count(*) FILTER (WHERE status = 'completed') AS completed_count, count(*) FILTER (WHERE status = 'failed') AS failed_count, count(*) FILTER (WHERE status = 'skipped') AS skipped_count, min(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at FROM public.crikora_crawl_queue WHERE run_id = $1",
       [runId]
     );
