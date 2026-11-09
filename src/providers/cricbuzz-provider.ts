@@ -425,7 +425,7 @@ function assertAllowedPageUrl(url: URL): void {
   if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
-  const allowed = /^\/(?:cricket-match(?:-|\/)|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
+  const allowed = /^\/(?:cricket-match(?:-facts|-squads|\/)|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
   if (!allowed) throw new Error("Page path is outside the Cricbuzz crawler allowlist: " + url.pathname);
 }
 
