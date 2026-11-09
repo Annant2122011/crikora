@@ -336,9 +336,20 @@ async function main(): Promise<void> {
 
   try {
     await pool.query("SELECT 1");
-    leaseOwned = await acquireLease(pool, leaseToken, config.leaseSeconds);
+    let waitingForLease = false;
+    while (!leaseOwned && !stopped.value) {
+      leaseOwned = await acquireLease(pool, leaseToken, config.leaseSeconds);
+      if (!leaseOwned) {
+        if (!waitingForLease) {
+          log("A previous Crikora worker still owns the Neon lease; waiting for it to release or expire.");
+          waitingForLease = true;
+        }
+        await new Promise(resolve => setTimeout(resolve, Math.min(10, config.idlePollSeconds) * 1000));
+      }
+    }
     if (!leaseOwned) {
-      throw new Error("Another Crikora worker currently owns the Neon lease.");
+      log("Shutdown requested before the worker could acquire the Neon lease.");
+      return;
     }
     log("Crikora standalone worker started.", {
       apiBaseUrl: config.apiBaseUrl,
