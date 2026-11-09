@@ -12,6 +12,7 @@ interface Options {
   maxTeamsPerPoll: number;
   maxSeriesPerPoll: number;
   maxVenuesPerPoll: number;
+  maxContentPagesPerPoll: number;
   timeoutMs: number;
   maxResponseBytes: number;
   userAgent: string;
@@ -26,39 +27,104 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores/upcoming-matches", bucket: "upcoming" },
   { path: "/cricket-match/live-scores/recent-matches", bucket: "completed" }
 ];
-const PATH_RULES: Array<{ type: EntityType; pattern: RegExp }> = [
-  { type: "player", pattern: /^\/profiles\/(\d+)(?:\/|$)/ },
-  { type: "team", pattern: /^\/cricket-team\/([^/]+)\/(\d+)(?:\/|$)/ },
-  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)(?:\/|$)/ },
-  { type: "series", pattern: /^\/cricket-series\/(\d+)(?:\/|$)/ }
+
+// Two broad section indexes are sampled every refresh tick. The time-derived
+// cursor works across Vercel cold starts without depending on process memory.
+const SECTION_INDEXES = [
+  "/cricket-news",
+  "/cricket-videos",
+  "/cricket-videos/categories",
+  "/cricket-videos/playlists",
+  "/cricket-photo-gallery",
+  "/cricket-team",
+  "/profiles",
+  "/cricket-schedule/series/all",
+  "/cricket-schedule/upcoming-series/international",
+  "/cricket-stats/icc-rankings/men/batting",
+  "/cricket-stats/icc-rankings/women/batting",
+  "/cricket-stats/points-table/test/icc-world-test-championship",
+  "/cricket-series/auctions",
+  "/cricket-scorecard-archives"
+];
+
+const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = [
+  { type: "player", pattern: /^\/profiles\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "player-stats", pattern: /^\/profiles\/(\d+)\/[^/]+\/(?:all-matches|batting|bowling|stats)(?:\/.*)?$/ },
+  { type: "metadata", kind: "player-directory", pattern: /^\/profiles\/?$/ },
+  { type: "team", pattern: /^\/cricket-team\/([^/]+)\/(\d+)\/?$/ },
+  { type: "metadata", kind: "team-subpage", pattern: /^\/cricket-team\/([^/]+)\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "team-directory", pattern: /^\/cricket-team\/?$/ },
+  { type: "venue", pattern: /^\/cricket-series\/\d+\/[^/]+\/venues\/(\d+)(?:\/[^/]+)?\/?$/ },
+  { type: "series", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "series-subpage", pattern: /^\/cricket-series\/(\d+)\/[^/]+\/(.+)$/ },
+  { type: "metadata", kind: "series-auction", pattern: /^\/cricket-series\/([^/]+)\/auction(?:\/(.+))?\/?$/ },
+  { type: "metadata", kind: "series-catalog", pattern: /^\/cricket-series\/(?!\d+\/)(.+)$/ },
+  { type: "metadata", kind: "news", pattern: /^\/cricket-news\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "news-index", pattern: /^\/cricket-news\/?$/ },
+  { type: "metadata", kind: "news-category", pattern: /^\/cricket-news\/(?!\d+\/)(.+)\/?$/ },
+  { type: "metadata", kind: "video", pattern: /^\/cricket-videos\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "video-collection", pattern: /^\/cricket-videos\/collection\/(\d+)\/(.+)\/?$/ },
+  { type: "metadata", kind: "video-playlists", pattern: /^\/cricket-videos\/playlists\/?$/ },
+  { type: "metadata", kind: "video-categories", pattern: /^\/cricket-videos\/categories\/?$/ },
+  { type: "metadata", kind: "video-index", pattern: /^\/cricket-videos\/?$/ },
+  { type: "metadata", kind: "gallery", pattern: /^\/cricket-gallery\/(\d+)\/[^/]+\/?$/ },
+  { type: "metadata", kind: "gallery-index", pattern: /^\/cricket-photo-gallery\/?$/ },
+  { type: "metadata", kind: "ranking-or-statistics", pattern: /^\/cricket-stats(?:\/(.+))?\/?$/ },
+  { type: "metadata", kind: "schedule", pattern: /^\/cricket-schedule(?:\/(.*))?\/?$/ },
+  { type: "metadata", kind: "scorecard-archives", pattern: /^\/cricket-scorecard-archives(?:\/(.*))?\/?$/ },
+  { type: "metadata", kind: "commentary", pattern: /^\/live-cricket-full-commentary\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "live-stream-page", pattern: /^\/live-cricket-stream\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "player-match-performance", pattern: /^\/player-match-performance\/match\/(\d+)\/player\/(\d+)\/(batting|bowling)\/?$/ },
+  { type: "metadata", kind: "match-highlights", pattern: /^\/cricket-match-highlights\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "live-graphs", pattern: /^\/live-cricket-graphs\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "wicket-zone", pattern: /^\/special-content\/wicket-zone\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "match-forecast", pattern: /^\/cricket-match-forecast\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "player-match-highlights", pattern: /^\/player-match-highlights\/(\d+)\/(.+)$/ },
+  { type: "metadata", kind: "over-by-over", pattern: /^\/live-cricket-over-by-over\/(\d+)\/(.+)$/ }
 ];
 
 export class CricbuzzProvider implements CricketProvider {
   readonly id = "cricbuzz";
   private lastRequestAt = 0;
   private matchCursor = 0;
-  private readonly relatedCursors = new Map<EntityType, number>();
+  // Retain discovered URLs that do not fit the current related-page budget.
+  private readonly pendingRelatedLinks = new Map<EntityType, Map<string, LinkRecord>>();
 
   constructor(private readonly options: Options) {
-    if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 1000) {
-      throw new Error("Cricbuzz request interval must be at least 1000ms.");
+    if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 0) {
+      throw new Error("Cricbuzz request interval must be a non-negative integer.");
     }
     if (options.maxMatchesPerPoll < 1 || options.maxMatchesPerPoll > 50) throw new Error("Invalid maxMatchesPerPoll.");
+    if (!Number.isInteger(options.maxContentPagesPerPoll) || options.maxContentPagesPerPoll < 0 || options.maxContentPagesPerPoll > 100) {
+      throw new Error("Invalid maxContentPagesPerPoll.");
+    }
   }
 
   async fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
     const discovered = new Map<string, DiscoveredMatch>();
     const indexRecords = new Map<string, Match>();
     for (const index of INDEXES) {
-      const page = await this.fetchPage(new URL(index.path, ORIGIN), signal);
+      const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
+      if (!page) continue;
       for (const link of getLinks(page.$, page.url)) {
         const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (match?.[1] && !discovered.has(match[1])) {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
+          const stub = parseMatchIndexStub(item, page, link);
           discovered.set(match[1], item);
-          indexRecords.set(match[1], parseMatchIndexStub(item, page, link));
+          indexRecords.set(match[1], stub);
         }
       }
+    }
+
+    const sectionTick = Math.floor(Date.now() / 10_000);
+    const sectionStart = (sectionTick * 2) % SECTION_INDEXES.length;
+    const sectionPaths = rotate(SECTION_INDEXES, sectionStart, 2);
+    const sectionPages: PageRecord[] = [];
+    for (const path of sectionPaths) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
+      const page = await this.tryFetchPage(new URL(path, ORIGIN), "section-index", signal);
+      if (page) sectionPages.push(page);
     }
 
     const allMatches = [...discovered.values()];
@@ -81,15 +147,25 @@ export class CricbuzzProvider implements CricketProvider {
     const teamLinks = new Map<string, LinkRecord>();
     const seriesLinks = new Map<string, LinkRecord>();
     const venueLinks = new Map<string, LinkRecord>();
+    const contentLinks = new Map<string, LinkRecord>();
 
     for (const discoveredMatch of selected) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      const base = await this.fetchPage(new URL(discoveredMatch.path, ORIGIN), signal);
+      const base = await this.tryFetchPage(new URL(discoveredMatch.path, ORIGIN), "match", signal);
+      if (!base) continue;
       const navigation = collectMatchNavigation(base.$, base.url, discoveredMatch.id);
-      const info = navigation.info ? await this.fetchPage(new URL(navigation.info, ORIGIN), signal) : undefined;
-      const scorecard = navigation.scorecard ? await this.fetchPage(new URL(navigation.scorecard, ORIGIN), signal) : undefined;
-      const squads = navigation.squads ? await this.fetchPage(new URL(navigation.squads, ORIGIN), signal) : undefined;
-      const commentary = navigation.commentary ? await this.fetchPage(new URL(navigation.commentary, ORIGIN), signal) : undefined;
+      const info = navigation.info
+        ? await this.tryFetchPage(new URL(navigation.info, ORIGIN), "match-facts", signal)
+        : undefined;
+      const scorecard = navigation.scorecard
+        ? await this.tryFetchPage(new URL(navigation.scorecard, ORIGIN), "scorecard", signal)
+        : undefined;
+      const squads = navigation.squads
+        ? await this.tryFetchPage(new URL(navigation.squads, ORIGIN), "squads", signal)
+        : undefined;
+      const commentary = navigation.commentary
+        ? await this.tryFetchPage(new URL(navigation.commentary, ORIGIN), "commentary", signal)
+        : undefined;
 
       const match = parseMatch(discoveredMatch, base, info, scorecard, squads);
       const matchEvents = commentary ? parseEvents(commentary.$, match) : parseEvents(base.$, match);
@@ -116,15 +192,28 @@ export class CricbuzzProvider implements CricketProvider {
         mergeLinks(teamLinks, related.teams);
         mergeLinks(seriesLinks, related.series);
         mergeLinks(venueLinks, related.venues);
+        mergeLinks(contentLinks, related.content);
         const generic = parseEntityPage(page.$, page.url);
         if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
       }
+    }
+
+    for (const page of sectionPages) {
+      const related = collectRelatedLinks(page.$, page.url);
+      mergeLinks(profileLinks, related.profiles);
+      mergeLinks(teamLinks, related.teams);
+      mergeLinks(seriesLinks, related.series);
+      mergeLinks(venueLinks, related.venues);
+      mergeLinks(contentLinks, related.content);
+      const generic = parseEntityPage(page.$, page.url);
+      if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
     }
 
     await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, signal);
     await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, signal);
     await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, signal);
     await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, signal);
+    await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, signal);
 
     const fetchedAt = new Date().toISOString();
     return { matches, events, entities: [...entities.values()], fetchedAt };
@@ -137,24 +226,59 @@ export class CricbuzzProvider implements CricketProvider {
     entities: Map<string, CrikoraEntity>,
     signal?: AbortSignal
   ): Promise<void> {
-    if (!limit || !links.size) return;
-    const allLinks = [...links.values()];
-    const cursor = this.relatedCursors.get(expectedType) ?? 0;
-    const candidates = rotate(allLinks, cursor, limit);
-    if (allLinks.length) this.relatedCursors.set(expectedType, (cursor + candidates.length) % allLinks.length);
+    if (!limit) return;
+    let pending = this.pendingRelatedLinks.get(expectedType);
+    if (!pending) {
+      pending = new Map<string, LinkRecord>();
+      this.pendingRelatedLinks.set(expectedType, pending);
+    }
+    for (const link of links.values()) if (!pending.has(link.url)) pending.set(link.url, link);
+    // Bound process memory while keeping FIFO order for the oldest pending URLs.
+    while (pending.size > 2_000) {
+      const newest = [...pending.keys()].at(-1);
+      if (!newest) break;
+      pending.delete(newest);
+    }
+    const candidates = [...pending.values()].slice(0, limit);
     for (const link of candidates) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      try {
-        const page = await this.fetchPage(new URL(link.url), signal);
+      const page = await this.tryFetchPage(new URL(link.url), `related:${expectedType}`, signal);
+      if (page) {
         const parsed = parseEntityPage(page.$, page.url, expectedType);
         if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("HTTP 404")) {
-          console.warn("Cricbuzz related page no longer exists", { url: link.url });
-          continue;
-        }
+      }
+      // Ordinary page failures are isolated; source denials still throw above.
+      pending.delete(link.url);
+    }
+  }
+
+  /**
+   * Keep a cycle useful when an individual content page disappears or is
+   * temporarily unavailable. Explicit source denials, throttling, aborts and
+   * upstream 5xx still stop the cycle so the worker can pause/back off.
+   */
+  private async tryFetchPage(url: URL, context: string, signal?: AbortSignal): Promise<PageRecord | undefined> {
+    try {
+      return await this.fetchPage(url, signal);
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      const status = readSourceStatus(error);
+      if (
+        status === 401 ||
+        status === 403 ||
+        status === 429 ||
+        (status !== undefined && status >= 300 && status < 400) ||
+        (status !== undefined && status >= 500)
+      ) {
         throw error;
       }
+      console.warn("Crikora skipped an unavailable Cricbuzz page", {
+        context,
+        url: url.toString(),
+        status: status ?? null,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      return undefined;
     }
   }
 
@@ -176,12 +300,25 @@ export class CricbuzzProvider implements CricketProvider {
       redirect: "manual"
     });
     if ([401, 403, 429].includes(response.status)) {
-      throw new Error(`Cricbuzz denied or throttled ${url.pathname} (HTTP ${response.status}). Stop and respect the source response.`);
+      throw createSourceHttpError(
+        `Cricbuzz denied or throttled ${url.pathname} (HTTP ${response.status}). Stop and respect the source response.`,
+        response.status,
+        response.headers.get("retry-after")
+      );
     }
     if (response.status >= 300 && response.status < 400) {
-      throw new Error(`Cricbuzz redirected ${url.pathname} (HTTP ${response.status}); automatic redirect following is disabled.`);
+      throw createSourceHttpError(
+        `Cricbuzz redirected ${url.pathname} (HTTP ${response.status}); automatic redirect following is disabled.`,
+        response.status
+      );
     }
-    if (!response.ok) throw new Error(`Cricbuzz returned HTTP ${response.status} for ${url.pathname}`);
+    if (!response.ok) {
+      throw createSourceHttpError(
+        `Cricbuzz returned HTTP ${response.status} for ${url.pathname}`,
+        response.status,
+        response.headers.get("retry-after")
+      );
+    }
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
     if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
       throw new Error(`Expected HTML from Cricbuzz at ${url.pathname}.`);
@@ -189,17 +326,39 @@ export class CricbuzzProvider implements CricketProvider {
     const body = await readLimitedBody(response, this.options.maxResponseBytes);
     const html = new TextDecoder().decode(body);
     if (/captcha|robot check|access denied|unusual traffic/i.test(html.slice(0, 100_000))) {
-      throw new Error("Cricbuzz presented an access challenge; the collector stopped without bypassing it.");
+      throw createSourceHttpError("Cricbuzz presented an access challenge; the collector stopped without bypassing it.", 403);
     }
     return { url: url.toString(), html, $: load(html) };
   }
+}
+
+function readSourceStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object" || !("sourceStatus" in error)) return undefined;
+  const value = Number((error as { sourceStatus?: unknown }).sourceStatus);
+  return Number.isInteger(value) ? value : undefined;
+}
+
+function createSourceHttpError(message: string, status: number, retryAfter?: string | null): Error & { sourceStatus: number; retryAfterMs?: number } {
+  const error = new Error(message) as Error & { sourceStatus: number; retryAfterMs?: number };
+  error.sourceStatus = status;
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const dateMs = Date.parse(retryAfter);
+    const wait = Number.isFinite(seconds) && seconds >= 0
+      ? seconds * 1000
+      : Number.isFinite(dateMs)
+        ? Math.max(0, dateMs - Date.now())
+        : undefined;
+    if (wait !== undefined) error.retryAfterMs = wait;
+  }
+  return error;
 }
 
 function assertAllowedPageUrl(url: URL): void {
   if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
-  const allowed = /^\/(?:cricket-match\/|live-cricket-|profiles\/|cricket-team\/|cricket-series\/)/.test(url.pathname);
+  const allowed = /^\/(?:cricket-match\/|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
   if (!allowed) throw new Error(`Page path is outside the Cricbuzz crawler allowlist: ${url.pathname}`);
 }
 
@@ -217,6 +376,16 @@ function collectMatchNavigation($: PageDoc, pageUrl: string, matchId: string): {
   return found;
 }
 
+export function classifyMatchFormat(value: string): string {
+  const text = value.toLowerCase();
+  if (/\bthe hundred\b/.test(text)) return "The Hundred";
+  if (/\b(?:t10|ten10)\b/.test(text)) return "T10";
+  if (/\b(?:hong kong )?sixes\b|\bsix[- ]a[- ]side\b|\b6ixty\b/.test(text)) return "Sixes";
+  if (/\btest\b/.test(text)) return "Test";
+  if (/\bodi\b/.test(text)) return "ODI";
+  if (/\bt20\b/.test(text)) return "T20";
+  return "Unknown";
+}
 function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: LinkRecord): Match {
   const anchor = page.$("a[href]").filter((_i, element) => {
     const href = page.$(element).attr("href");
@@ -228,7 +397,7 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
   const title = clean(titleCandidate || link.text || context.slice(0, 180));
   const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
   const now = new Date().toISOString();
-  const format = /the hundred/i.test(context) ? "The Hundred" : /\btest\b/i.test(context) ? "Test" : /\bodi\b/i.test(context) ? "ODI" : /\bt20\b/i.test(context) ? "T20" : "Unknown";
+  const format = classifyMatchFormat(context);
   const sourceUrl = link.url;
   return {
     id: `cricbuzz:${item.id}`,
@@ -267,7 +436,7 @@ function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRe
   const toss = labeledValue(infoText || body, "Toss");
   const result = body.match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
   const status: MatchStatus = result || discovered.bucket === "completed" ? "completed" : discovered.bucket;
-  const format = /the hundred/i.test(title) ? "The Hundred" : /test/i.test(title) ? "Test" : /odi/i.test(title) ? "ODI" : /t20/i.test(title) ? "T20" : "Unknown";
+  const format = classifyMatchFormat(title);
   const images = extractImages($);
   return {
     id: `cricbuzz:${discovered.id}`, source: "cricbuzz", sourceMatchId: discovered.id,
@@ -374,13 +543,16 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   const entityType = expected ?? rule?.type;
   if (!entityType) return undefined;
+  const identity = classifyCricbuzzEntityUrl(url);
   const match = rule?.pattern.exec(path);
-  const sourceId = match?.[2] && entityType === "team" ? match[2]
-    : match?.[1] ?? `${entityType}:${stableHash(path)}`;
+  const sourceId = identity?.sourceId ??
+    (match?.[2] && entityType === "team" ? match[2] : match?.[1] ?? `${entityType}:${stableHash(path)}`);
   const data = extractPageData($, url);
+  const contentKind = rule?.kind ?? entityType;
   const payload: Record<string, unknown> = {
     ...data,
     entityType,
+    pageKind: contentKind,
     name: data.title ?? data.heading ?? new URL(url).pathname.split("/").filter(Boolean).at(-1),
     profile: entityType === "player" ? extractPlayerDetails($) : undefined,
     statistics: data.tables,
@@ -414,6 +586,7 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     canonicalUrl: $("link[rel='canonical']").attr("href") || url,
     meta: extractMeta($),
     images: extractImages($),
+    media: extractMediaReferences($, url),
     links: getLinks($, url).slice(0, 500),
     labels: extractLabels($),
     tables: extractTables($),
@@ -422,6 +595,46 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     controls: extractControls($),
     text: mainText.slice(0, 30000)
   };
+}
+
+function extractMediaReferences($: PageDoc, baseUrl: string): Array<Record<string, string>> {
+  const items = new Map<string, Record<string, string>>();
+  const add = (value: string | undefined, tag: string, kind: string, title?: string, poster?: string) => {
+    if (!value || value.startsWith("data:")) return;
+    try {
+      const parsed = new URL(value, baseUrl);
+      if (parsed.protocol !== "https:") return;
+      const key = parsed.toString();
+      items.set(key, {
+        url: key,
+        tag,
+        kind,
+        ...(title ? { title: clean(title) } : {}),
+        ...(poster ? { poster } : {})
+      });
+    } catch { /* malformed media URL */ }
+  };
+  $("video[src],audio[src],source[src],iframe[src]").each((_i, element) => {
+    const node = $(element);
+    const tag = (element as { tagName?: string }).tagName?.toLowerCase() ?? "media";
+    add(
+      node.attr("src") ?? node.attr("data-src"),
+      tag,
+      node.attr("type") ?? tag,
+      node.attr("title") ?? node.attr("aria-label"),
+      node.attr("poster")
+    );
+  });
+  $("video[poster]").each((_i, element) => {
+    const node = $(element);
+    const poster = node.attr("poster");
+    if (poster) add(poster, "video", "poster", node.attr("title"));
+  });
+  $("meta[property='og:video'],meta[property='og:video:url'],meta[name='twitter:player']").each((_i, element) => {
+    const node = $(element);
+    add(node.attr("content"), "meta", "video", $("h1").first().text());
+  });
+  return [...items.values()].slice(0, 100);
 }
 
 function extractMeta($: PageDoc): Record<string, string> {
@@ -475,6 +688,11 @@ function extractImages($: PageDoc): Array<{ url: string; alt?: string; width?: n
   $("meta[property='og:image'],meta[name='twitter:image'],meta[property='twitter:image']").each((_i, el) => {
     add($(el).attr("content"), $("h1").first().text());
   });
+  $("video[poster]").each((_i, el) => {
+    const node = $(el);
+    add(node.attr("poster"), node.attr("aria-label") ?? node.attr("title"));
+  });
+  $("link[rel='image_src']").each((_i, el) => add($(el).attr("href")));
   $("[style*='background-image']").each((_i, el) => {
     const style = $(el).attr("style") ?? "";
     for (const match of style.matchAll(/background-image\s*:\s*url\((['"]?)(.*?)\1\)/gi)) {
@@ -582,14 +800,22 @@ function extractPlayerDetails($: PageDoc): Record<string, unknown> {
 }
 
 function collectRelatedLinks($: PageDoc, baseUrl: string): {
-  profiles: LinkRecord[]; teams: LinkRecord[]; series: LinkRecord[]; venues: LinkRecord[];
+  profiles: LinkRecord[]; teams: LinkRecord[]; series: LinkRecord[]; venues: LinkRecord[]; content: LinkRecord[];
 } {
-  const result = { profiles: [] as LinkRecord[], teams: [] as LinkRecord[], series: [] as LinkRecord[], venues: [] as LinkRecord[] };
+  const result = {
+    profiles: [] as LinkRecord[],
+    teams: [] as LinkRecord[],
+    series: [] as LinkRecord[],
+    venues: [] as LinkRecord[],
+    content: [] as LinkRecord[]
+  };
   for (const link of getLinks($, baseUrl)) {
-    if (/^\/profiles\/\d+/.test(link.path)) result.profiles.push(link);
-    else if (/^\/cricket-team\//.test(link.path)) result.teams.push(link);
-    else if (/^\/cricket-series\/\d+/.test(link.path) && !/\/venues\/\d+/.test(link.path)) result.series.push(link);
-    if (/\/venues\/\d+/.test(link.path)) result.venues.push(link);
+    const identity = classifyCricbuzzEntityUrl(link.url);
+    if (identity?.entityType === "player") result.profiles.push(link);
+    else if (identity?.entityType === "team") result.teams.push(link);
+    else if (identity?.entityType === "series") result.series.push(link);
+    else if (identity?.entityType === "venue") result.venues.push(link);
+    else if (identity?.entityType === "metadata") result.content.push(link);
   }
   return result;
 }
@@ -716,10 +942,21 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
   if (!match) return undefined;
-  return {
-    entityType: rule.type,
-    sourceId: rule.type === "team" ? match[2]! : match[1]!
-  };
+  const rawId = rule.type === "team" || rule.kind?.startsWith("team-") ? match[2] : match[1];
+  const pathHash = stableHash(path);
+  const isSubpage = Boolean(
+    rule.kind?.includes("subpage") ||
+    rule.kind?.includes("stats") ||
+    rule.kind === "player-match-performance" ||
+    rule.kind === "series-auction" ||
+    rule.kind === "video-collection"
+  );
+  const sourceId = rule.kind
+    ? `${rule.kind}:${rawId ?? pathHash}${isSubpage ? `:${pathHash}` : ""}`
+    : rule.type === "team"
+      ? match[2]!
+      : rawId ?? `${rule.type}:${pathHash}`;
+  return { entityType: rule.type, sourceId };
 }
 
 export function parseCricbuzzEntityHtml(html: string, url: string): CrikoraEntity | undefined {

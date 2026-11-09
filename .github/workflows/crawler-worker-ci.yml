@@ -1,0 +1,33 @@
+name: Crawler Worker CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crawler-worker/**"
+      - "migrations/003_crikora_worker_state.sql"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crawler-worker/**"
+      - "migrations/003_crikora_worker_state.sql"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crawler-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crawler-worker/package.json
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build

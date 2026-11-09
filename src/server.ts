@@ -3,10 +3,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import { z } from "zod";
-import { DemoProvider } from "./providers/demo-provider.js";
 import { CricbuzzProvider } from "./providers/cricbuzz-provider.js";
 import { ENTITY_TYPES, type EntityRepository, type StoredEntity } from "./domain/entities.js";
-import { MemoryEntityRepository } from "./storage/memory-entity-repository.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
 import { Poller } from "./ingestion/poller.js";
 
@@ -15,54 +13,41 @@ const env = z.object({
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   LOG_LEVEL: z.string().default("info"),
-  POLL_INTERVAL_MS: z.coerce.number().int().min(30000).default(180000),
-  SOURCE_MODE: z.enum(["demo", "cricbuzz"]).default("demo"),
-  CRICKET_SOURCE_ENABLED: z.string().default("false"),
-  DATABASE_URL: z.string().optional(),
-  CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
+  POLL_INTERVAL_SECONDS: z.enum(["10", "15", "20", "30"]).default("10"),
+  CRICBUZZ_AUTOMATION_AUTHORIZED: z.enum(["true", "false"]).default("false"),
+  DATABASE_URL: z.string().min(1),
+  CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).default(0),
   CRICBUZZ_MAX_MATCHES_PER_POLL: z.coerce.number().int().min(1).max(50).default(2),
   CRICBUZZ_MAX_PROFILES_PER_POLL: z.coerce.number().int().min(0).max(100).default(2),
   CRICBUZZ_MAX_TEAMS_PER_POLL: z.coerce.number().int().min(0).max(50).default(2),
   CRICBUZZ_MAX_SERIES_PER_POLL: z.coerce.number().int().min(0).max(50).default(1),
   CRICBUZZ_MAX_VENUES_PER_POLL: z.coerce.number().int().min(0).max(50).default(1),
+  CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL: z.coerce.number().int().min(0).max(100).default(2),
   CRICBUZZ_TIMEOUT_MS: z.coerce.number().int().min(3000).max(60000).default(15000),
   CRICBUZZ_MAX_RESPONSE_BYTES: z.coerce.number().int().min(100000).max(20000000).default(8000000),
   CRICBUZZ_USER_AGENT: z.string().min(12).default("Crikora/0.1 (+https://github.com/Annant2122011/crikora; authorized data access)"),
   CORS_ORIGINS: z.string().default("")
 }).parse(process.env);
 
-if (env.SOURCE_MODE === "cricbuzz" && env.CRICKET_SOURCE_ENABLED !== "true") {
-  throw new Error("Set CRICKET_SOURCE_ENABLED=true to enable the Cricbuzz collector.");
-}
-if (env.SOURCE_MODE === "demo" && env.CRICKET_SOURCE_ENABLED === "true") {
-  throw new Error("Choose SOURCE_MODE=cricbuzz when enabling the Cricbuzz collector.");
-}
-if (env.SOURCE_MODE === "cricbuzz" && !env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is required for Cricbuzz collection; the collector must persist to PostgreSQL.");
-}
-
 async function startServer(): Promise<void> {
 const app = Fastify({ logger: { level: env.LOG_LEVEL }, requestIdHeader: "x-request-id" });
-const repository: EntityRepository = env.DATABASE_URL
-  ? new PostgresEntityRepository(env.DATABASE_URL)
-  : new MemoryEntityRepository();
-if (repository instanceof PostgresEntityRepository) await repository.ping();
+const repository: EntityRepository = new PostgresEntityRepository(env.DATABASE_URL);
+await (repository as PostgresEntityRepository).ping();
 
-const provider = env.SOURCE_MODE === "cricbuzz"
-  ? new CricbuzzProvider({
-      minRequestIntervalMs: env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS,
-      maxMatchesPerPoll: env.CRICBUZZ_MAX_MATCHES_PER_POLL,
-      maxProfilesPerPoll: env.CRICBUZZ_MAX_PROFILES_PER_POLL,
-      maxTeamsPerPoll: env.CRICBUZZ_MAX_TEAMS_PER_POLL,
-      maxSeriesPerPoll: env.CRICBUZZ_MAX_SERIES_PER_POLL,
-      maxVenuesPerPoll: env.CRICBUZZ_MAX_VENUES_PER_POLL,
-      timeoutMs: env.CRICBUZZ_TIMEOUT_MS,
-      maxResponseBytes: env.CRICBUZZ_MAX_RESPONSE_BYTES,
-      userAgent: env.CRICBUZZ_USER_AGENT
-    })
-  : new DemoProvider();
+const provider = new CricbuzzProvider({
+  minRequestIntervalMs: env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS,
+  maxMatchesPerPoll: env.CRICBUZZ_MAX_MATCHES_PER_POLL,
+  maxProfilesPerPoll: env.CRICBUZZ_MAX_PROFILES_PER_POLL,
+  maxTeamsPerPoll: env.CRICBUZZ_MAX_TEAMS_PER_POLL,
+  maxSeriesPerPoll: env.CRICBUZZ_MAX_SERIES_PER_POLL,
+  maxVenuesPerPoll: env.CRICBUZZ_MAX_VENUES_PER_POLL,
+  maxContentPagesPerPoll: env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL,
+  timeoutMs: env.CRICBUZZ_TIMEOUT_MS,
+  maxResponseBytes: env.CRICBUZZ_MAX_RESPONSE_BYTES,
+  userAgent: env.CRICBUZZ_USER_AGENT
+});
 
-const poller = new Poller(provider, repository, env.POLL_INTERVAL_MS, error => {
+const poller = new Poller(provider, repository, Number(env.POLL_INTERVAL_SECONDS) * 1000, error => {
   if (typeof error === "object" && error && "level" in error && error.level === "info") {
     app.log.info(error);
   } else {
@@ -73,6 +58,30 @@ const poller = new Poller(provider, repository, env.POLL_INTERVAL_MS, error => {
 await app.register(helmet);
 const origins = env.CORS_ORIGINS.split(",").map(value => value.trim()).filter(Boolean);
 await app.register(cors, { origin: origins.length ? origins : false });
+
+// Root discovery route: this is an API service, not the Crikora web frontend.
+app.get("/", async () => ({
+  ok: true,
+  service: "crikora-api",
+  source: provider.id,
+  storage: "postgres",
+  retentionSeconds: 600,
+  automationAuthorized: env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+  health: "/health",
+  apiBasePath: "/v1",
+  endpoints: {
+    matches: "/v1/matches",
+    liveMatches: "/v1/matches/live",
+    upcomingMatches: "/v1/matches/upcoming",
+    recentMatches: "/v1/matches/recent",
+    players: "/v1/players",
+    teams: "/v1/teams",
+    series: "/v1/series",
+    venues: "/v1/venues",
+    content: "/v1/content",
+    search: "/v1/search"
+  }
+}));
 
 function present(row: StoredEntity): Record<string, unknown> {
   return {
@@ -88,7 +97,15 @@ function present(row: StoredEntity): Record<string, unknown> {
 app.get("/health", async (_request, reply) => {
   try {
     if (repository instanceof PostgresEntityRepository) await repository.ping();
-    return { ok: true, service: "crikora-api", source: provider.id, storage: repository instanceof PostgresEntityRepository ? "postgres" : "memory", retentionSeconds: 600 };
+    return {
+      ok: true,
+      service: "crikora-api",
+      source: provider.id,
+      storage: "postgres",
+      retentionSeconds: 600,
+      automationAuthorized: env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+      refreshIntervalSeconds: Number(env.POLL_INTERVAL_SECONDS)
+    };
   } catch {
     return reply.code(503).send({ ok: false, service: "crikora-api", storage: "unavailable" });
   }
@@ -166,6 +183,23 @@ for (const [route, type] of [
     return { data: present(row), meta: { retentionSeconds: 600 } };
   });
 }
+app.get("/v1/content", async (request, reply) => {
+  const query = z.object({
+    kind: z.string().trim().min(1).max(80).optional(),
+    limit: z.coerce.number().int().min(1).max(500).default(100)
+  }).safeParse(request.query);
+  if (!query.success) return reply.code(400).send({ error: "Invalid content query" });
+  const rows = await repository.list("metadata", 500);
+  const data = rows
+    .filter(row => !query.data.kind || row.payload.pageKind === query.data.kind)
+    .slice(0, query.data.limit)
+    .map(present);
+  return {
+    data,
+    meta: { count: data.length, kind: query.data.kind ?? "all", retentionSeconds: 600, source: provider.id }
+  };
+});
+
 app.get("/v1/search", async (request, reply) => {
   const query = z.object({ q: z.string().trim().min(1).max(120), limit: z.coerce.number().int().min(1).max(100).default(30) }).safeParse(request.query);
   if (!query.success) return reply.code(400).send({ error: "Supply a search term q and an optional limit." });
@@ -187,8 +221,10 @@ const cleanupTimer = setInterval(() => {
 cleanupTimer.unref();
 
 await app.listen({ host: env.HOST, port: env.PORT });
-void poller.tick().catch(() => undefined);
-poller.start();
+if (env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true") {
+  void poller.tick().catch(() => undefined);
+  poller.start();
+}
 
 const close = async () => {
   clearInterval(cleanupTimer);

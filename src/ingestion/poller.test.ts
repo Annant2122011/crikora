@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CrikoraEntity } from "../domain/entities.js";
 import type { Match, ProviderSnapshot } from "../domain/types.js";
 import { MemoryEntityRepository } from "../storage/memory-entity-repository.js";
@@ -68,6 +68,112 @@ function snapshot(match: Match): ProviderSnapshot {
   };
   return { matches: [match], events: [], entities: [entity], fetchedAt };
 }
+
+describe("Poller refresh interval configuration", () => {
+  const provider: CricketProvider = {
+    id: "fixture",
+    async fetchSnapshot() {
+      return { matches: [], events: [], entities: [], fetchedAt: new Date().toISOString() };
+    }
+  };
+
+  it.each([10, 15, 20, 30])("accepts %i-second refresh intervals", seconds => {
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    poller.setRefreshIntervalSeconds(seconds);
+    expect(poller.refreshIntervalMs).toBe(seconds * 1000);
+  });
+
+  it("passes the collection abort signal through to the source provider", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot(signal) {
+        received = signal;
+        return { matches: [], events: [], entities: [], fetchedAt: new Date().toISOString() };
+      }
+    };
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    await poller.tick(controller.signal);
+    expect(received).toBe(controller.signal);
+  });
+  it("rejects unapproved interval values rather than silently coercing them", () => {
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    expect(() => poller.setRefreshIntervalSeconds(5)).toThrow(RangeError);
+    expect(() => poller.setRefreshIntervalSeconds(60)).toThrow(RangeError);
+  });
+});
+
+describe("Poller source backoff and denial handling", () => {
+  it("honors a source Retry-After before retrying a throttled request", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-06T12:00:00.000Z"));
+    let calls = 0;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot() {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(new Error("throttled"), {
+            sourceStatus: 429,
+            retryAfterMs: 20_000
+          });
+        }
+        return { matches: [], events: [], entities: [], fetchedAt: new Date().toISOString() };
+      }
+    };
+    const repository = new MemoryEntityRepository();
+    const poller = new Poller(provider, repository, 10_000);
+
+    try {
+      await expect(poller.tick()).rejects.toThrow("throttled");
+      await poller.tick();
+      expect(calls).toBe(1);
+
+      vi.advanceTimersByTime(20_001);
+      await poller.tick();
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+      await repository.close();
+    }
+  });
+
+  it("stops polling after an unexpected source redirect", async () => {
+    let calls = 0;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot() {
+        calls += 1;
+        throw Object.assign(new Error("redirected"), { sourceStatus: 302 });
+      }
+    };
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    await expect(poller.tick()).rejects.toThrow("redirected");
+    await poller.tick();
+    expect(calls).toBe(1);
+  });
+  it("stops polling after an explicit source authorization denial", async () => {
+    let calls = 0;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot() {
+        calls += 1;
+        throw Object.assign(new Error("denied"), { sourceStatus: 403 });
+      }
+    };
+    const repository = new MemoryEntityRepository();
+    const poller = new Poller(provider, repository, 10_000);
+
+    try {
+      await expect(poller.tick()).rejects.toThrow("denied");
+      await poller.tick();
+      expect(calls).toBe(1);
+    } finally {
+      await repository.close();
+    }
+  });
+});
 
 describe("Poller progressive match enrichment", () => {
   it("keeps detailed fields when a later cycle only rediscovers the index card", async () => {

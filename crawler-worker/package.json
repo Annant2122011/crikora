@@ -1,0 +1,27 @@
+{
+  "name": "crikora-crawler-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "nitro dev",
+    "build": "nitro build",
+    "start": "node .output/server/index.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "4.10.6",
+    "nitro": "3.0.260903-beta",
+    "pg": "8.23.1",
+    "rollup": "4.53.2",
+    "workflow": "5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.4",
+    "@types/pg": "8.23.1",
+    "typescript": "5.7.3"
+  }
+}

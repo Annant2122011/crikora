@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
+import { classifyCricbuzzEntityUrl, classifyMatchFormat, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
 
+describe("Crikora cricket scope and format classification", () => {
+  it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
+    expect(classifyMatchFormat("The Hundred - Manchester Originals vs Trent Rockets")).toBe("The Hundred");
+    expect(classifyMatchFormat("Abu Dhabi T10 - Team A vs Team B")).toBe("T10");
+    expect(classifyMatchFormat("Hong Kong Sixes - India vs Pakistan")).toBe("Sixes");
+    expect(classifyMatchFormat("ICC Men's T20 World Cup")).toBe("T20");
+  });
+
+});
 describe("Cricbuzz source URL classification", () => {
   it("identifies player profiles by their stable numeric ID", () => {
     expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/11527/paul-walter"))
@@ -12,6 +21,76 @@ describe("Cricbuzz source URL classification", () => {
       .toEqual({ entityType: "venue", sourceId: "18" });
   });
 
+  it("classifies the added public content page families", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-news/140765/example-story"))
+      .toEqual({ entityType: "metadata", sourceId: "news:140765" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-videos/217038/example-highlight"))
+      .toEqual({ entityType: "metadata", sourceId: "video:217038" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-gallery/6070/example-gallery"))
+      .toEqual({ entityType: "metadata", sourceId: "gallery:6070" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/men/batting"))
+      .toMatchObject({ entityType: "metadata", sourceId: expect.stringContaining("ranking-or-statistics:") });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-schedule/series/all"))
+      .toMatchObject({ entityType: "metadata", sourceId: expect.stringContaining("schedule:") });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-match-forecast/161234/example-series"))
+      .toEqual({ entityType: "metadata", sourceId: "match-forecast:161234" });
+  });
+
+  it("classifies video collection, playlist and category pages", () => {
+    const collection = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-videos/collection/1/latest-videos");
+    expect(collection?.entityType).toBe("metadata");
+    expect(collection?.sourceId).toMatch(/^video-collection:1:/);
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-videos/playlists"))
+      .toEqual({ entityType: "metadata", sourceId: expect.stringContaining("video-playlists:") });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-videos/categories"))
+      .toEqual({ entityType: "metadata", sourceId: expect.stringContaining("video-categories:") });
+  });
+
+  it("classifies match highlights, live graphs and Wicket Zone pages", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-match-highlights/161256/nz-vs-ind"))
+      .toEqual({ entityType: "metadata", sourceId: "match-highlights:161256" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/live-cricket-graphs/161256/nz-vs-ind"))
+      .toEqual({ entityType: "metadata", sourceId: "live-graphs:161256" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/special-content/wicket-zone/11209/icc-under-19-world-cup-2026"))
+      .toEqual({ entityType: "metadata", sourceId: "wicket-zone:11209" });
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-series/ipl-2013/auction/players/8284"))
+      .toMatchObject({ entityType: "metadata", sourceId: expect.stringContaining("series-auction:ipl-2013:") });
+  });
+
+  it("classifies stream landing pages and player match performance subpages", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/live-cricket-stream/175617/paku19-vs-uaeu19"))
+      .toEqual({ entityType: "metadata", sourceId: "live-stream-page:175617" });
+    const batting = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/player-match-performance/match/22509/player/9647/batting");
+    const bowling = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/player-match-performance/match/22509/player/9647/bowling");
+    expect(batting?.entityType).toBe("metadata");
+    expect(batting?.sourceId).toContain("player-match-performance:22509:");
+    expect(bowling?.sourceId).toContain("player-match-performance:22509:");
+    expect(batting?.sourceId).not.toBe(bowling?.sourceId);
+  });
+
+  it("uses the numeric team ID in distinct team subpage keys", () => {
+    const squad = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-team/india/2/squad");
+    const results = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-team/india/2/results");
+    expect(squad?.entityType).toBe("metadata");
+    expect(squad?.sourceId).toMatch(/^team-subpage:2:/);
+    expect(results?.sourceId).toMatch(/^team-subpage:2:/);
+    expect(squad?.sourceId).not.toBe(results?.sourceId);
+  });
+
+  it("uses distinct stable IDs for different player and series subpages", () => {
+    const playerBatting = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/326/mohammad-asif/all-matches/batting");
+    const playerBowling = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/326/mohammad-asif/all-matches/bowling");
+    const seriesStats = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-series/2727/big-bash-league/stats");
+    const seriesSquads = classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-series/2727/big-bash-league/squads");
+    expect(playerBatting?.entityType).toBe("metadata");
+    expect(playerBowling?.entityType).toBe("metadata");
+    expect(playerBatting?.sourceId).not.toBe(playerBowling?.sourceId);
+    expect(seriesStats?.sourceId).not.toBe(seriesSquads?.sourceId);
+  });
+
+  it("includes women-only ranking URLs in Crikora cricket data", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeDefined();
+  });
   it("rejects URLs that are not known entity routes", () => {
     expect(classifyCricbuzzEntityUrl("https://example.com/profiles/11527/paul-walter")).toBeUndefined();
     expect(classifyCricbuzzEntityUrl("not a URL")).toBeUndefined();
@@ -19,6 +98,44 @@ describe("Cricbuzz source URL classification", () => {
 });
 
 describe("Cricbuzz HTML entity extraction", () => {
+  it("returns article metadata and image references as URL strings", () => {
+    const html = `
+      <!doctype html><html><head>
+        <title>Sample Cricket News</title>
+        <meta property="og:title" content="Sample Cricket News">
+        <meta property="og:image" content="https://static.cricbuzz.com/images/news.jpg">
+        <meta property="og:video" content="https://video.cricbuzz.com/highlight.mp4">
+      </head><body><main>
+        <h1>Sample Cricket News</h1>
+        <p>Match report body text.</p>
+      </main></body></html>`;
+    const entity = parseCricbuzzEntityHtml(
+      html,
+      "https://www.cricbuzz.com/cricket-news/140765/sample-story"
+    );
+    expect(entity?.entityType).toBe("metadata");
+    expect(entity?.sourceId).toBe("news:140765");
+    expect(entity?.payload.pageKind).toBe("news");
+    expect(entity?.payload.images).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: "https://static.cricbuzz.com/images/news.jpg" })
+    ]));
+    expect(entity?.payload.media).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: "https://video.cricbuzz.com/highlight.mp4" })
+    ]));
+  });
+
+  it("returns video poster and image_src references as absolute image URLs", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><head><link rel="image_src" href="//static.cricbuzz.com/poster.jpg"></head>
+        <body><main><h1>Video</h1><video poster="/images/highlight-poster.jpg"></video></main></body></html>`,
+      "https://www.cricbuzz.com/cricket-videos/217038/highlight"
+    );
+    expect(entity?.payload.images).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: "https://static.cricbuzz.com/poster.jpg" }),
+      expect.objectContaining({ url: "https://www.cricbuzz.com/images/highlight-poster.jpg" })
+    ]));
+  });
+
   it("returns JSON-ready profile, image, labels, tables and metadata", () => {
     const html = `
       <!doctype html><html><head>
