@@ -4,7 +4,7 @@ Crikora is a cricket data collector and JSON API for the Crikora browser extensi
 
 ## Sitemap-backed content inventory
 
-On 8 November 2026, the latest sitemap-included URL map returned **4,721 unique URLs** (the request cap was 10,000). The saved inventory is [`docs/cricbuzz-sitemap-inventory.json`](./docs/cricbuzz-sitemap-inventory.json). This is an indexed URL map, not a full HTML-body crawl or a guarantee that every dynamically generated or authenticated URL is listed. The count changes as Cricbuzz updates its sitemap.
+On 8 November 2026, the saved sitemap-included URL map returned **4,721 unique URLs** (the request cap was 10,000). The saved inventory is [`docs/cricbuzz-sitemap-inventory.json`](./docs/cricbuzz-sitemap-inventory.json) and is retained as a fallback snapshot. When a full crawl is explicitly started, the API now discovers the current public sitemap documents from `/sitemap.xml`, follows their child XML documents and unions their allowed cricket-page URLs with the saved snapshot. A 9 November sitemap-only map returned 4,393 unique URLs; 85 were new to that map and 413 saved URLs were absent, so the implementation deliberately preserves both sets. This is URL discovery, not a full HTML-body crawl or a guarantee that every dynamically generated, private or authenticated URL is listed. See [the Stage 1 source coverage audit](./docs/STAGE_1_SOURCE_COVERAGE_AUDIT.md).
 
 | Route family | URLs in latest map |
 | --- | ---: |

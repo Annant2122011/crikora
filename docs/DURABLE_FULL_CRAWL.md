@@ -6,7 +6,9 @@
 - Each URL is stored as queue metadata in Neon. URL jobs use leases and can be reclaimed after a worker restart.
 - The crawler parses a page through the existing Cricbuzz provider, stores its normalized entity in `crikora_cache`, and follows further allowlisted links.
 - Match overview, facts, squads and scorecard URLs have distinct classification. The allowlist explicitly accepts match facts and squad paths.
-- HTTP 429 honors `Retry-After`; transient failures back off and retry. HTTP 401/403 and redirects pause the run rather than trying to bypass the source response.
+- HTTP 429 honors `Retry-After`; transient failures back off and retry. HTTP 401/403 and access challenges pause the run. Individual page redirects are recorded as skipped without following them; redirects encountered while reading sitemap documents stop discovery.
+- At protected full-crawl start, the API reads the current public `/sitemap.xml`, follows its allowlisted child sitemap XML documents, and merges the resulting sitemap-listed page URLs with the saved inventory snapshot. Sitemap XML is discovery metadata, not a cricket entity. The seed allowlist includes the cricket route families and the exact additional public page paths listed by the current sitemap index (homepage, public information pages, careers and the account-info landing URL).
+- A sitemap refresh adds newly discovered URLs to an already queued/running or paused crawl run; existing queue uniqueness prevents duplicate jobs.
 - The worker drains the full-crawl queue before returning to normal live/upcoming/recent refreshes.
 - The live refresh process also forwards unprocessed related links into the persistent queue.
 - Scraped payloads stay in the existing cache and expire after 600 seconds. The queue keeps only URL, progress, lease and error metadata.

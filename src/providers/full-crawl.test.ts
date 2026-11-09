@@ -17,9 +17,16 @@ describe("full-crawl route coverage", () => {
       .toEqual({ entityType: "metadata", sourceId: "match-squads:161256" });
   });
 
-  it("rejects external hosts, non-HTTPS URLs and non-content routes", () => {
+  it("rejects external hosts, non-HTTPS URLs and unlisted internal routes", () => {
     expect(isAllowedCricbuzzPageUrl("https://example.com/profiles/1/example")).toBe(false);
     expect(isAllowedCricbuzzPageUrl("http://www.cricbuzz.com/profiles/1/example")).toBe(false);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/premium-subscription/user/account-info")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/api/private")).toBe(false);
+  });
+
+  it("accepts the additional public pages explicitly listed in Cricbuzz's sitemap index", () => {
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/info/contact")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/careers")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/premium-subscription/user/account-info")).toBe(true);
   });
 });

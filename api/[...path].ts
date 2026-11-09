@@ -379,13 +379,25 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
   if (process.env.CRICBUZZ_AUTOMATION_AUTHORIZED !== "true") {
     return sendJson(response, 403, { error: "Cricbuzz collection is not enabled in the server environment." });
   }
-  const result = await getDurableCrawl().startFullCrawl(getSitemapUrls());
+
+  // Keep the saved inventory as a backstop, then merge the current public sitemap URLs.
+  // Sitemap XML requests use the same source allowlist, spacing, timeout and denial handling.
+  const savedInventoryUrls = getSitemapUrls();
+  const liveSitemap = await getProvider().discoverSitemapUrls(AbortSignal.timeout(45_000));
+  const crawlUrls = [...new Set([...savedInventoryUrls, ...liveSitemap.pageUrls])];
+  const result = await getDurableCrawl().startFullCrawl(crawlUrls);
   sendJson(response, result.created ? 202 : 200, {
     ok: true,
     created: result.created,
     resumed: result.resumed,
     data: result.run,
-    meta: { inventoryUrlCount: getSitemapUrls().length, contentRetentionSeconds: 600 }
+    meta: {
+      savedInventoryUrlCount: savedInventoryUrls.length,
+      liveSitemapDocumentCount: liveSitemap.sitemapUrls.length,
+      liveSitemapUrlCount: liveSitemap.pageUrls.length,
+      inventoryUrlCount: crawlUrls.length,
+      contentRetentionSeconds: 600
+    }
   });
 }
 
