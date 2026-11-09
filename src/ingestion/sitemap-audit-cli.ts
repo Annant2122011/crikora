@@ -94,6 +94,7 @@ async function main(): Promise<void> {
   const snapshotOnlyUrls = [...savedSet].filter(url => !liveSet.has(url));
   // Put live sitemap URLs first so the selected URL keeps the current source slug.
   const liveUrlsFirst = [...liveSet, ...savedSet];
+  const mergedExactUrls = new Set([...liveSet, ...savedSet]);
   const mergedUrls = dedupeCricbuzzPageUrls(liveUrlsFirst);
   const liveIdentityUniqueCount = dedupeCricbuzzPageUrls([...liveSet]).length;
   const snapshotIdentityUniqueCount = dedupeCricbuzzPageUrls([...savedSet]).length;
@@ -118,7 +119,7 @@ async function main(): Promise<void> {
     mergedSeedUrlCount: mergedUrls.length,
     liveSitemapUniquePageIdentityCount: liveIdentityUniqueCount,
     savedSnapshotUniquePageIdentityCount: snapshotIdentityUniqueCount,
-    duplicatePageIdentityAliasCount: liveSet.size + savedSet.size - mergedUrls.length,
+    duplicatePageIdentityAliasCount: mergedExactUrls.size - mergedUrls.length,
     routeFamilyCounts: Object.fromEntries(
       Object.entries(routeCounts).sort(([left], [right]) => left.localeCompare(right))
     ),
@@ -130,7 +131,6 @@ async function main(): Promise<void> {
     report.newSinceSavedSnapshotUrls = newUrls.sort();
     report.savedSnapshotNotInCurrentSitemapUrls = snapshotOnlyUrls.sort();
     report.mergedSeedUrls = [...mergedUrls].sort();
-    report.mergedSeedUrlsPreferCurrentSitemap = mergedUrls;
   }
 
   console.log(JSON.stringify(report, null, 2));
