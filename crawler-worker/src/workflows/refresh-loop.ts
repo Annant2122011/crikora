@@ -206,7 +206,7 @@ export async function crikoraRefreshLoop(
       if (crawl.active) {
         const waitMilliseconds = Math.max(
           1_000,
-          Math.min(7_200_000, (crawl.retryAfterSeconds ?? settings.refreshIntervalSeconds) * 1000)
+          Math.min(7_200_000, (crawl.retryAfterSeconds ?? 1) * 1000)
         );
         const renewed = await renewWorkerLeaseStep(leaseToken, Math.ceil(waitMilliseconds / 1000) + 120);
         if (!renewed) return { status: "lease-lost" };
