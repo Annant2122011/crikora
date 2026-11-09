@@ -83,6 +83,20 @@ describe("Poller refresh interval configuration", () => {
     expect(poller.refreshIntervalMs).toBe(seconds * 1000);
   });
 
+  it("passes the collection abort signal through to the source provider", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot(signal) {
+        received = signal;
+        return { matches: [], events: [], entities: [], fetchedAt: new Date().toISOString() };
+      }
+    };
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    await poller.tick(controller.signal);
+    expect(received).toBe(controller.signal);
+  });
   it("rejects unapproved interval values rather than silently coercing them", () => {
     const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
     expect(() => poller.setRefreshIntervalSeconds(5)).toThrow(RangeError);
