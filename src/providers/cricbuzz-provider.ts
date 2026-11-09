@@ -1228,13 +1228,13 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   } else if (rule.kind === "player-stats") {
     subpageIdentity = `${match[1]}:${path.split("/").filter(Boolean).slice(3).join("/").toLowerCase()}`;
   } else if (rule.kind === "series-subpage") {
-    subpageIdentity = `${match[1]}:${(match[3] ?? "").toLowerCase()}`;
+    subpageIdentity = `${match[1]}:${(match[2] ?? "").toLowerCase()}`;
   } else if (rule.kind === "player-match-performance") {
     subpageIdentity = `${match[1]}:${match[2]}:${match[3]}`;
   } else if (rule.kind === "series-auction") {
     subpageIdentity = `${(match[1] ?? "").toLowerCase()}:${(match[2] ?? "index").toLowerCase()}`;
   } else if (rule.kind === "video-collection") {
-    subpageIdentity = String(match[1]);
+    subpageIdentity = `${match[1]}:${(match[2] ?? "").toLowerCase()}`;
   } else if (rule.kind?.includes("stats")) {
     subpageIdentity = rawId ?? pathHash;
   }
