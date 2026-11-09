@@ -1,5 +1,5 @@
--- Stable entity identity prevents alternate slugs for the same Cricbuzz page
--- from being queued more than once. Distinct page families retain distinct keys.
+-- Stable entity identity prevents alternate Cricbuzz slugs for the same page
+-- from being queued more than once. Distinct page families retain separate keys.
 ALTER TABLE public.crikora_crawl_queue
   ADD COLUMN IF NOT EXISTS identity_key text;
 
@@ -18,18 +18,60 @@ WITH classified AS (
         THEN 'metadata:match-scorecard:' || (regexp_match(canonical_url, '/live-cricket-scorecard/([0-9]+)/'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-news/[0-9]+/'
         THEN 'metadata:news:' || (regexp_match(canonical_url, '/cricket-news/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-videos/collection/[0-9]+/'
+        THEN 'metadata:video-collection:' || (regexp_match(canonical_url, '/cricket-videos/collection/([0-9]+)/'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-videos/[0-9]+/'
         THEN 'metadata:video:' || (regexp_match(canonical_url, '/cricket-videos/([0-9]+)/'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-gallery/[0-9]+/'
         THEN 'metadata:gallery:' || (regexp_match(canonical_url, '/cricket-gallery/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/profiles/[0-9]+/[^/]+/(all-matches|batting|bowling|stats)(/|$)'
+        THEN 'metadata:player-stats:' ||
+          (regexp_match(canonical_url, '/profiles/([0-9]+)/'))[1] || ':' ||
+          lower(regexp_replace(split_part(canonical_url, '?', 1),
+            '^https://www[.]cricbuzz[.]com/profiles/[0-9]+/[^/]+/', ''))
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/profiles/[0-9]+/[^/?#]+/?([?#].*)?$'
         THEN 'player:' || (regexp_match(canonical_url, '/profiles/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-team/[^/]+/[0-9]+/.+'
+        THEN 'metadata:team-subpage:' ||
+          (regexp_match(canonical_url, '/cricket-team/[^/]+/([0-9]+)/'))[1] || ':' ||
+          lower(trim(trailing '/' from regexp_replace(split_part(canonical_url, '?', 1),
+            '^https://www[.]cricbuzz[.]com/cricket-team/[^/]+/[0-9]+/', '')))
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-team/[^/]+/[0-9]+/?([?#].*)?$'
         THEN 'team:' || (regexp_match(canonical_url, '/cricket-team/[^/]+/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[^/]+/auction(/|$)'
+        THEN 'metadata:series-auction:' ||
+          (regexp_match(canonical_url, '/cricket-series/([^/]+)/auction'))[1] || ':' ||
+          coalesce((regexp_match(canonical_url, '/auction/([^?#]+)'))[1], 'index')
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[0-9]+/[^/]+/.+'
+        THEN 'metadata:series-subpage:' ||
+          (regexp_match(canonical_url, '/cricket-series/([0-9]+)/'))[1] || ':' ||
+          lower(trim(trailing '/' from regexp_replace(split_part(canonical_url, '?', 1),
+            '^https://www[.]cricbuzz[.]com/cricket-series/[0-9]+/[^/]+/', '')))
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[0-9]+/[^/?#]+/?([?#].*)?$'
         THEN 'series:' || (regexp_match(canonical_url, '/cricket-series/([0-9]+)/'))[1]
       WHEN canonical_url ~ '/venues/[0-9]+(/|[?#]|$)'
         THEN 'venue:' || (regexp_match(canonical_url, '/venues/([0-9]+)'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/player-match-performance/match/[0-9]+/player/[0-9]+/(batting|bowling)/?([?#].*)?$'
+        THEN 'metadata:player-match-performance:' ||
+          (regexp_match(canonical_url, '/match/([0-9]+)/player/([0-9]+)/(batting|bowling)'))[1] || ':' ||
+          (regexp_match(canonical_url, '/match/([0-9]+)/player/([0-9]+)/(batting|bowling)'))[2] || ':' ||
+          (regexp_match(canonical_url, '/match/([0-9]+)/player/([0-9]+)/(batting|bowling)'))[3]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/live-cricket-full-commentary/[0-9]+/'
+        THEN 'metadata:commentary:' || (regexp_match(canonical_url, '/live-cricket-full-commentary/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/live-cricket-stream/[0-9]+/'
+        THEN 'metadata:live-stream-page:' || (regexp_match(canonical_url, '/live-cricket-stream/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-match-highlights/[0-9]+/'
+        THEN 'metadata:match-highlights:' || (regexp_match(canonical_url, '/cricket-match-highlights/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/live-cricket-graphs/[0-9]+/'
+        THEN 'metadata:live-graphs:' || (regexp_match(canonical_url, '/live-cricket-graphs/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/special-content/wicket-zone/[0-9]+/'
+        THEN 'metadata:wicket-zone:' || (regexp_match(canonical_url, '/wicket-zone/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-match-forecast/[0-9]+/'
+        THEN 'metadata:match-forecast:' || (regexp_match(canonical_url, '/cricket-match-forecast/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/player-match-highlights/[0-9]+/'
+        THEN 'metadata:player-match-highlights:' || (regexp_match(canonical_url, '/player-match-highlights/([0-9]+)/'))[1]
+      WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/live-cricket-over-by-over/[0-9]+/'
+        THEN 'metadata:over-by-over:' || (regexp_match(canonical_url, '/live-cricket-over-by-over/([0-9]+)/'))[1]
       ELSE 'url:' || canonical_url
     END AS identity_key,
     status,
