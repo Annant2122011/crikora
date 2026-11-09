@@ -79,10 +79,10 @@ npm ci
 npm run sitemap:audit
 ```
 
-To print the full current URL list and both snapshot-difference lists as JSON:
+To save the full URL list and both snapshot-difference lists as a JSON file:
 
 ```cmd
-npm run sitemap:audit -- --full
+npm run --silent sitemap:audit -- --full > sitemap-audit.json
 ```
 
 The command does not connect to Neon, change production settings, enqueue crawl jobs or persist page content. It uses the same request interval and allowlist as the provider. The default minimum interval is 1,000 ms; do not change it without applying the approved source request policy.
