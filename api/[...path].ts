@@ -54,7 +54,7 @@ function getRepository(): PostgresEntityRepository {
 
 function getProvider(): CricbuzzProvider {
   provider ??= new CricbuzzProvider({
-    minRequestIntervalMs: Number(process.env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS ?? 0),
+    minRequestIntervalMs: Number(process.env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS ?? 1_000),
     maxMatchesPerPoll: Number(process.env.CRICBUZZ_MAX_MATCHES_PER_POLL ?? 2),
     maxProfilesPerPoll: Number(process.env.CRICBUZZ_MAX_PROFILES_PER_POLL ?? 2),
     maxTeamsPerPoll: Number(process.env.CRICBUZZ_MAX_TEAMS_PER_POLL ?? 2),
