@@ -27,8 +27,8 @@ WITH classified AS (
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/profiles/[0-9]+/[^/]+/(all-matches|batting|bowling|stats)(/|$)'
         THEN 'metadata:player-stats:' ||
           (regexp_match(canonical_url, '/profiles/([0-9]+)/'))[1] || ':' ||
-          lower(regexp_replace(split_part(canonical_url, '?', 1),
-            '^https://www[.]cricbuzz[.]com/profiles/[0-9]+/[^/]+/', ''))
+          lower(trim(trailing '/' from regexp_replace(split_part(canonical_url, '?', 1),
+            '^https://www[.]cricbuzz[.]com/profiles/[0-9]+/[^/]+/', '')))
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/profiles/[0-9]+/[^/?#]+/?([?#].*)?$'
         THEN 'player:' || (regexp_match(canonical_url, '/profiles/([0-9]+)/'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-team/[^/]+/[0-9]+/.+'
@@ -41,7 +41,9 @@ WITH classified AS (
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[^/]+/auction(/|$)'
         THEN 'metadata:series-auction:' ||
           (regexp_match(canonical_url, '/cricket-series/([^/]+)/auction'))[1] || ':' ||
-          coalesce((regexp_match(canonical_url, '/auction/([^?#]+)'))[1], 'index')
+          trim(trailing '/' from coalesce((regexp_match(canonical_url, '/auction/([^?#]+)'))[1], 'index'))
+      WHEN canonical_url ~ '/venues/[0-9]+(/|[?#]|$)'
+        THEN 'venue:' || (regexp_match(canonical_url, '/venues/([0-9]+)'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[0-9]+/[^/]+/.+'
         THEN 'metadata:series-subpage:' ||
           (regexp_match(canonical_url, '/cricket-series/([0-9]+)/'))[1] || ':' ||
@@ -49,8 +51,6 @@ WITH classified AS (
             '^https://www[.]cricbuzz[.]com/cricket-series/[0-9]+/[^/]+/', '')))
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-series/[0-9]+/[^/?#]+/?([?#].*)?$'
         THEN 'series:' || (regexp_match(canonical_url, '/cricket-series/([0-9]+)/'))[1]
-      WHEN canonical_url ~ '/venues/[0-9]+(/|[?#]|$)'
-        THEN 'venue:' || (regexp_match(canonical_url, '/venues/([0-9]+)'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/player-match-performance/match/[0-9]+/player/[0-9]+/(batting|bowling)/?([?#].*)?$'
         THEN 'metadata:player-match-performance:' ||
           (regexp_match(canonical_url, '/match/([0-9]+)/player/([0-9]+)/(batting|bowling)'))[1] || ':' ||
