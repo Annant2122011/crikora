@@ -200,7 +200,9 @@ async function waitWithLease(
 }
 
 async function startFullCrawl(config: Config): Promise<void> {
-  const result = await requestApi(config, "crawl/start", "POST", "admin", 20_000);
+  // The API performs a sequential public-sitemap refresh before seeding the queue.
+  // Match the API's 45-second discovery budget while staying inside Vercel's 60-second limit.
+  const result = await requestApi(config, "crawl/start", "POST", "admin", 50_000);
   assertApiSuccess(result, "Full-crawl start");
   const data = result.body.data as Record<string, unknown> | undefined;
   log("Full crawl accepted by the API.", {
