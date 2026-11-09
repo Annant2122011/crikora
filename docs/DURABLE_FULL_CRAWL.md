@@ -72,4 +72,4 @@ The worker processes a small sequential batch per durable step. The full invento
 
 ## Independent cache cleanup
 
-The repository includes `neon/functions/cache-cleanup`. Deploy it to the production Neon branch and create a Neon Function Trigger with schedule `* * * * *` (once per minute). Neon schedule triggers run outside the Postgres compute and are compatible with scale-to-zero, unlike an in-database `pg_cron` job.
+The repository includes `neon/functions/cache-cleanup`. The function is dependency-free and forwards the authenticated scheduled invocation to the core API's `/api/cleanup` endpoint. Deploy it with environment variables `CRIKORA_API_BASE_URL=https://crikora.vercel.app/api` and `CRIKORA_REFRESH_SECRET` set to the same sensitive value as the core API, then create the Neon Function Trigger with schedule `* * * * *` (once per minute). Neon schedule triggers run outside the Postgres compute and are compatible with scale-to-zero.
