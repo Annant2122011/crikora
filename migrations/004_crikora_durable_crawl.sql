@@ -40,5 +40,5 @@ CREATE INDEX IF NOT EXISTS crikora_crawl_queue_lease_idx
   WHERE status = 'processing';
 
 CREATE UNIQUE INDEX IF NOT EXISTS crikora_crawl_runs_one_active_idx
-  ON public.crikora_crawl_runs ((status))
+  ON public.crikora_crawl_runs ((true))
   WHERE status IN ('queued','running');
