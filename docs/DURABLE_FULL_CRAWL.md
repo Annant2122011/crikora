@@ -73,3 +73,9 @@ The worker processes a small sequential batch per durable step. The full invento
 ## Independent cache cleanup
 
 The repository includes `neon/functions/cache-cleanup`. The function is dependency-free and forwards the authenticated scheduled invocation to the core API's `/api/cleanup` endpoint. Deploy it with environment variables `CRIKORA_API_BASE_URL=https://crikora.vercel.app/api` and `CRIKORA_REFRESH_SECRET` set to the same sensitive value as the core API, then create the Neon Function Trigger with schedule `* * * * *` (once per minute). Neon schedule triggers run outside the Postgres compute and are compatible with scale-to-zero.
+
+## Standalone worker alternative
+
+If Vercel project creation for the separate worker is unavailable, the repository includes `npm run worker:local`. It runs the same scheduler from a persistent Node.js process and uses the shared Neon worker lease. Add `CRIKORA_API_BASE_URL`, `DATABASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` to the root `.env` file.
+
+Run `npm run worker:local` to drain an existing crawl and then perform normal refreshes. Run `npm run worker:local -- --start-crawl` to seed/resume the full sitemap crawl before draining it. Do not set source authorization to true until this runtime is configured and the source authorization policy is confirmed.
