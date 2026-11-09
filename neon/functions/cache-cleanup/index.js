@@ -1,14 +1,3 @@
-import pg from "pg";
-
-const { Pool } = pg;
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 2,
-  connectionTimeoutMillis: 8_000,
-  idleTimeoutMillis: 5_000,
-  application_name: "crikora-neon-cache-cleanup"
-});
-
 export default {
   async fetch(request) {
     if (request.method !== "POST") {
@@ -19,19 +8,33 @@ export default {
       return Response.json({ error: "Scheduled invocation required." }, { status: 403 });
     }
 
+    const apiBaseUrl = process.env.CRIKORA_API_BASE_URL;
+    const refreshSecret = process.env.CRIKORA_REFRESH_SECRET;
+    if (!apiBaseUrl || !refreshSecret) {
+      return Response.json({ error: "Cleanup function environment is incomplete." }, { status: 503 });
+    }
+
     try {
-      const result = await pool.query(
-        "DELETE FROM public.crikora_cache WHERE expires_at <= now()"
-      );
-      return Response.json({
-        ok: true,
-        deletedRows: result.rowCount ?? 0,
-        retentionSeconds: 600,
-        executedAt: new Date().toISOString()
+      const endpoint = `${apiBaseUrl.replace(/\\/+$/, "")}/cleanup`;
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${refreshSecret}`,
+          accept: "application/json"
+        },
+        cache: "no-store",
+        signal: AbortSignal.timeout(25_000)
       });
+      const body = await response.json().catch(() => ({}));
+      return Response.json({
+        ...body,
+        ok: response.ok && body.ok === true,
+        scheduler: "neon-function-trigger",
+        retentionSeconds: 600
+      }, { status: response.status });
     } catch (error) {
-      console.error("Crikora cache cleanup failed", error);
-      return Response.json({ error: "Cache cleanup failed." }, { status: 500 });
+      console.error("Crikora scheduled cache cleanup failed", error);
+      return Response.json({ error: "Crikora API cleanup request failed." }, { status: 502 });
     }
   }
 };
