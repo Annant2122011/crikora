@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isAllowedCricbuzzPageUrl,
   isAllowedCricbuzzSitemapUrl,
   parseCricbuzzSitemapXml
 } from "./cricbuzz-provider.js";
@@ -35,6 +36,32 @@ describe("Cricbuzz sitemap discovery", () => {
     expect(result.pageUrls).toEqual([
       "https://www.cricbuzz.com/live-cricket-scores/161256/nz-vs-ind?view=full&lang=en"
     ]);
+  });
+
+
+  it("accepts every exact-host public page path included by the current sitemap index", () => {
+    const urls = [
+      "https://www.cricbuzz.com/",
+      "https://www.cricbuzz.com/info/contact",
+      "https://www.cricbuzz.com/info/advertise",
+      "https://www.cricbuzz.com/careers",
+      "https://www.cricbuzz.com/premium-subscription/user/account-info",
+      "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026"
+    ];
+    for (const url of urls) expect(isAllowedCricbuzzPageUrl(url)).toBe(true);
+
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/api/private")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://evil.example/cricket-news/140001/story")).toBe(false);
+  });
+
+  it("recognizes nested sitemap references without treating them as page records", () => {
+    const result = parseCricbuzzSitemapXml(
+      "<sitemapindex><sitemap><loc>https://www.cricbuzz.com/sitemap/cricket-news-archive.xml</loc></sitemap></sitemapindex>"
+    );
+    expect(result.sitemapUrls).toEqual([
+      "https://www.cricbuzz.com/sitemap/cricket-news-archive.xml"
+    ]);
+    expect(result.pageUrls).toEqual([]);
   });
 
   it("accepts only HTTPS sitemap files on the exact Cricbuzz host", () => {
