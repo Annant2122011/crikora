@@ -71,6 +71,7 @@ describe("durable match extraction", () => {
     });
     expect(requested).toEqual([baseUrl, ...companionUrls]);
     expect(result.discoveredUrls).toEqual(expect.arrayContaining(companionUrls));
+  });
 
   it("uses same-ID companion routes when the overview omits tab links", async () => {
     const baseUrl = "https://www.cricbuzz.com/live-cricket-scores/177291/india-vs-new-zealand";
@@ -115,6 +116,5 @@ describe("durable match extraction", () => {
     expect(requested).toEqual(expectedRequests);
     expect(result.entity?.payload.matchFacts).toMatchObject({ title: "Verified Match Facts" });
     expect(result.entity?.payload.sourcePages).toEqual([baseUrl, factsUrl]);
-  });
   });
 });
