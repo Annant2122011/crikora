@@ -28,6 +28,7 @@ interface Config {
   refreshSecret: string;
   leaseSeconds: number;
   idlePollSeconds: number;
+  startFullCrawlOnEnable: boolean;
 }
 
 interface ApiResult {
@@ -83,7 +84,8 @@ function readConfig(): Config {
     adminSecret: requiredEnv("CRIKORA_ADMIN_SECRET"),
     refreshSecret: requiredEnv("CRIKORA_REFRESH_SECRET"),
     leaseSeconds,
-    idlePollSeconds
+    idlePollSeconds,
+    startFullCrawlOnEnable: process.env.CRIKORA_START_FULL_CRAWL === "true"
   };
 }
 
@@ -344,7 +346,8 @@ async function main(): Promise<void> {
       sourceRequestSpacingMs: process.env.CRICBUZZ_MIN_REQUEST_INTERVAL_MS ?? "1000 (API default)"
     });
 
-    if (args.has("--start-crawl")) await startFullCrawl(config);
+    const startFullCrawlOnEnable = config.startFullCrawlOnEnable || args.has("--start-crawl");
+    let loggedDisabled = false;
 
     do {
       if (stopped.value) break;
@@ -354,11 +357,21 @@ async function main(): Promise<void> {
 
       const settings = await readSettings(config);
       if (!settings.enabled) {
-        log("Crawler is disabled in Neon/API settings; worker is stopping without making source requests.");
-        break;
+        if (!loggedDisabled) {
+          log("Crawler is disabled in Neon/API settings; worker is idle and will make no Cricbuzz requests.");
+          loggedDisabled = true;
+        }
+        if (args.has("--once")) break;
+        if (!await waitWithLease(pool, leaseToken, config.leaseSeconds, config.idlePollSeconds)) break;
+        continue;
       }
+      loggedDisabled = false;
 
-      const crawl = await readCrawlStatus(config);
+      let crawl = await readCrawlStatus(config);
+      if (!crawl && startFullCrawlOnEnable) {
+        await startFullCrawl(config);
+        crawl = await readCrawlStatus(config);
+      }
       const crawlStatus = typeof crawl?.status === "string" ? crawl.status : "idle";
       if (crawlStatus === "paused") {
         log("Full crawl is paused; check the recorded source error before resuming.");
