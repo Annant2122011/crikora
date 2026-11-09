@@ -87,8 +87,9 @@ Every JSON entity is assigned a database expiry exactly ten minutes after it is 
 - PostgreSQL stores normalized records as JSONB.
 - Reads always filter out records whose `expires_at` is in the past.
 - The local long-running API deletes expired rows every 5 seconds and performs cleanup on startup.
-- On Vercel, expired rows are never returned by reads; the collector physically deletes them during successful refresh cycles, so deletion can be delayed while collection is disabled or failing.
-- Upserts refresh the ten-minute window for records seen again.
+- Reads never return expired rows, even if the cleanup scheduler is temporarily unavailable.
+- A Neon scheduled Function deletes expired rows every minute, independently of scraper activity and compatible with scale-to-zero.
+- Successful upserts refresh the ten-minute window for records seen again.
 
 The in-memory development repository follows the same ten-minute expiry contract. No permanent historical archive is kept by this cache.
 
@@ -96,9 +97,9 @@ The in-memory development repository follows the same ten-minute expiry contract
 
 A separate Neon project named `crikora` was created for cricket data. The existing `resolvX` support-bot database was left untouched.
 
-1. Apply `migrations/001_crikora_cache.sql`, `migrations/002_crikora_crawler_settings.sql` and `migrations/003_crikora_worker_state.sql` to the new Crikora database.
+1. Apply migrations `001_crikora_cache.sql` through `004_crikora_durable_crawl.sql` to the Crikora production database.
 2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
-3. Set `CRICBUZZ_AUTOMATION_AUTHORIZED=true` for the approved Cricbuzz workflow. The collector uses the Cricbuzz provider directly.
+3. Keep `CRICBUZZ_AUTOMATION_AUTHORIZED=false` until the deployed API and worker have passed their health checks and the source request policy is confirmed. Enable collection only when operationally ready.
 4. Set `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` as Vercel server-only secrets. Set `CORS_ORIGINS` to exact deployed origins when browser calls are introduced.
 
 The production API requires `DATABASE_URL` and uses Neon PostgreSQL as its only production store. The demo source-mode switch has been removed.
@@ -143,3 +144,14 @@ Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` 
 ## CI
 
 GitHub Actions runs typecheck, build and tests on pushes and pull requests to `main`.
+
+## Durable full-site crawl
+
+The initial crawl uses the sitemap inventory in `docs/cricbuzz-sitemap-inventory.json` (4,721 discovered URLs, filtered by the same-host allowlist). Migration `004_crikora_durable_crawl.sql` adds a Neon-backed run and URL queue with lease recovery, retries and progress tracking. The worker starts it with `POST /v1/crawl/start` and drains it in bounded sequential batches before returning to live refresh.
+
+- Core API: `POST /api/crawl/start`, `GET /api/crawl/status`, `POST /api/crawl/step`, `POST /api/cleanup`.
+- Worker: `POST /v1/crawl/start` (requires the worker admin bearer token).
+- The cache payloads still expire after 600 seconds. The durable queue retains URLs and operational status only, not page contents. This is a live cache and a multi-hour crawl, not a permanent historical snapshot. A complete cross-provider snapshot would require a separate, explicit archive/export retention policy.
+- The collector reads static HTML and only public pages it can fetch. It does not execute browser JavaScript, authenticate into restricted areas, bypass CAPTCHA or source denials, or download video streams.
+
+See [the durable crawl runbook](./docs/DURABLE_FULL_CRAWL.md) for the complete route and deployment setup.
