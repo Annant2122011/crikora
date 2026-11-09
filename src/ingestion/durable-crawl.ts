@@ -317,7 +317,15 @@ export class DurableCrawlService {
     if (run.status === "completed" || run.status === "paused") {
       return { active: false, status: run.status, processedThisBatch: processed, run };
     }
-    return { active: true, status: run.status, processedThisBatch: processed, run };
+    let retryAfterSeconds: number | undefined;
+    if (run.pendingCount > 0 && run.processingCount === 0) {
+      const next = await this.pool.query<{ seconds: number | string | null }>(
+        "SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now())))) AS seconds FROM public.crikora_crawl_queue WHERE run_id = $1 AND status = 'pending'",
+        [active.id]
+      );
+      retryAfterSeconds = count(next.rows[0]?.seconds) || undefined;
+    }
+    return { active: true, status: run.status, processedThisBatch: processed, retryAfterSeconds, run };
   }
 
   private async releaseClaimed(runId: string, leaseToken: string): Promise<void> {
