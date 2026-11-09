@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CricbuzzProvider } from "../providers/cricbuzz-provider.js";
+import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "../providers/cricbuzz-provider.js";
 
 interface SavedInventory {
   urls?: Array<string | { url?: string }>;
@@ -92,7 +92,11 @@ async function main(): Promise<void> {
   const liveSet = new Set(liveUrls);
   const newUrls = [...liveSet].filter(url => !savedSet.has(url));
   const snapshotOnlyUrls = [...savedSet].filter(url => !liveSet.has(url));
-  const mergedUrls = [...new Set([...savedSet, ...liveSet])];
+  // Put live sitemap URLs first so the selected URL keeps the current source slug.
+  const liveUrlsFirst = [...liveSet, ...savedSet];
+  const mergedUrls = dedupeCricbuzzPageUrls(liveUrlsFirst);
+  const liveIdentityUniqueCount = dedupeCricbuzzPageUrls([...liveSet]).length;
+  const snapshotIdentityUniqueCount = dedupeCricbuzzPageUrls([...savedSet]).length;
 
   const routeCounts: Record<string, number> = {};
   for (const url of liveSet) {
@@ -112,6 +116,9 @@ async function main(): Promise<void> {
     newSinceSavedSnapshotCount: newUrls.length,
     savedSnapshotNotInCurrentSitemapCount: snapshotOnlyUrls.length,
     mergedSeedUrlCount: mergedUrls.length,
+    liveSitemapUniquePageIdentityCount: liveIdentityUniqueCount,
+    savedSnapshotUniquePageIdentityCount: snapshotIdentityUniqueCount,
+    duplicatePageIdentityAliasCount: liveSet.size + savedSet.size - mergedUrls.length,
     routeFamilyCounts: Object.fromEntries(
       Object.entries(routeCounts).sort(([left], [right]) => left.localeCompare(right))
     ),
@@ -122,7 +129,8 @@ async function main(): Promise<void> {
     report.liveSitemapPageUrls = [...liveSet].sort();
     report.newSinceSavedSnapshotUrls = newUrls.sort();
     report.savedSnapshotNotInCurrentSitemapUrls = snapshotOnlyUrls.sort();
-    report.mergedSeedUrls = mergedUrls.sort();
+    report.mergedSeedUrls = [...mergedUrls].sort();
+    report.mergedSeedUrlsPreferCurrentSitemap = mergedUrls;
   }
 
   console.log(JSON.stringify(report, null, 2));
