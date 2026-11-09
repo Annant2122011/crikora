@@ -288,6 +288,7 @@ export class CricbuzzProvider implements CricketProvider {
 
     const identity = classifyCricbuzzEntityUrl(page.url);
     let entity: CrikoraEntity | undefined;
+    let pages: PageRecord[] = [page];
     if (identity?.entityType === "match") {
       const body = getMainText(page.$);
       const bucket: MatchBucket = /\b(?:won by|match abandoned|match drawn|match tied|no result)\b/i.test(body)
@@ -295,12 +296,34 @@ export class CricbuzzProvider implements CricketProvider {
         : /\b(?:upcoming|scheduled|starts at|will start)\b/i.test(body)
           ? "upcoming"
           : "live";
-      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page);
+      const navigation = collectMatchNavigation(page.$, page.url, identity.sourceId);
+      const fallback = matchCompanionUrls(page.url, identity.sourceId);
+      // Prefer links published by the page; only synthesize same-ID companion paths
+      // when the page omits a tab link. Requests remain sequential and same-host.
+      const info = await this.tryFetchPage(new URL(navigation.info ?? fallback.info ?? "", ORIGIN), "durable:match-facts", signal)
+        .catch(error => { if (!navigation.info && !fallback.info) return undefined; throw error; });
+      const scorecard = await this.tryFetchPage(new URL(navigation.scorecard ?? fallback.scorecard ?? "", ORIGIN), "durable:scorecard", signal)
+        .catch(error => { if (!navigation.scorecard && !fallback.scorecard) return undefined; throw error; });
+      const squadsPage = await this.tryFetchPage(new URL(navigation.squads ?? fallback.squads ?? "", ORIGIN), "durable:squads", signal)
+        .catch(error => { if (!navigation.squads && !fallback.squads) return undefined; throw error; });
+      const commentary = await this.tryFetchPage(new URL(navigation.commentary ?? fallback.commentary ?? "", ORIGIN), "durable:commentary", signal)
+        .catch(error => { if (!navigation.commentary && !fallback.commentary) return undefined; throw error; });
+      pages = [page, info, scorecard, squadsPage, commentary].filter((item): item is PageRecord => Boolean(item));
+      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage);
+      match.commentaryUrl = commentary?.url;
       entity = {
         entityType: "match",
         sourceId: identity.sourceId,
         sourceUrl: page.url,
-        payload: { ...match, pageKind: "match-overview" },
+        payload: {
+          ...match,
+          pageKind: "match-overview",
+          matchFacts: info ? extractPageData(info.$, info.url) : null,
+          scorecardPage: scorecard ? extractPageData(scorecard.$, scorecard.url) : null,
+          squadPage: squadsPage ? extractPageData(squadsPage.$, squadsPage.url) : null,
+          commentaryPage: commentary ? extractPageData(commentary.$, commentary.url) : null,
+          sourcePages: pages.map(item => item.url)
+        },
         fetchedAt: new Date().toISOString()
       };
     } else if (identity) {
@@ -318,8 +341,10 @@ export class CricbuzzProvider implements CricketProvider {
       };
     }
 
-    const discoveredUrls = getLinks(page.$, page.url)
-      .map(link => link.url)
+    const discoveredUrls = [...new Set([
+      ...pages.slice(1).map(item => item.url),
+      ...pages.flatMap(item => getLinks(item.$, item.url).map(link => link.url))
+    ])]
       .filter(linkUrl => isAllowedCricbuzzPageUrl(linkUrl))
       .slice(0, 250);
     return { entity, discoveredUrls, skipped: false };
@@ -609,6 +634,21 @@ function collectMatchNavigation($: PageDoc, pageUrl: string, matchId: string): {
     if (link.path.startsWith("/live-cricket-full-commentary/")) found.commentary ??= link.url;
   }
   return found;
+}
+
+function matchCompanionUrls(pageUrl: string, matchId: string): {
+  info?: string; scorecard?: string; squads?: string; commentary?: string;
+} {
+  const parsed = new URL(pageUrl);
+  const match = parsed.pathname.match(/^\/live-cricket-scores\/(\d+)\/([^/]+)\/?$/);
+  if (!match || match[1] !== matchId || !match[2]) return {};
+  const slug = match[2];
+  return {
+    info: `${ORIGIN}/cricket-match-facts/${matchId}/${slug}`,
+    scorecard: `${ORIGIN}/live-cricket-scorecard/${matchId}/${slug}`,
+    squads: `${ORIGIN}/cricket-match-squads/${matchId}/${slug}`,
+    commentary: `${ORIGIN}/live-cricket-full-commentary/${matchId}/${slug}`
+  };
 }
 
 export function classifyMatchFormat(value: string): string {
@@ -1172,26 +1212,67 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   let parsedUrl: URL;
   try { parsedUrl = new URL(url); } catch { return undefined; }
   if (parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "www.cricbuzz.com") return undefined;
-  const path = parsedUrl.pathname;
+  const path = parsedUrl.pathname.replace(/\/+$/, "") || "/";
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
   if (!match) return undefined;
   const rawId = rule.type === "team" || rule.kind?.startsWith("team-") ? match[2] : match[1];
   const pathHash = stableHash(path);
-  const isSubpage = Boolean(
-    rule.kind?.includes("subpage") ||
-    rule.kind?.includes("stats") ||
-    rule.kind === "player-match-performance" ||
-    rule.kind === "series-auction" ||
-    rule.kind === "video-collection"
-  );
+  let subpageIdentity: string | undefined;
+  if (rule.kind === "team-subpage") {
+    subpageIdentity = `${match[2]}:${stableHash(match[3] ?? "")}`;
+  } else if (rule.kind === "player-stats") {
+    subpageIdentity = `${match[1]}:${stableHash(path.split("/").filter(Boolean).slice(3).join("/"))}`;
+  } else if (rule.kind === "series-subpage") {
+    subpageIdentity = `${match[1]}:${stableHash(match[3] ?? "")}`;
+  } else if (rule.kind === "player-match-performance") {
+    subpageIdentity = `${match[1]}:${match[2]}:${match[3]}`;
+  } else if (rule.kind === "series-auction") {
+    subpageIdentity = `${match[1]}:${stableHash(match[2] ?? "index")}`;
+  } else if (rule.kind === "video-collection") {
+    subpageIdentity = String(match[1]);
+  } else if (rule.kind?.includes("stats")) {
+    subpageIdentity = rawId ?? pathHash;
+  }
   const sourceId = rule.kind
-    ? `${rule.kind}:${rawId ?? pathHash}${isSubpage ? `:${pathHash}` : ""}`
+    ? `${rule.kind}:${subpageIdentity ?? rawId ?? pathHash}`
     : rule.type === "team"
       ? match[2]!
       : rawId ?? `${rule.type}:${pathHash}`;
   return { entityType: rule.type, sourceId };
+}
+
+function normalizeCricbuzzPageUrl(value: string): string {
+  const parsed = new URL(value);
+  parsed.hash = "";
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+  return parsed.toString();
+}
+
+/** Stable queue identity: aliases share a key, but distinct page families never do. */
+export function getCricbuzzCrawlIdentityKey(value: string): string {
+  const normalized = normalizeCricbuzzPageUrl(value);
+  const identity = classifyCricbuzzEntityUrl(normalized);
+  return identity ? `${identity.entityType}:${identity.sourceId}` : `url:${normalized}`;
+}
+
+/**
+ * Keep the first URL for each stable page identity. Callers should put current
+ * sitemap URLs before saved-snapshot URLs so current source slugs win aliases.
+ */
+export function dedupeCricbuzzPageUrls(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!isAllowedCricbuzzPageUrl(value)) continue;
+    const normalized = normalizeCricbuzzPageUrl(value);
+    const key = getCricbuzzCrawlIdentityKey(normalized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
 }
 
 export function parseCricbuzzEntityHtml(html: string, url: string): CrikoraEntity | undefined {
