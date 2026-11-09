@@ -233,6 +233,10 @@ export class CricbuzzProvider implements CricketProvider {
     return isAllowedCricbuzzPageUrl(value);
   }
 
+  getPendingRelatedUrls(): string[] {
+    return [...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]);
+  }
+
   /**
    * Fetch and normalize one page for the durable sitemap crawl. The caller
    * persists the payload through the normal ten-minute entity cache.
