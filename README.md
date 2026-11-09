@@ -88,7 +88,7 @@ Every JSON entity is assigned a database expiry exactly ten minutes after it is 
 - Reads always filter out records whose `expires_at` is in the past.
 - The local long-running API deletes expired rows every 5 seconds and performs cleanup on startup.
 - Reads never return expired rows, even if the cleanup scheduler is temporarily unavailable.
-- A Neon scheduled Function deletes expired rows every minute, independently of scraper activity and compatible with scale-to-zero.
+- A Neon scheduled Function calls the authenticated core API cleanup endpoint every minute, independently of scraper activity and compatible with scale-to-zero.
 - Successful upserts refresh the ten-minute window for records seen again.
 
 The in-memory development repository follows the same ten-minute expiry contract. No permanent historical archive is kept by this cache.
