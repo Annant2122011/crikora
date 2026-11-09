@@ -545,7 +545,7 @@ function decodeXmlCodePoint(value: string, radix: number): string {
 
 function decodeXmlText(value: string): string {
   return value
-    .replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, "$1")
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => decodeXmlCodePoint(code, 16))
     .replace(/&#([0-9]+);/g, (_match, code: string) => decodeXmlCodePoint(code, 10))
     .replace(/&amp;/gi, "&")
