@@ -71,5 +71,50 @@ describe("durable match extraction", () => {
     });
     expect(requested).toEqual([baseUrl, ...companionUrls]);
     expect(result.discoveredUrls).toEqual(expect.arrayContaining(companionUrls));
+
+  it("uses same-ID companion routes when the overview omits tab links", async () => {
+    const baseUrl = "https://www.cricbuzz.com/live-cricket-scores/177291/india-vs-new-zealand";
+    const factsUrl = "https://www.cricbuzz.com/cricket-match-facts/177291/india-vs-new-zealand";
+    const expectedRequests = [
+      baseUrl,
+      factsUrl,
+      "https://www.cricbuzz.com/live-cricket-scorecard/177291/india-vs-new-zealand",
+      "https://www.cricbuzz.com/cricket-match-squads/177291/india-vs-new-zealand",
+      "https://www.cricbuzz.com/live-cricket-full-commentary/177291/india-vs-new-zealand"
+    ];
+    const pages = new Map<string, string>([
+      [baseUrl, "<html><body><main><h1>India vs New Zealand, 1st ODI</h1><p>Live</p></main></body></html>"],
+      [factsUrl, "<html><body><main><h1>Verified Match Facts</h1><p>Venue Eden Gardens</p></main></body></html>"]
+    ]);
+    const requested: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      requested.push(requestUrl);
+      const html = pages.get(requestUrl);
+      return new Response(html ?? "not found", {
+        status: html ? 200 : 404,
+        headers: { "content-type": "text/html; charset=utf-8" }
+      });
+    }));
+
+    const provider = new CricbuzzProvider({
+      minRequestIntervalMs: 0,
+      maxMatchesPerPoll: 1,
+      maxProfilesPerPoll: 0,
+      maxTeamsPerPoll: 0,
+      maxSeriesPerPoll: 0,
+      maxVenuesPerPoll: 0,
+      maxContentPagesPerPoll: 0,
+      timeoutMs: 15_000,
+      maxResponseBytes: 1_000_000,
+      userAgent: "Crikora test runner (authorized test)"
+    });
+
+    const result = await provider.fetchCrawlPage(baseUrl);
+    expect(requested).toEqual(expectedRequests);
+    expect(result.entity?.payload.matchFacts).toMatchObject({ title: "Verified Match Facts" });
+    expect(result.entity?.payload.sourcePages).toEqual([baseUrl, factsUrl]);
+  });
   });
 });
