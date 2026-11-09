@@ -19,7 +19,10 @@ WITH classified AS (
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-news/[0-9]+/'
         THEN 'metadata:news:' || (regexp_match(canonical_url, '/cricket-news/([0-9]+)/'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-videos/collection/[0-9]+/'
-        THEN 'metadata:video-collection:' || (regexp_match(canonical_url, '/cricket-videos/collection/([0-9]+)/'))[1]
+        THEN 'metadata:video-collection:' ||
+          (regexp_match(canonical_url, '/cricket-videos/collection/([0-9]+)/'))[1] || ':' ||
+          lower(trim(trailing '/' from regexp_replace(split_part(canonical_url, '?', 1),
+            '^https://www[.]cricbuzz[.]com/cricket-videos/collection/[0-9]+/', '')))
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-videos/[0-9]+/'
         THEN 'metadata:video:' || (regexp_match(canonical_url, '/cricket-videos/([0-9]+)/'))[1]
       WHEN canonical_url ~ '^https://www[.]cricbuzz[.]com/cricket-gallery/[0-9]+/'
