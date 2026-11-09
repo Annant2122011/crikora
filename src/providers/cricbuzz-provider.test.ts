@@ -94,6 +94,9 @@ describe("Cricbuzz source URL classification", () => {
     expect(seriesStats?.sourceId).not.toBe(seriesSquads?.sourceId);
   });
 
+  it("excludes women-only ranking URLs from the men-only data scope", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeUndefined();
+  });
   it("rejects URLs that are not known entity routes", () => {
     expect(classifyCricbuzzEntityUrl("https://example.com/profiles/11527/paul-walter")).toBeUndefined();
     expect(classifyCricbuzzEntityUrl("not a URL")).toBeUndefined();
