@@ -944,7 +944,7 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   if (parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "www.cricbuzz.com") return undefined;
   const path = parsedUrl.pathname;
   // Women-specific rankings are outside Crikora's men-only data scope.
-  if (/^\/cricket-stats(?:\/|$).*\/women(?:\/|$)/i.test(path)) return undefined;
+  if (/^\/cricket-stats(?:\/|$).*\/(?:women|womens)(?:\/|$)/i.test(path)) return undefined;
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
