@@ -127,8 +127,19 @@ export class DurableCrawlService {
         "SELECT * FROM public.crikora_crawl_runs WHERE status IN ('queued','running') ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
       );
       if (active.rows[0]) {
+        const runId = active.rows[0].id;
+        const inserted = await client.query(
+          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, 'sitemap' FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
+          [runId, urls, "sitemap"]
+        );
+        if (inserted.rowCount) {
+          await client.query(
+            "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2 WHERE id = $1",
+            [runId, inserted.rowCount]
+          );
+        }
         await client.query("COMMIT");
-        const summary = await this.readSummary(active.rows[0].id);
+        const summary = await this.readSummary(runId);
         return { created: false, resumed: false, run: summary };
       }
 
@@ -137,6 +148,16 @@ export class DurableCrawlService {
       );
       if (paused.rows[0]) {
         const runId = paused.rows[0].id;
+        const inserted = await client.query(
+          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, 'sitemap' FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
+          [runId, urls, "sitemap"]
+        );
+        if (inserted.rowCount) {
+          await client.query(
+            "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2 WHERE id = $1",
+            [runId, inserted.rowCount]
+          );
+        }
         await client.query(
           "UPDATE public.crikora_crawl_runs SET status = 'running', last_error = NULL, completed_at = NULL WHERE id = $1",
           [runId]
