@@ -243,7 +243,7 @@ export class CricbuzzProvider implements CricketProvider {
   }
 
   /**
-   * Read Cricbuzz's public sitemap documents and return only allowed cricket pages.
+   * Read Cricbuzz's public sitemap documents and return only allowed sitemap-listed pages.
    * Sitemap XML is discovery metadata; it is never stored as a cricket entity.
    */
   async discoverSitemapUrls(signal?: AbortSignal): Promise<CricbuzzSitemapDiscoveryResult> {
@@ -555,7 +555,7 @@ function decodeXmlText(value: string): string {
     .replace(/&gt;/gi, ">");
 }
 
-/** Separate allowed Cricbuzz sitemap documents from allowed cricket page URLs. */
+/** Separate allowed Cricbuzz sitemap documents from allowed page URLs. */
 export function parseCricbuzzSitemapXml(xml: string, sitemapUrl = "https://www.cricbuzz.com/sitemap.xml"): CricbuzzSitemapDiscoveryResult {
   const sitemapUrls = new Set<string>();
   const pageUrls = new Set<string>();
