@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import type { EntityRepository } from "../domain/entities.js";
-import type { CricbuzzProvider } from "../providers/cricbuzz-provider.js";
+import { dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, type CricbuzzProvider } from "../providers/cricbuzz-provider.js";
 
 type RunStatus = "queued" | "running" | "completed" | "paused";
 type QueueStatus = "pending" | "processing" | "completed" | "failed" | "skipped";
@@ -115,7 +115,8 @@ export class DurableCrawlService {
   }
 
   async startFullCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
-    const urls = [...new Set(seedUrls.filter(url => this.provider.isAllowedCrawlUrl(url)))];
+    const urls = dedupeCricbuzzPageUrls(seedUrls.filter(url => this.provider.isAllowedCrawlUrl(url)));
+    const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     if (!urls.length) throw new Error("The sitemap inventory contains no URLs accepted by the Cricbuzz page allowlist.");
 
     const client = await this.pool.connect();
@@ -129,8 +130,8 @@ export class DurableCrawlService {
       if (active.rows[0]) {
         const runId = active.rows[0].id;
         const inserted = await client.query(
-          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, 'sitemap' FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
-          [runId, urls, "sitemap"]
+          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
+          [runId, urls, identityKeys, "sitemap"]
         );
         if (inserted.rowCount) {
           await client.query(
@@ -149,8 +150,8 @@ export class DurableCrawlService {
       if (paused.rows[0]) {
         const runId = paused.rows[0].id;
         const inserted = await client.query(
-          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, 'sitemap' FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
-          [runId, urls, "sitemap"]
+          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
+          [runId, urls, identityKeys, "sitemap"]
         );
         if (inserted.rowCount) {
           await client.query(
@@ -180,8 +181,8 @@ export class DurableCrawlService {
         [runId, urls.length]
       );
       await client.query(
-        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, 'sitemap' FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
-        [runId, urls, "sitemap"]
+        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
+        [runId, urls, identityKeys, "sitemap"]
       );
       await client.query(
         "UPDATE public.crikora_crawl_runs SET status = 'running' WHERE id = $1",
@@ -210,7 +211,8 @@ export class DurableCrawlService {
   }
 
   async enqueueDiscoveredUrls(values: string[]): Promise<number> {
-    const urls = [...new Set(values.filter(url => this.provider.isAllowedCrawlUrl(url)))];
+    const urls = dedupeCricbuzzPageUrls(values.filter(url => this.provider.isAllowedCrawlUrl(url)));
+    const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     if (!urls.length) return 0;
     const latest = await this.pool.query<{ id: string; status: RunStatus }>(
       "SELECT id, status FROM public.crikora_crawl_runs ORDER BY created_at DESC LIMIT 1"
@@ -218,8 +220,8 @@ export class DurableCrawlService {
     const run = latest.rows[0];
     if (!run || run.status === "paused") return 0;
     const inserted = await this.pool.query(
-      "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, 'live-index' FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
-      [run.id, urls, "discovered"]
+      "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'live-index' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
+      [run.id, urls, identityKeys, "discovered"]
     );
     const added = inserted.rowCount ?? 0;
     if (added) {
@@ -261,11 +263,12 @@ export class DurableCrawlService {
         const page = await this.provider.fetchCrawlPage(row.canonical_url, signal);
         if (page.entity) await this.repository.upsertMany([page.entity]);
         if (page.discoveredUrls.length) {
-          const discovered = [...new Set(page.discoveredUrls)].filter(url => url !== row.canonical_url);
+          const discovered = dedupeCricbuzzPageUrls(page.discoveredUrls.filter(url => url !== row.canonical_url));
           if (discovered.length) {
+            const identityKeys = discovered.map(getCricbuzzCrawlIdentityKey);
             const inserted = await this.pool.query(
-              "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, $4 FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
-              [active.id, discovered, "discovered", row.canonical_url]
+              "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, $5 FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
+              [active.id, discovered, identityKeys, "discovered", row.canonical_url]
             );
             if (inserted.rowCount) {
               await this.pool.query(
