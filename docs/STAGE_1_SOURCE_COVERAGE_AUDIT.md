@@ -57,6 +57,7 @@ The route mix includes matches, match facts, scorecards, squads, team pages, pla
 6. Added unit tests for sitemap parsing, entity decoding, sitemap-listed page paths and exact-host/HTTPS sitemap validation.
 7. Increased the local worker's crawl-start request timeout to accommodate the API's 45-second live sitemap discovery budget.
 8. Changed individual page redirects to be recorded as skipped without following them; source denials and throttling still stop the run.
+9. Added `npm run sitemap:audit`, a local-only coverage audit that reads the live sitemap tree, compares it with the saved snapshot and prints route-family counts. It requires no Neon database or API secrets.
 
 Sitemap requests use the provider's existing request-interval setting, request timeout and response-size limit. HTTP 401/403, 429, sitemap redirects and access challenges stop discovery. For page URLs, HTTP 401/403/429 and access challenges stop the run; individual 3xx page redirects are recorded as skipped and are not followed. No CAPTCHA, login or paywall is bypassed. Sitemap XML is discovery metadata and is not stored as a cricket entity.
 
@@ -68,6 +69,23 @@ Sitemap requests use the provider's existing request-interval setting, request t
 - A URL being listed does not prove that its body contains every desired statistic or that a page remains accessible.
 - Generic page metadata extraction is not the same as a fully normalized match/player/team data model.
 - No production crawl was started, no production authorization setting was changed, no Neon data was modified, and the ten-minute retention rule was not changed.
+
+## Local Stage 1 audit command
+
+From the repository root on Node.js 20 or newer:
+
+```cmd
+npm ci
+npm run sitemap:audit
+```
+
+To print the full current URL list and both snapshot-difference lists as JSON:
+
+```cmd
+npm run sitemap:audit -- --full
+```
+
+The command does not connect to Neon, change production settings, enqueue crawl jobs or persist page content. It uses the same request interval and allowlist as the provider. The default minimum interval is 1,000 ms; do not change it without applying the approved source request policy.
 
 ## Acceptance checks still required
 
