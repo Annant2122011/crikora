@@ -202,7 +202,7 @@ export class DurableCrawlService {
 
     const leaseToken = randomUUID();
     const claimed = await this.pool.query<QueueRow>(
-      "WITH candidates AS (SELECT id FROM public.crikora_crawl_queue WHERE run_id = $1 AND ((status = 'pending' AND next_attempt_at <= now()) OR (status = 'processing' AND lease_until <= now())) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $2) UPDATE public.crikora_crawl_queue AS queue SET status = 'processing', attempts = queue.attempts + 1, lease_token = $3, lease_until = now() + make_interval(secs => $4), updated_at = now() FROM candidates WHERE queue.id = candidates.id RETURNING queue.id, queue.canonical_url, queue.attempts",
+      "WITH candidates AS (SELECT id FROM public.crikora_crawl_queue WHERE run_id = $1 AND ((status = 'pending' AND next_attempt_at <= now()) OR (status = 'processing' AND lease_until <= now())) ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED) UPDATE public.crikora_crawl_queue AS queue SET status = 'processing', attempts = queue.attempts + 1, lease_token = $3, lease_until = now() + make_interval(secs => $4), updated_at = now() FROM candidates WHERE queue.id = candidates.id RETURNING queue.id, queue.canonical_url, queue.attempts",
       [active.id, this.batchSize, leaseToken, this.leaseSeconds]
     );
 
@@ -220,10 +220,16 @@ export class DurableCrawlService {
         if (page.discoveredUrls.length) {
           const discovered = [...new Set(page.discoveredUrls)].filter(url => url !== row.canonical_url);
           if (discovered.length) {
-            await this.pool.query(
+            const inserted = await this.pool.query(
               "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, page_kind, discovered_from) SELECT $1, item, $3, $4 FROM unnest($2::text[]) AS item ON CONFLICT (run_id, canonical_url) DO NOTHING",
               [active.id, discovered, "discovered", row.canonical_url]
             );
+            if (inserted.rowCount) {
+              await this.pool.query(
+                "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2 WHERE id = $1",
+                [active.id, inserted.rowCount]
+              );
+            }
           }
         }
         await this.pool.query(
