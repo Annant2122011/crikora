@@ -4,6 +4,10 @@
     "api/[...path].ts": {
       "maxDuration": 60,
       "includeFiles": "docs/cricbuzz-sitemap-inventory.json"
+    },
+    "api/crawl/*.ts": {
+      "maxDuration": 60,
+      "includeFiles": "docs/cricbuzz-sitemap-inventory.json"
     }
   }
 }
