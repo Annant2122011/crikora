@@ -41,7 +41,6 @@ const SECTION_INDEXES = [
   "/cricket-schedule/series/all",
   "/cricket-schedule/upcoming-series/international",
   "/cricket-stats/icc-rankings/men/batting",
-  "/cricket-stats/icc-rankings/women/batting",
   "/cricket-stats/points-table/test/icc-world-test-championship",
   "/cricket-series/auctions",
   "/cricket-scorecard-archives"
@@ -87,7 +86,8 @@ export class CricbuzzProvider implements CricketProvider {
   readonly id = "cricbuzz";
   private lastRequestAt = 0;
   private matchCursor = 0;
-  private readonly relatedCursors = new Map<EntityType, number>();
+  // Retain discovered URLs that do not fit the current related-page budget.
+  private readonly pendingRelatedLinks = new Map<EntityType, Map<string, LinkRecord>>();
 
   constructor(private readonly options: Options) {
     if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 0) {
@@ -109,8 +109,11 @@ export class CricbuzzProvider implements CricketProvider {
         const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (match?.[1] && !discovered.has(match[1])) {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
+          const stub = parseMatchIndexStub(item, page, link);
+          const indexText = String(stub.stats?.indexCardText ?? "");
+          if (isWomensFixtureText((stub.description ?? "") + " " + indexText)) continue;
           discovered.set(match[1], item);
-          indexRecords.set(match[1], parseMatchIndexStub(item, page, link));
+          indexRecords.set(match[1], stub);
         }
       }
     }
@@ -225,16 +228,28 @@ export class CricbuzzProvider implements CricketProvider {
     signal?: AbortSignal
   ): Promise<void> {
     if (!limit || !links.size) return;
-    const allLinks = [...links.values()];
-    const cursor = this.relatedCursors.get(expectedType) ?? 0;
-    const candidates = rotate(allLinks, cursor, limit);
-    if (allLinks.length) this.relatedCursors.set(expectedType, (cursor + candidates.length) % allLinks.length);
+    let pending = this.pendingRelatedLinks.get(expectedType);
+    if (!pending) {
+      pending = new Map<string, LinkRecord>();
+      this.pendingRelatedLinks.set(expectedType, pending);
+    }
+    for (const link of links.values()) if (!pending.has(link.url)) pending.set(link.url, link);
+    // Bound process memory while keeping FIFO order for the oldest pending URLs.
+    while (pending.size > 2_000) {
+      const newest = [...pending.keys()].at(-1);
+      if (!newest) break;
+      pending.delete(newest);
+    }
+    const candidates = [...pending.values()].slice(0, limit);
     for (const link of candidates) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
       const page = await this.tryFetchPage(new URL(link.url), `related:${expectedType}`, signal);
-      if (!page) continue;
-      const parsed = parseEntityPage(page.$, page.url, expectedType);
-      if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
+      if (page) {
+        const parsed = parseEntityPage(page.$, page.url, expectedType);
+        if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
+      }
+      // Ordinary page failures are isolated; source denials still throw above.
+      pending.delete(link.url);
     }
   }
 
@@ -362,6 +377,20 @@ function collectMatchNavigation($: PageDoc, pageUrl: string, matchId: string): {
   return found;
 }
 
+export function isWomensFixtureText(value: string): boolean {
+  return /\bwomen(?:'s|s)?\b|\bgirls?\b|\bfemale\b|\bWPL\b|\bWBBL\b|\b[A-Z]{2,4}-W\b/i.test(value);
+}
+
+export function classifyMatchFormat(value: string): string {
+  const text = value.toLowerCase();
+  if (/\bthe hundred\b/.test(text)) return "The Hundred";
+  if (/\b(?:t10|ten10)\b/.test(text)) return "T10";
+  if (/\b(?:hong kong )?sixes\b|\bsix[- ]a[- ]side\b|\b6ixty\b/.test(text)) return "Sixes";
+  if (/\btest\b/.test(text)) return "Test";
+  if (/\bodi\b/.test(text)) return "ODI";
+  if (/\bt20\b/.test(text)) return "T20";
+  return "Unknown";
+}
 function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: LinkRecord): Match {
   const anchor = page.$("a[href]").filter((_i, element) => {
     const href = page.$(element).attr("href");
@@ -373,7 +402,7 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
   const title = clean(titleCandidate || link.text || context.slice(0, 180));
   const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
   const now = new Date().toISOString();
-  const format = /the hundred/i.test(context) ? "The Hundred" : /\btest\b/i.test(context) ? "Test" : /\bodi\b/i.test(context) ? "ODI" : /\bt20\b/i.test(context) ? "T20" : "Unknown";
+  const format = classifyMatchFormat(context);
   const sourceUrl = link.url;
   return {
     id: `cricbuzz:${item.id}`,
@@ -412,7 +441,7 @@ function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRe
   const toss = labeledValue(infoText || body, "Toss");
   const result = body.match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
   const status: MatchStatus = result || discovered.bucket === "completed" ? "completed" : discovered.bucket;
-  const format = /the hundred/i.test(title) ? "The Hundred" : /test/i.test(title) ? "Test" : /odi/i.test(title) ? "ODI" : /t20/i.test(title) ? "T20" : "Unknown";
+  const format = classifyMatchFormat(title);
   const images = extractImages($);
   return {
     id: `cricbuzz:${discovered.id}`, source: "cricbuzz", sourceMatchId: discovered.id,
