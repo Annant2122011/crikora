@@ -14,7 +14,10 @@
     "test": "vitest run --exclude \"dist/**\"",
     "test:watch": "vitest --exclude \"dist/**\"",
     "worker:local": "tsx src/ingestion/worker-cli.ts",
-    "sitemap:audit": "tsx src/ingestion/sitemap-audit-cli.ts"
+    "sitemap:audit": "tsx src/ingestion/sitemap-audit-cli.ts",
+    "build:railway": "tsc -p tsconfig.railway.json",
+    "start:railway-api": "node dist-railway/src/railway-api.js",
+    "start:railway-worker": "node dist-railway/src/ingestion/worker-cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",
