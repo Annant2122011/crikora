@@ -399,7 +399,7 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
       liveSitemapUrlCount: liveSitemap.pageUrls.length,
       rawInventoryUrlCount: mergedCandidateUrls.length,
       inventoryUrlCount: crawlUrls.length,
-      identityAliasesRemovedCount: mergedCandidateUrls.length - crawlUrls.length,
+      dedupeRemovedUrlCount: mergedCandidateUrls.length - crawlUrls.length,
       queueTotalCount: result.run.totalCount,
       contentRetentionSeconds: 600
     }
