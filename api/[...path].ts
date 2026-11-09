@@ -318,6 +318,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
   try {
     // Leave ten seconds inside Vercel's 60-second function limit for Neon writes and error cleanup.
     await getPoller().tick(AbortSignal.timeout(50_000));
+    const queuedFollowups = await getDurableCrawl().enqueueDiscoveredUrls(getProvider().getPendingRelatedUrls());
     await pool.query(
       `UPDATE public.crikora_crawler_settings
           SET last_completed_at = now(), lease_until = NULL, last_error = NULL, updated_at = now()
@@ -329,7 +330,8 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
       refreshIntervalSeconds: claim.rows[0].refresh_interval_seconds,
       fetchedAt: new Date().toISOString(),
       retentionSeconds: 600,
-      images: "URLs"
+      images: "URLs",
+      queuedFollowups
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 1000) : "Unknown collection error";
