@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, dedupeCricbuzzPageUrls, isAllowedCricbuzzPageUrl } from "./cricbuzz-provider.js";
+import { classifyCricbuzzEntityUrl, dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, isAllowedCricbuzzPageUrl } from "./cricbuzz-provider.js";
 
 describe("full-crawl route coverage", () => {
   it("allows facts, scorecard and squad pages used by match enrichment", () => {
@@ -51,6 +51,21 @@ describe("full-crawl route coverage", () => {
       urls[10],
       urls[11]
     ]);
+  });
+
+  it("builds database identity keys that keep related match pages distinct", () => {
+    expect(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/live-cricket-scores/161256/old-slug"))
+      .toBe("match:161256");
+    expect(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/cricket-match-facts/161256/new-slug"))
+      .toBe("metadata:match-facts:161256");
+    expect(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/live-cricket-scorecard/161256/new-slug"))
+      .toBe("metadata:match-scorecard:161256");
+    expect(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/cricket-match-squads/161256/new-slug"))
+      .toBe("metadata:match-squads:161256");
+    expect(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/cricket-team/india/2/squad"))
+      .toBe(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/cricket-team/bharat/2/squad"));
+    expect(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/cricket-series/2727/old-series/stats"))
+      .toBe(getCricbuzzCrawlIdentityKey("https://www.cricbuzz.com/cricket-series/2727/new-series/stats"));
   });
 
   it("normalizes trailing slashes while retaining separate match page identities", () => {
