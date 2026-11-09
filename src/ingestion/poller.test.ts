@@ -139,6 +139,20 @@ describe("Poller source backoff and denial handling", () => {
     }
   });
 
+  it("stops polling after an unexpected source redirect", async () => {
+    let calls = 0;
+    const provider: CricketProvider = {
+      id: "fixture",
+      async fetchSnapshot() {
+        calls += 1;
+        throw Object.assign(new Error("redirected"), { sourceStatus: 302 });
+      }
+    };
+    const poller = new Poller(provider, new MemoryEntityRepository(), 10_000);
+    await expect(poller.tick()).rejects.toThrow("redirected");
+    await poller.tick();
+    expect(calls).toBe(1);
+  });
   it("stops polling after an explicit source authorization denial", async () => {
     let calls = 0;
     const provider: CricketProvider = {
