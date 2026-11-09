@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "../providers/cricbuzz-provider.js";
+import { CricbuzzProvider, dedupeCricbuzzPageUrls, isAllowedCricbuzzPageUrl } from "../providers/cricbuzz-provider.js";
 
 interface SavedInventory {
   urls?: Array<string | { url?: string }>;
@@ -95,6 +95,7 @@ async function main(): Promise<void> {
   // Put live sitemap URLs first so the selected URL keeps the current source slug.
   const liveUrlsFirst = [...liveSet, ...savedSet];
   const mergedExactUrls = new Set([...liveSet, ...savedSet]);
+  const mergedAllowedUrls = [...mergedExactUrls].filter(isAllowedCricbuzzPageUrl);
   const mergedUrls = dedupeCricbuzzPageUrls(liveUrlsFirst);
   const liveIdentityUniqueCount = dedupeCricbuzzPageUrls([...liveSet]).length;
   const snapshotIdentityUniqueCount = dedupeCricbuzzPageUrls([...savedSet]).length;
@@ -117,9 +118,11 @@ async function main(): Promise<void> {
     newSinceSavedSnapshotCount: newUrls.length,
     savedSnapshotNotInCurrentSitemapCount: snapshotOnlyUrls.length,
     mergedSeedUrlCount: mergedUrls.length,
+    mergedAllowedUrlCount: mergedAllowedUrls.length,
+    excludedNotAllowedUrlCount: mergedExactUrls.size - mergedAllowedUrls.length,
     liveSitemapUniquePageIdentityCount: liveIdentityUniqueCount,
     savedSnapshotUniquePageIdentityCount: snapshotIdentityUniqueCount,
-    duplicatePageIdentityAliasCount: mergedExactUrls.size - mergedUrls.length,
+    duplicatePageIdentityAliasCount: mergedAllowedUrls.length - mergedUrls.length,
     routeFamilyCounts: Object.fromEntries(
       Object.entries(routeCounts).sort(([left], [right]) => left.localeCompare(right))
     ),
