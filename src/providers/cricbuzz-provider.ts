@@ -41,6 +41,7 @@ const SECTION_INDEXES = [
   "/cricket-schedule/series/all",
   "/cricket-schedule/upcoming-series/international",
   "/cricket-stats/icc-rankings/men/batting",
+  "/cricket-stats/icc-rankings/women/batting",
   "/cricket-stats/points-table/test/icc-world-test-championship",
   "/cricket-series/auctions",
   "/cricket-scorecard-archives"
@@ -110,8 +111,6 @@ export class CricbuzzProvider implements CricketProvider {
         if (match?.[1] && !discovered.has(match[1])) {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
           const stub = parseMatchIndexStub(item, page, link);
-          const indexText = String(stub.stats?.indexCardText ?? "");
-          if (isWomensFixtureText((stub.description ?? "") + " " + indexText)) continue;
           discovered.set(match[1], item);
           indexRecords.set(match[1], stub);
         }
@@ -375,10 +374,6 @@ function collectMatchNavigation($: PageDoc, pageUrl: string, matchId: string): {
     if (link.path.startsWith("/live-cricket-full-commentary/")) found.commentary ??= link.url;
   }
   return found;
-}
-
-export function isWomensFixtureText(value: string): boolean {
-  return /\bwomen(?:'s|s)?\b|\bgirls?\b|\bfemale\b|\bWPL\b|\bWBBL\b|\b[A-Z]{2,4}-W\b/i.test(value);
 }
 
 export function classifyMatchFormat(value: string): string {
@@ -943,8 +938,6 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   try { parsedUrl = new URL(url); } catch { return undefined; }
   if (parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "www.cricbuzz.com") return undefined;
   const path = parsedUrl.pathname;
-  // Women-specific rankings are outside Crikora's men-only data scope.
-  if (/^\/cricket-stats(?:\/|$).*\/(?:women|womens)(?:\/|$)/i.test(path)) return undefined;
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
