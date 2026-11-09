@@ -18,4 +18,5 @@ jobs:
       - run: npm audit --audit-level=moderate
       - run: npm run typecheck
       - run: npm run build
+      - run: npm run build:railway
       - run: npm test
