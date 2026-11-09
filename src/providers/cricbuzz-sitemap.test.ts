@@ -54,6 +54,15 @@ describe("Cricbuzz sitemap discovery", () => {
     expect(isAllowedCricbuzzPageUrl("https://evil.example/cricket-news/140001/story")).toBe(false);
   });
 
+  it("does not crash on an invalid numeric XML character reference", () => {
+    const result = parseCricbuzzSitemapXml(
+      "<urlset><url><loc>https://www.cricbuzz.com/cricket-news/140765/example?x=&#x110000;</loc></url></urlset>"
+    );
+    expect(result.pageUrls).toEqual([
+      "https://www.cricbuzz.com/cricket-news/140765/example?x="
+    ]);
+  });
+
   it("recognizes nested sitemap references without treating them as page records", () => {
     const result = parseCricbuzzSitemapXml(
       "<sitemapindex><sitemap><loc>https://www.cricbuzz.com/sitemap/cricket-news-archive.xml</loc></sitemap></sitemapindex>"
