@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.api.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist-railway",
+    "noEmit": false,
+    "declaration": false
+  },
+  "include": ["src/**/*.ts", "api/**/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-railway", "tests"]
+}
