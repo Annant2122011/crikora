@@ -308,7 +308,8 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
       : sourceStatus && sourceStatus >= 500
         ? 30
         : undefined;
-    const disableCollector = sourceStatus === 401 || sourceStatus === 403;
+    const disableCollector = sourceStatus === 401 || sourceStatus === 403 ||
+      (sourceStatus !== undefined && sourceStatus >= 300 && sourceStatus < 400);
     await pool.query(
       `UPDATE public.crikora_crawler_settings
           SET enabled = CASE WHEN $2::boolean THEN false ELSE enabled END,
