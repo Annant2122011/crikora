@@ -3,9 +3,7 @@
   "functions": {
     "api/[...path].ts": {
       "maxDuration": 60,
-      "includeFiles": [
-        "docs/cricbuzz-sitemap-inventory.json"
-      ]
+      "includeFiles": "docs/cricbuzz-sitemap-inventory.json"
     }
   }
 }
