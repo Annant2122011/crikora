@@ -1224,15 +1224,15 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   const pathHash = stableHash(path);
   let subpageIdentity: string | undefined;
   if (rule.kind === "team-subpage") {
-    subpageIdentity = `${match[2]}:${stableHash(match[3] ?? "")}`;
+    subpageIdentity = `${match[2]}:${(match[3] ?? "").toLowerCase()}`;
   } else if (rule.kind === "player-stats") {
-    subpageIdentity = `${match[1]}:${stableHash(path.split("/").filter(Boolean).slice(3).join("/"))}`;
+    subpageIdentity = `${match[1]}:${path.split("/").filter(Boolean).slice(3).join("/").toLowerCase()}`;
   } else if (rule.kind === "series-subpage") {
-    subpageIdentity = `${match[1]}:${stableHash(match[3] ?? "")}`;
+    subpageIdentity = `${match[1]}:${(match[3] ?? "").toLowerCase()}`;
   } else if (rule.kind === "player-match-performance") {
     subpageIdentity = `${match[1]}:${match[2]}:${match[3]}`;
   } else if (rule.kind === "series-auction") {
-    subpageIdentity = `${match[1]}:${stableHash(match[2] ?? "index")}`;
+    subpageIdentity = `${match[1]}:${(match[2] ?? "index").toLowerCase()}`;
   } else if (rule.kind === "video-collection") {
     subpageIdentity = String(match[1]);
   } else if (rule.kind?.includes("stats")) {
