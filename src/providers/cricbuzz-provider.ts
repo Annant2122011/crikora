@@ -530,11 +530,24 @@ export function isAllowedCricbuzzSitemapUrl(value: string): boolean {
   }
 }
 
+function decodeXmlCodePoint(value: string, radix: number): string {
+  const codePoint = Number.parseInt(value, radix);
+  if (
+    !Number.isInteger(codePoint) ||
+    codePoint < 0 ||
+    codePoint > 0x10ffff ||
+    (codePoint >= 0xd800 && codePoint <= 0xdfff)
+  ) {
+    return "";
+  }
+  return String.fromCodePoint(codePoint);
+}
+
 function decodeXmlText(value: string): string {
   return value
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(/&#([0-9]+);/g, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, "$1")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => decodeXmlCodePoint(code, 16))
+    .replace(/&#([0-9]+);/g, (_match, code: string) => decodeXmlCodePoint(code, 10))
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
     .replace(/&apos;/gi, "'")
