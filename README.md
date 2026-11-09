@@ -69,7 +69,7 @@ The shared browser-safe API client lives at `src/client/crikora-api-client.ts`. 
 ```ts
 import { CrikoraApiClient } from "./client/crikora-api-client.js";
 
-const crikora = new CrikoraApiClient("https://YOUR-CRIKORA-API.example/api");
+const crikora = new CrikoraApiClient("https://crikora-api-production.up.railway.app/api");
 const { data: liveMatches } = await crikora.listLiveMatches();
 const { data: match } = await crikora.getMatch(liveMatches[0]!.id);
 const { data: players } = await crikora.listPlayers();
@@ -79,6 +79,29 @@ const { data: players } = await crikora.listPlayers();
 ```
 
 The client exposes typed methods for live/upcoming/recent matches, match details and events, players, teams, series, venues, entity lookup, search and health checks. It uses JSON-only GET requests, disables browser HTTP caching, supports `AbortSignal`, URL-encodes IDs and surfaces structured HTTP errors. The browser must call the Crikora API, never Cricbuzz directly. Keep `DATABASE_URL`, source credentials and provider secrets on the backend only.
+
+
+
+### Current Railway production API
+
+The Railway production API base is:
+
+`https://crikora-api-production.up.railway.app/api`
+
+Use this exact base URL in the Crikora website and browser extension. Public read routes include:
+
+- `GET /health`
+- `GET /v1/matches?status=live|upcoming|completed&limit=100`
+- `GET /v1/matches/:matchId`
+- `GET /v1/matches/:matchId/events`
+- `GET /v1/players?limit=100` and `GET /v1/players/:id`
+- `GET /v1/teams?limit=100` and `GET /v1/teams/:id`
+- `GET /v1/series?limit=100` and `GET /v1/series/:id`
+- `GET /v1/venues?limit=100` and `GET /v1/venues/:id`
+- `GET /v1/content?kind=news|video|gallery&limit=100`
+- `GET /v1/search?q=india&limit=30`
+
+The API returns JSON envelopes with `data` and `meta`; timestamps and `ttlSeconds: 600` travel with stored entities. Browser code must use public GET routes only. Keep `DATABASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` server-side. Refresh and crawl control routes are protected and must never be called from the browser.
 
 ## Ten-minute retention
 
