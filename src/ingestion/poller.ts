@@ -1,4 +1,5 @@
 import type { CrikoraEntity, EntityRepository } from "../domain/entities.js";
+import { isArchiveRepository } from "../storage/archive-repository.js";
 import type { Match, MatchEvent } from "../domain/types.js";
 import { detectMilestoneEvents } from "../engine/events.js";
 import type { CricketProvider } from "../providers/provider.js";
@@ -145,6 +146,9 @@ export class Poller {
       }
 
       await this.repository.upsertMany([...records.values()]);
+      if (snapshot.sourcePages?.length && isArchiveRepository(this.repository)) {
+        await this.repository.recordSourcePages(snapshot.sourcePages);
+      }
       const removed = await this.repository.cleanupExpired();
       if (removed) this.onError({ level: "info", message: "Expired Crikora cache records removed", count: removed });
     } catch (error) {
