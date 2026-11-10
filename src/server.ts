@@ -237,7 +237,7 @@ app.get("/v1/archive/entities/:entityType/:sourceId/history", async (request, re
   }).safeParse(request.params);
   const query = z.object({
     limit: z.coerce.number().int().min(1).max(200).default(50),
-    before: z.string().min(1).optional().refine(value => !value || /^\\d+$/.test(value) || !Number.isNaN(Date.parse(value)))
+    before: z.string().min(1).optional().refine(value => !value || /^[0-9]+$/.test(value) || !Number.isNaN(Date.parse(value)))
   }).safeParse(request.query);
   if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid archive history query." });
   if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
