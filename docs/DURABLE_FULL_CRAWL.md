@@ -16,7 +16,7 @@
 
 ## Database migrations
 
-Apply migrations `001` through `005` to the production Neon branch in order. Migration `004_crikora_durable_crawl.sql` creates the run and URL queue tables. Migration `005_crawl_queue_identity_keys.sql` adds a stable page-identity key and marks already-queued same-identity aliases as skipped. Both are additive to the cache and do not alter or delete cache rows.
+Apply migrations `001` through `006` to the production Neon branch in order. Migration `006_classified_cache_retention.sql` makes expiry nullable, classifies volatile versus stable records, and converts existing stable rows to non-expiring records. Migration `004_crikora_durable_crawl.sql` creates the run and URL queue tables. Migration `005_crawl_queue_identity_keys.sql` adds a stable page-identity key and marks already-queued same-identity aliases as skipped. Both are additive to the cache and do not alter or delete cache rows.
 
 ## API routes
 
