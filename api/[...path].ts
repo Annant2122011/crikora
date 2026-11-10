@@ -543,6 +543,27 @@ async function archiveCoverage(response: ApiResponse): Promise<void> {
   sendJson(response, 200, { data, meta: { retention: "permanent", appendOnly: true } });
 }
 
+async function entityDetails(type: EntityType, sourceId: string, url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 100, 200);
+  if (limit === undefined) {
+    sendJson(response, 400, { error: "Invalid entity detail limit." });
+    return;
+  }
+  const repo = getRepository();
+  const current = await repo.get(type, sourceId);
+  const history = current ? [] : await repo.listEntityHistory(type, sourceId, 1);
+  const related = await repo.listRelatedEntityPages(type, sourceId, limit);
+  const entity = current ? present(current) : history[0] ?? null;
+  if (!entity && !related.length) {
+    sendJson(response, 404, { error: "Entity and its archived detail pages were not found." });
+    return;
+  }
+  sendJson(response, 200, {
+    data: { entity, related },
+    meta: { relatedCount: related.length, retention: "permanent", source: "cricbuzz" }
+  });
+}
+
 async function archiveEntities(type: EntityType, url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
   const before = url.searchParams.get("before") ?? undefined;
@@ -657,6 +678,14 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   }
   if (parts[1] === "matches" && parts.length === 4 && parts[3] === "events" && method === "GET") {
     return getMatch(parts[2]!, response, true);
+  }
+  if (parts[1] === "entities" && parts.length === 5 && parts[4] === "details" && method === "GET") {
+    const type = validEntityType(parts[2]);
+    if (!type) {
+      sendJson(response, 400, { error: "Unsupported entity type." });
+      return;
+    }
+    return entityDetails(type, parts[3]!, url, response);
   }
   if (parts[1] === "entities" && parts.length === 3 && method === "GET") {
     const type = validEntityType(parts[2]);
