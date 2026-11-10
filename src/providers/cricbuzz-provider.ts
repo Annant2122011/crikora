@@ -381,6 +381,60 @@ export class CricbuzzProvider implements CricketProvider {
       entity = parseEntityPage(page.$, page.url, identity.entityType);
     }
 
+    const scorecardRoute = url.pathname.match(/^\\/live-cricket-scorecard\\/(\\d+)\\/([^/]+)\\/?$/);
+    if (scorecardRoute) {
+      const matchId = scorecardRoute[1]!;
+      const slug = scorecardRoute[2]!;
+      // Year/archive pages commonly link directly to scorecards. Resolve the
+      // matching live-score page and companion tabs so a historical scorecard
+      // becomes a proper match entity instead of generic page metadata.
+      const overview = await this.tryFetchPage(
+        new URL(`/live-cricket-scores/${matchId}/${slug}`, ORIGIN),
+        "archive:match-overview",
+        signal
+      );
+      const matchPage = overview ?? page;
+      const navigation = collectMatchNavigation(matchPage.$, matchPage.url, matchId);
+      const factsUrl = navigation.info ?? `${ORIGIN}/cricket-match-facts/${matchId}/${slug}`;
+      const squadsUrl = navigation.squads ?? `${ORIGIN}/cricket-match-squads/${matchId}/${slug}`;
+      const commentaryUrl = navigation.commentary ?? `${ORIGIN}/live-cricket-full-commentary/${matchId}/${slug}`;
+      const info = await this.tryFetchPage(new URL(factsUrl), "archive:match-facts", signal);
+      const squads = await this.tryFetchPage(new URL(squadsUrl), "archive:match-squads", signal);
+      const commentary = await this.tryFetchPage(new URL(commentaryUrl), "archive:match-commentary", signal);
+      const uniquePages = new Map<string, PageRecord>();
+      for (const candidate of [page, overview, info, squads, commentary]) {
+        if (candidate) uniquePages.set(candidate.url, candidate);
+      }
+      pages = [...uniquePages.values()];
+      const match = parseMatch(
+        { id: matchId, path: url.pathname, bucket: "completed" },
+        matchPage,
+        info,
+        page,
+        squads
+      );
+      match.status = "completed";
+      match.scorecardUrl = page.url;
+      match.infoUrl = info?.url;
+      match.squadsUrl = squads?.url;
+      match.commentaryUrl = commentary?.url;
+      entity = {
+        entityType: "match",
+        sourceId: matchId,
+        sourceUrl: matchPage.url,
+        payload: {
+          ...match,
+          pageKind: "match-scorecard",
+          matchFacts: info ? extractPageData(info.$, info.url) : null,
+          scorecardPage: extractPageData(page.$, page.url),
+          squadPage: squads ? extractPageData(squads.$, squads.url) : null,
+          commentaryPage: commentary ? extractPageData(commentary.$, commentary.url) : null,
+          sourcePages: pages.map(item => item.url)
+        },
+        fetchedAt: new Date().toISOString()
+      };
+    }
+
     if (!entity) {
       const path = new URL(page.url).pathname.replace(/\/+$/, "") || "/";
       entity = {
