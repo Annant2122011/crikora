@@ -11,7 +11,7 @@ This is the Vercel-hosted scheduler for the Crikora Cricbuzz HTML collector. It 
 - URL/job metadata is durable in Neon; scraped entity payloads are written to `crikora_cache` and retain the normal ten-minute TTL.
 - Neon holds a singleton lease so concurrent start requests cannot create overlapping durable loops.
 - The refresh API serializes scraper cycles using `crikora_crawler_settings`.
-- A 429 response is delayed using `Retry-After`; 401/403 stops the loop; a hard source denial disables the collector through the core API.
+- A page-level 401/403/404/redirect/access challenge is recorded as a skipped URL and does not stop the durable run. HTTP 429 honors `Retry-After`; transient 5xx/network failures retry with backoff. Authentication failures for the worker's own protected API routes still stop the workflow.
 
 ## Vercel project setup
 
@@ -23,7 +23,7 @@ Create a separate Vercel project connected to `Annant2122011/crikora` with:
 - Install command: `npm install`
 - Build command: `npm run build`
 
-The repository connection is prepared. Project creation must be completed by a Vercel team member with project-create permission because the connected Vercel API returned HTTP 403 for this account.
+The repository has a dedicated `crawler-worker/` Vercel application. The Vercel account connection currently exposes no linked project for this repository, so project linking/deployment still needs to be completed in the intended Vercel team.
 
 ## Required server-side environment variables
 
@@ -50,7 +50,7 @@ All management endpoints require `Authorization: Bearer <CRIKORA_WORKER_ADMIN_SE
 - `POST /v1/loop/start`
 - `POST /v1/loop/stop`
 
-The default persistent cadence is 10 seconds. The interval is measured from the start of one refresh cycle; if a cycle takes longer than the configured period, the next cycle starts as soon as the refresh lock permits. Source-side 429 responses are always honored.
+The default persistent cadence is 10 seconds. The interval is measured from the start of one refresh cycle; if a cycle takes longer than the configured period, the next cycle starts as soon as the refresh lock permits. Source-side 429 responses are always honored. Page-level denials are skipped independently.
 
 ## Important
 
