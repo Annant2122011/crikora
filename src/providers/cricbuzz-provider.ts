@@ -521,6 +521,7 @@ export class CricbuzzProvider implements CricketProvider {
       };
     }
 
+    for (const captured of pages) this.queueRelatedPageLinks(captured.$, captured.url);
     const discoveredUrls = [...new Set([
       ...pages.slice(1).map(item => item.url),
       ...pages.flatMap(item => getLinks(item.$, item.url).map(link => link.url))
