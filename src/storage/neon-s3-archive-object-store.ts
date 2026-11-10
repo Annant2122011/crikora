@@ -43,17 +43,17 @@ export function buildNeonS3Authorization(input: {
   payloadHash: string;
   contentType: string;
 }): { authorization: string; amzDate: string; dateStamp: string } {
-  const amzDate = input.date.toISOString().replace(/[:-]|\\.\\d{3}/g, "");
+  const amzDate = input.date.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const dateStamp = amzDate.slice(0, 8);
   const service = "s3";
   const scope = `${dateStamp}/${input.region}/${service}/aws4_request`;
   const signedHeaders = "content-type;host;x-amz-content-sha256;x-amz-date";
   const canonicalHeaders = [
-    `content-type:${input.contentType.trim()}\n`,
-    `host:${input.endpoint.host}\n`,
-    `x-amz-content-sha256:${input.payloadHash}\n`,
-    `x-amz-date:${amzDate}\n`
-  ].join("");
+    `content-type:${input.contentType.trim()}`,
+    `host:${input.endpoint.host}`,
+    `x-amz-content-sha256:${input.payloadHash}`,
+    `x-amz-date:${amzDate}`
+  ].join("\n");
   const canonicalRequest = [
     input.method,
     input.path,
