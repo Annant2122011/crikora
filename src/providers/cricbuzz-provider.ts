@@ -1295,7 +1295,7 @@ function getMainText($: PageDoc): string {
 }
 export function labeledValue(text: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp("(?:^|\\\\s)" + escaped + "\\\\s+([^\\\\n]{1,250}?)(?=\\\\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\\\\s|$)", "i");
+  const regex = new RegExp("(?:^|\\s)" + escaped + "\\s+([^\\n]{1,250}?)(?=\\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\\s|$)", "i");
   return clean(text.match(regex)?.[1] ?? "");
 }
 function parseDateTime(value: string): string | null {
