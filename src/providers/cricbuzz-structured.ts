@@ -142,8 +142,11 @@ export interface NormalizedPlayerProfile {
   birthPlace?: string;
   heightCm?: number;
   biography?: string;
+  biographySections: Array<{ heading: string; text: string }>;
   profileImageUrl?: string;
   teams: string[];
+  /** Exact visible source labels retained for API consumers and audit. */
+  allFields: Record<string, string>;
   attributes: NormalizedPlayerAttribute[];
   statistics: NormalizedPlayerStatistic[];
 }
@@ -575,6 +578,14 @@ export function normalizeCricbuzzPlayerProfile(
       flattenProfileAttributes(record, "", section, attributes);
     }
   }
+  const allFields: Record<string, string> = {};
+  for (const record of allRecords) {
+    const label = asString(scalar(record, ["label", "fieldLabel", "displayLabel"]));
+    const value = scalar(record, ["value", "text", "displayValue"]);
+    if (label && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")) {
+      allFields[label] = String(value);
+    }
+  }
   const uniqueAttributes = [...new Map(attributes.map(attribute => [attribute.fieldPath + ":" + String(attribute.value), attribute])).values()];
   const statistics: NormalizedPlayerStatistic[] = [];
   $("table").each((tableIndex, table) => {
@@ -610,8 +621,10 @@ export function normalizeCricbuzzPlayerProfile(
     birthPlace,
     ...(heightNumber !== undefined ? { heightCm: /m$/.test(height ?? "") && heightNumber < 3 ? heightNumber * 100 : heightNumber } : {}),
     biography,
+    biographySections: sections,
     ...(image ? { profileImageUrl: new URL(image, pageUrl).toString() } : {}),
     teams,
+    allFields,
     attributes: uniqueAttributes,
     statistics
   };
@@ -878,11 +891,18 @@ export function parseCricbuzzMatchData(
   const deliveries = new Map<string, NormalizedDelivery>();
   const commentary = new Map<string, NormalizedCommentary>();
   for (const root of roots) {
-    const candidates = collectStructuredRecords(root, record =>
-      (scalar(record, ["overNumber", "overNum", "overNo", "over", "ballNumber", "ballNum", "ballNo"]) !== undefined ||
-        scalar(record, ["commentary", "commText", "description", "eventDescription"]) !== undefined) &&
-      (scalar(record, ["batsmanStriker", "batter", "batsman", "bowler", "bowlerName", "commentary", "commText", "description", "eventDescription"]) !== undefined)
-    );
+    const candidates = collectStructuredRecords(root, record => {
+      const hasDeliveryCoordinate =
+        scalar(record, ["ballNumber", "ballNum", "ballNo", "deliveryNumber", "ball"]) !== undefined ||
+        scalar(record, ["overNumber", "overNum", "overNo"]) !== undefined;
+      const hasEventIdentity = scalar(record, ["sourceEventId", "eventId", "commentaryId", "deliveryId"]) !== undefined;
+      const hasBatterAndBowler =
+        scalar(record, ["batsmanStriker", "striker", "batter", "batsman", "batsmanName"]) !== undefined &&
+        scalar(record, ["bowler", "bowlerName", "bowlingPlayer"]) !== undefined &&
+        scalar(record, ["overNumber", "overNum", "overNo", "over"]) !== undefined;
+      const hasEventText = scalar(record, ["commentary", "commText", "comment", "description", "eventDescription", "text"]) !== undefined;
+      return (hasDeliveryCoordinate || hasEventIdentity || hasBatterAndBowler) && hasEventText;
+    });
     for (const record of candidates) {
       const delivery = normalizeStructuredDelivery(record, matchId);
       if (delivery) deliveries.set(delivery.sourceEventId, delivery);
