@@ -35,11 +35,13 @@ export interface CricbuzzSitemapDiscoveryResult {
 }
 
 function isWomensCricketPath(path: string): boolean {
-  return /(?:^|[\\/_-])(?:women|womens|wpl)(?:$|[\\/_-])/i.test(path);
+  return path.toLowerCase().split("/").some(segment =>
+    segment.includes("women") || segment.includes("wpl")
+  );
 }
 
 function isWomensCricketText(value: string): boolean {
-  return /\\b(?:women(?:'s)?|wpl)\\b/i.test(value);
+  return /(?:^|[^a-z])(?:women(?:'s)?|wpl)(?:$|[^a-z])/i.test(value);
 }
 
 const ORIGIN = "https://www.cricbuzz.com";
@@ -829,6 +831,9 @@ function assertAllowedPageUrl(url: URL): void {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
   const path = url.pathname.replace(/\/+$/, "") || "/";
+  if (isWomensCricketPath(path)) {
+    throw new Error("Women's cricket pages are outside Crikora's men's-only product scope.");
+  }
   const isKnownCricketIndex = INDEXES.some(index => index.path === path) || SECTION_INDEXES.includes(path);
   const isKnownCricketDataRoute = Boolean(classifyCricbuzzEntityUrl(url.toString()));
   if (!isKnownCricketIndex && !isKnownCricketDataRoute) {
@@ -1471,6 +1476,7 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   try { parsedUrl = new URL(url); } catch { return undefined; }
   if (parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "www.cricbuzz.com") return undefined;
   const path = parsedUrl.pathname.replace(/\/+$/, "") || "/";
+  if (isWomensCricketPath(path)) return undefined;
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);
