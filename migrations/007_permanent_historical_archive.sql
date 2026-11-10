@@ -87,8 +87,10 @@ CREATE TABLE IF NOT EXISTS public.crikora_source_page_snapshots (
   source_id text,
   content_type text NOT NULL DEFAULT 'text/html; charset=utf-8',
   content_sha256 char(64) NOT NULL,
-  body_gzip bytea NOT NULL,
+  body_gzip bytea,
+  object_key text,
   body_bytes integer NOT NULL CHECK (body_bytes >= 0),
+  stored_bytes integer NOT NULL DEFAULT 0 CHECK (stored_bytes >= 0),
   fetched_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -96,6 +98,20 @@ CREATE TABLE IF NOT EXISTS public.crikora_source_page_snapshots (
 -- a private S3 object key so large historical HTML does not consume PG storage.
 ALTER TABLE public.crikora_source_page_snapshots
   ADD COLUMN IF NOT EXISTS object_key text;
+
+ALTER TABLE public.crikora_source_page_snapshots
+  ADD COLUMN IF NOT EXISTS stored_bytes integer NOT NULL DEFAULT 0;
+
+UPDATE public.crikora_source_page_snapshots
+SET stored_bytes = octet_length(body_gzip)
+WHERE body_gzip IS NOT NULL AND stored_bytes = 0;
+
+ALTER TABLE public.crikora_source_page_snapshots
+  DROP CONSTRAINT IF EXISTS crikora_source_page_snapshots_stored_bytes_check;
+
+ALTER TABLE public.crikora_source_page_snapshots
+  ADD CONSTRAINT crikora_source_page_snapshots_stored_bytes_check
+  CHECK (stored_bytes >= 0);
 
 ALTER TABLE public.crikora_source_page_snapshots
   ALTER COLUMN body_gzip DROP NOT NULL;
