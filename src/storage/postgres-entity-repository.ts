@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { createArchiveObjectStoreFromEnv, type ArchiveObjectStore } from "./neon-s3-archive-object-store.js";
 import { Pool } from "pg";
 import type { SourcePageCapture } from "../domain/types.js";
-import type { ArchiveCoverageRow, ArchiveRepository, EntityHistoryRecord } from "./archive-repository.js";
+import type { ArchivedSourcePage, ArchiveCoverageRow, ArchiveRepository, EntityHistoryRecord } from "./archive-repository.js";
 import {
   DATA_TTL_SECONDS,
   getEntityRetentionClass,
@@ -294,6 +294,54 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     } finally {
       client.release();
     }
+  }
+
+  async getSourcePageSnapshot(sourceUrl: string, contentHash?: string): Promise<ArchivedSourcePage | undefined> {
+    if (!validSourcePageUrl(sourceUrl)) throw new Error("Archive lookup refused a URL outside the exact Cricbuzz HTTPS host.");
+    const result = await this.pool.query<{
+      source_url: string;
+      page_kind: string;
+      entity_type: EntityType | null;
+      source_id: string | null;
+      content_type: string;
+      content_sha256: string;
+      body_gzip: Buffer | null;
+      object_key: string | null;
+      fetched_at: Date | string;
+    }>(
+      `SELECT source_url, page_kind, entity_type, source_id, content_type,
+              content_sha256, body_gzip, object_key, fetched_at
+       FROM public.crikora_source_page_snapshots
+       WHERE source_url = $1 AND ($2::char(64) IS NULL OR content_sha256 = $2)
+       ORDER BY id DESC
+       LIMIT 1`,
+      [sourceUrl, contentHash ?? null]
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+
+    let compressed: Uint8Array;
+    if (row.object_key) {
+      if (!this.archiveObjectStore) {
+        throw new Error("The archived page is stored in Neon Object Storage; configure its credentials to retrieve it.");
+      }
+      compressed = await this.archiveObjectStore.get(row.object_key);
+    } else if (row.body_gzip) {
+      compressed = row.body_gzip;
+    } else {
+      throw new Error("The archived page metadata has no retrievable body location.");
+    }
+
+    return {
+      sourceUrl: row.source_url,
+      pageKind: row.page_kind,
+      ...(row.entity_type ? { entityType: row.entity_type } : {}),
+      ...(row.source_id ? { sourceId: row.source_id } : {}),
+      contentType: row.content_type,
+      contentHash: row.content_sha256.trim(),
+      fetchedAt: new Date(row.fetched_at).toISOString(),
+      html: gunzipSync(Buffer.from(compressed)).toString("utf8")
+    };
   }
 
   async listEntityHistory(entityType: EntityType, sourceId: string, limit = 50, before?: string): Promise<EntityHistoryRecord[]> {
