@@ -7,6 +7,7 @@ import { CricbuzzProvider } from "./providers/cricbuzz-provider.js";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityRepository, type StoredEntity } from "./domain/entities.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
 import { Poller } from "./ingestion/poller.js";
+import { isArchiveRepository } from "./storage/archive-repository.js";
 
 const env = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -206,6 +207,29 @@ app.get("/v1/search", async (request, reply) => {
   if (!query.success) return reply.code(400).send({ error: "Supply a search term q and an optional limit." });
   const rows = await repository.search(query.data.q, query.data.limit);
   return { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } };
+});
+
+app.get("/v1/archive/coverage", async (_request, reply) => {
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const data = await repository.getArchiveCoverage();
+  return { data, meta: { retention: "permanent", appendOnly: true } };
+});
+
+app.get("/v1/archive/entities/:entityType/:sourceId/history", async (request, reply) => {
+  const params = z.object({
+    entityType: z.enum(ENTITY_TYPES),
+    sourceId: z.string().min(1).max(200)
+  }).safeParse(request.params);
+  const query = z.object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    before: z.string().datetime().optional()
+  }).safeParse(request.query);
+  if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid archive history query." });
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const data = await repository.listEntityHistory(
+    params.data.entityType, params.data.sourceId, query.data.limit, query.data.before
+  );
+  return { data, meta: { count: data.length, retention: "permanent", appendOnly: true } };
 });
 
 app.setErrorHandler((error, _request, reply) => {
