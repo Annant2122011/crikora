@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Pool } from "pg";
-import { ENTITY_TYPES, type EntityType, type StoredEntity } from "../src/domain/entities.js";
+import { ENTITY_TYPES, RETENTION_POLICY, type EntityType, type StoredEntity } from "../src/domain/entities.js";
 import { Poller } from "../src/ingestion/poller.js";
 import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "../src/providers/cricbuzz-provider.js";
 import { PostgresEntityRepository } from "../src/storage/postgres-entity-repository.js";
@@ -150,7 +150,8 @@ function present(row: StoredEntity): Record<string, unknown> {
     sourceUrl: row.sourceUrl,
     fetchedAt: row.fetchedAt,
     expiresAt: row.expiresAt,
-    ttlSeconds: 600
+    retentionClass: row.retentionClass,
+    ttlSeconds: row.retentionClass === "ephemeral" ? RETENTION_POLICY.ephemeralSeconds : null
   };
 }
 
@@ -182,7 +183,7 @@ async function health(response: ApiResponse): Promise<void> {
       service: "crikora-crawler-api",
       source: "cricbuzz",
       storage: "postgres",
-      retentionSeconds: 600,
+      retentionPolicy: RETENTION_POLICY,
       refreshIntervalSeconds: settings.refresh_interval_seconds,
       enabled: settings.enabled,
       collectionEnabled: process.env.CRIKORA_COLLECTION_ENABLED === "true",
@@ -329,7 +330,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
       status: "completed",
       refreshIntervalSeconds: claim.rows[0].refresh_interval_seconds,
       fetchedAt: new Date().toISOString(),
-      retentionSeconds: 600,
+      retentionPolicy: RETENTION_POLICY,
       images: "URLs",
       queuedFollowups
     });
@@ -421,7 +422,7 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
       inventoryUrlCount: crawlUrls.length,
       dedupeRemovedUrlCount: mergedCandidateUrls.length - crawlUrls.length,
       queueTotalCount: result.run.totalCount,
-      contentRetentionSeconds: 600
+      retentionPolicy: RETENTION_POLICY
     }
   });
 }
@@ -431,7 +432,7 @@ async function crawlStatus(request: ApiRequest, response: ApiResponse): Promise<
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
   if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
   const run = await getDurableCrawl().getLatestStatus();
-  sendJson(response, 200, { data: run ?? null, meta: { contentRetentionSeconds: 600 } });
+  sendJson(response, 200, { data: run ?? null, meta: { retentionPolicy: RETENTION_POLICY } });
 }
 
 async function crawlStep(request: ApiRequest, response: ApiResponse): Promise<void> {
@@ -445,7 +446,7 @@ async function crawlStep(request: ApiRequest, response: ApiResponse): Promise<vo
   if (!settings.enabled) return sendJson(response, 409, { error: "The crawler is currently disabled." });
   const result = await getDurableCrawl().processBatch(AbortSignal.timeout(50_000));
   if (result.retryAfterSeconds) response.setHeader("retry-after", String(result.retryAfterSeconds));
-  sendJson(response, 200, { ok: true, ...result, meta: { contentRetentionSeconds: 600 } });
+  sendJson(response, 200, { ok: true, ...result, meta: { retentionPolicy: RETENTION_POLICY } });
 }
 
 async function cleanupCache(request: ApiRequest, response: ApiResponse): Promise<void> {
@@ -453,7 +454,7 @@ async function cleanupCache(request: ApiRequest, response: ApiResponse): Promise
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_REFRESH_SECRET is not configured." });
   if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
   const deletedRows = await getRepository().cleanupExpired();
-  sendJson(response, 200, { ok: true, deletedRows, retentionSeconds: 600 });
+  sendJson(response, 200, { ok: true, deletedRows, retentionPolicy: RETENTION_POLICY });
 }
 
 async function listMatches(url: URL, response: ApiResponse): Promise<void> {
@@ -465,7 +466,7 @@ async function listMatches(url: URL, response: ApiResponse): Promise<void> {
   }
   const rows = await getRepository().list("match", limit);
   const data = rows.filter(row => !status || row.payload.status === status).map(present);
-  sendJson(response, 200, { data, meta: { count: data.length, retentionSeconds: 600, source: "cricbuzz" } });
+  sendJson(response, 200, { data, meta: { count: data.length, retentionPolicy: RETENTION_POLICY, source: "cricbuzz" } });
 }
 
 async function getMatch(matchId: string, response: ApiResponse, eventsOnly = false): Promise<void> {
@@ -477,11 +478,11 @@ async function getMatch(matchId: string, response: ApiResponse, eventsOnly = fal
   if (eventsOnly) {
     sendJson(response, 200, {
       data: Array.isArray(row.payload.events) ? row.payload.events : [],
-      meta: { retentionSeconds: 600 }
+      meta: { retentionPolicy: RETENTION_POLICY }
     });
     return;
   }
-  sendJson(response, 200, { data: present(row), meta: { retentionSeconds: 600, source: "cricbuzz" } });
+  sendJson(response, 200, { data: present(row), meta: { retentionPolicy: RETENTION_POLICY, source: "cricbuzz" } });
 }
 
 function validEntityType(value: string | undefined): EntityType | undefined {
@@ -495,7 +496,7 @@ async function listEntities(type: EntityType, url: URL, response: ApiResponse): 
     return;
   }
   const rows = await getRepository().list(type, limit);
-  sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionSeconds: 600 } });
+  sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } });
 }
 
 async function getEntity(type: EntityType, sourceId: string, response: ApiResponse): Promise<void> {
@@ -504,7 +505,7 @@ async function getEntity(type: EntityType, sourceId: string, response: ApiRespon
     sendJson(response, 404, { error: "Entity not found or expired." });
     return;
   }
-  sendJson(response, 200, { data: present(row), meta: { retentionSeconds: 600 } });
+  sendJson(response, 200, { data: present(row), meta: { retentionPolicy: RETENTION_POLICY } });
 }
 
 async function listContent(url: URL, response: ApiResponse): Promise<void> {
@@ -521,7 +522,7 @@ async function listContent(url: URL, response: ApiResponse): Promise<void> {
     .map(present);
   sendJson(response, 200, {
     data,
-    meta: { count: data.length, kind: kind ?? "all", retentionSeconds: 600, source: "cricbuzz" }
+    meta: { count: data.length, kind: kind ?? "all", retentionPolicy: RETENTION_POLICY, source: "cricbuzz" }
   });
 }
 
@@ -534,7 +535,7 @@ async function search(url: URL, response: ApiResponse): Promise<void> {
     return;
   }
   const rows = await getRepository().search(query, limit);
-  sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionSeconds: 600 } });
+  sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } });
 }
 
 function applyCors(request: ApiRequest, response: ApiResponse): boolean {

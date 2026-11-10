@@ -35,7 +35,7 @@ export default {
         ...body,
         ok: response.ok && body.ok === true,
         scheduler: "neon-function-trigger",
-        retentionSeconds: 600
+        retentionPolicy: { ephemeralSeconds: 600, persistent: "retained-until-refreshed" }
       }, { status: response.status });
     } catch (error) {
       console.error("Crikora scheduled cache cleanup failed", error);
