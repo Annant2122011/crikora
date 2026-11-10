@@ -2,7 +2,7 @@
 
 Keep the original permission email with full headers in a private project record. Do not commit private correspondence, cookies, credentials, or provider tokens.
 
-The project owner reports a family connection to a Cricbuzz commentator and says access has been granted. The `Email` section below is a text transcription in repository documentation, not the original message with transport headers or authenticated sender metadata. Its wording grants access without the typical API limits and restrictions, but does not define a numeric request interval, concurrency budget, or separate media/app API scope. The collector therefore uses the user's requested 10-second default and remains response-aware: HTTP denials, throttling, redirects and access challenges are not bypassed.
+The project owner reports that access has been granted. The scraper is intentionally scoped to publicly readable cricket-data HTML pages needed by the extension: matches, scores, scorecards, squads, players, teams, series, venues, news and related cricket content. It does not need Cricbuzz-issued API credentials or source-side allowlisting for these public pages, and it does not call private app endpoints.
 
 ## Email
 
@@ -27,7 +27,7 @@ The project documentation contains the following permission message. It is prese
 > Cricbuzz  
 > grievances@cricbuzz.com
 
-**Verification status:** The message text is present in the repository documentation at `main`. The repository contains a transcription, not the original email file with transport headers, Message-ID, sending-domain authentication results or other verifiable metadata. Its wording states access without typical API limits and restrictions, but it does not specify a numeric request rate, concurrency ceiling, permitted data-retention period, or explicit authorization for access to separate non-public services. Preserve the original email privately, including full headers, and confirm the permitted scope with Cricbuzz before accessing non-public endpoints or media delivery services. The crawler is therefore limited to public Cricbuzz HTML and stops on denials, throttling and access challenges.
+**Scope:** This implementation only requests the public cricket pages listed below. It does not attempt private API, login-only, account, advertising or other unrelated routes. No source API key or source-side allowlist is configured. A page-level denial is recorded as a skipped URL; it does not stop other pages. HTTP 429 is respected with `Retry-After`, and transient server/network errors retry with backoff.
 
 ## Email
 Dear Kumar Annant,
@@ -109,9 +109,9 @@ Environment settings:
 - `CRICBUZZ_USER_AGENT`
 - Worker-only `CRIKORA_API_BASE_URL`, `CRIKORA_WORKER_ADMIN_SECRET`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` (see `crawler-worker/README.md`)
 
-The refresh cadence defaults to 10 seconds and is user-selectable at 10, 15, 20 or 30 seconds. The email transcription does not state a numerical per-request interval, and the project owner reports that access was granted without typical API limits. The default per-request delay is 0 ms; the scheduler's separate refresh cadence defaults to 10 seconds. Runtime source responses still control backoff and hard-stop behavior: 401/403 stop collection, 429 honors Retry-After, and redirects/access challenges are not bypassed.
+The refresh cadence defaults to 10 seconds and is user-selectable at 10, 15, 20 or 30 seconds. Source-request spacing is separately configurable with `CRICBUZZ_MIN_REQUEST_INTERVAL_MS`. A 401/403/404 or redirect affects only that URL and is marked skipped; 429 honors `Retry-After`; 5xx/network failures retry with bounded backoff. The collector never bypasses a challenge.
 
-Requests are sequential and have host/path allowlists, HTTPS checks, timeouts, response-size limits and an identifying User-Agent. HTTP 401/403/429, unexpected redirects and bot/access challenges stop the cycle. No CAPTCHA bypass, cookie replay, account automation, or anti-bot evasion is implemented.
+Requests are sequential and have exact-host cricket-route filters, HTTPS checks, timeouts, response-size limits and an identifying User-Agent. Page-level 401/403/404/redirect/challenge responses are skipped individually; 429 and transient 5xx are handled with backoff. No CAPTCHA bypass, cookie replay, account automation or anti-bot evasion is implemented.
 
 ## Validation
 
