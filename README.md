@@ -108,6 +108,9 @@ Public read routes include:
 - `GET /v1/venues?limit=100` and `GET /v1/venues/:id`
 - `GET /v1/content?kind=news|video|gallery&limit=100`
 - `GET /v1/search?q=india&limit=30`
+- `GET /v1/archive/coverage`
+- `GET /v1/archive/entities/:entityType?limit=50&before=<cursor>`
+- `GET /v1/archive/entities/:entityType/:sourceId/history?limit=50&before=<cursor>`
 
 The API returns JSON envelopes with `data` and `meta`; timestamps, `retentionClass`, nullable `expiresAt` and a per-record `ttlSeconds` travel with stored entities. Browser code must use public GET routes only. Keep `DATABASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` server-side. Refresh and crawl control routes are protected and must never be called from the browser.
 
@@ -115,15 +118,30 @@ The API returns JSON envelopes with `data` and `meta`; timestamps, `retentionCla
 
 The cache applies a ten-minute lifetime only to volatile records: live match scores, player-stat subpages, rankings, live commentary, live graphs, over-by-over data, forecasts and other live-analysis pages. These records are refreshed by later collection cycles and are removed after 600 seconds without a refresh.
 
-Stable records are retained until their source identity is fetched again: upcoming fixtures, completed match records, player profiles, teams, series, venues, news, videos and galleries. A live match record is ephemeral while its status is live; when a later refresh marks it completed, the same source row becomes persistent. Stable rows are updated in place using `(entity_type, source_id)`, not stored as a versioned history.
+Stable records are retained in the serving cache until their source identity is refreshed. The cache remains an up-to-date read model, not the historical record. Each distinct normalized entity version is also inserted into the permanent append-only `crikora_entity_snapshots` table. Each distinct consecutive raw Cricbuzz HTML page version is gzip-compressed and stored in `crikora_source_page_snapshots`. Both snapshot tables reject UPDATE and DELETE operations. The URL-level `crikora_archive_coverage` ledger records discovery and capture outcomes independently of cache expiry.
 
-PostgreSQL reads ignore only expired ephemeral rows. Cleanup deletes only rows with a non-null expired timestamp; persistent rows have `expires_at = NULL`. The local in-memory repository follows the same classification. A Neon scheduled Function can continue calling the cleanup endpoint every minute. This cache is not a permanent historical archive.
+PostgreSQL cleanup still deletes only expired cache rows. It never touches the permanent snapshot tables. If source content changes A → B → A, all three observations are retained; identical consecutive refreshes are deduplicated. This is permanent application-level retention, not a replacement for independent Neon backups and exports.
+
+## Permanent historical archive
+
+The permanent archive is an evidence-backed history layer separate from the current cache. It begins with every permitted current/saved sitemap URL, follows Cricbuzz's own scorecard-archive year links (including the source-published 1877 archive), then follows series, match, player, team, venue, news, statistics and media metadata links exposed by those pages. It does not synthesize missing years or claim that every statistic or delivery exists for every historical match.
+
+- `crikora_entity_snapshots` stores every observed distinct normalized entity version. A later return to an earlier payload is stored as a new observation.
+- `crikora_source_page_snapshots` stores gzip-compressed raw HTML and its SHA-256 digest, including embedded React flight scripts. Raw pages can be reparsed when field-specific extractors improve.
+- `crikora_archive_coverage` records discovered, pending, processing, captured, skipped and failed URLs by route family.
+- `GET /v1/archive/coverage` reports the current archive coverage ledger.
+- `GET /v1/archive/entities/:entityType` lists each entity's latest archived version with cursor pagination.
+- `GET /v1/archive/entities/:entityType/:sourceId/history` lists immutable versions of one entity.
+
+Use `CrikoraApiClient.getArchiveCoverage()`, `listArchivedEntities()` and `getEntityHistory()` from the website or extension. Browser clients receive normalized JSON only. They never receive database credentials or raw HTML storage access.
+
+The archive crawl is continuous: after the durable backlog is drained, the existing worker keeps checking current match and section indexes and re-enqueues newly discovered pages. A large historical backfill can take substantial time. A coverage status of "captured" means that a permitted page was fetched and archived, not that every possible field was present on the page. Check extraction gaps and skipped/failed counts before declaring any route family complete.
 
 ## Neon setup
 
 A separate Neon project named `crikora` was created for cricket data. The existing `resolvX` support-bot database was left untouched.
 
-1. Apply migrations `001_crikora_cache.sql` through `006_classified_cache_retention.sql` to the Crikora production database, in numeric order.
+1. Apply migrations `001_crikora_cache.sql` through `007_permanent_historical_archive.sql` to the Crikora production database, in numeric order. Migration 007 is additive and creates the immutable history and raw-page evidence tables.
 2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
 3. Keep `CRIKORA_COLLECTION_ENABLED=false` until the selected runtime and worker have passed their health checks. This is Crikora’s own operator-controlled feature switch, not a Cricbuzz-issued credential or source-side allowlist.
 4. Set `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` as Vercel server-only secrets. Set `CORS_ORIGINS` to exact deployed origins when browser calls are introduced.
@@ -164,7 +182,7 @@ Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` 
 - Links are host-checked and constrained to known Cricbuzz match, profile, team, series, news, video, gallery, statistics, schedule, commentary and special-content route families.
 - Images are exposed as external URLs. They are not copied to Crikora object storage.
 - HTML schemas can change. Keep representative fixtures and re-run the parser tests when Cricbuzz changes markup.
-- This is a static-HTML collector, not a full browser automation engine. It does not execute Cricbuzz client-side JavaScript, trigger interactive tabs, or retrieve data that only appears after browser-side hydration. Some profile tabs, charts, or statistics may therefore be absent. The collector returns fields and links it can verify in the fetched HTML and does not fabricate missing values.
+- This is a static-HTML collector, not a full browser automation engine. It does not execute Cricbuzz client-side JavaScript, trigger interactive tabs, or retrieve data that only appears after browser-side hydration. Some profile tabs, charts, or statistics may therefore be absent. The collector archives the complete fetched HTML, including embedded React Server Component flight scripts, and exposes decoded keyed page data beside normalized tables, labels and sections. This preserves source evidence for later parser upgrades, but it still cannot capture data that Cricbuzz only returns after client-side interactions or from inaccessible/authenticated app services. It does not fabricate missing values.
 - Volatile feed data expires after ten minutes; stable records remain until refreshed. This is not a versioned historical score archive.
 
 ## CI
@@ -177,7 +195,7 @@ The initial crawl merges the saved 4,721-URL snapshot with the current sitemap i
 
 - Core API: `POST /api/crawl/start`, `GET /api/crawl/status`, `POST /api/crawl/step`, `POST /api/cleanup`.
 - Worker: `POST /v1/crawl/start` (requires the worker admin bearer token).
-- Volatile cache payloads expire after 600 seconds, while fixtures and other stable records remain until refreshed. The durable queue retains URLs and operational status only, not page contents. A complete versioned cross-provider snapshot would require a separate, explicit archive/export retention policy.
+- Volatile serving-cache payloads expire after 600 seconds. Migration 007 stores permanent normalized entity versions and gzip-compressed raw HTML versions separately from the serving cache. Queue metadata remains durable in Neon; page content is stored in the append-only archive tables.
 - The collector reads static HTML from the cricket-data routes in its allowlist. It ignores homepage, advertising, careers, account/login and unrelated site pages. It does not execute browser JavaScript, access private services, bypass CAPTCHA or source denials, or download video streams.
 
 See [the durable crawl runbook](./docs/DURABLE_FULL_CRAWL.md) for the complete route and deployment setup.
