@@ -92,11 +92,13 @@ export class Poller {
     private readonly onError: (error: unknown) => void = () => undefined
   ) {}
 
-  async tick(signal?: AbortSignal): Promise<void> {
+  async tick(signal?: AbortSignal, indexOnly = false): Promise<void> {
     if (this.running || this.sourceDenied || Date.now() < this.blockedUntilMs) return;
     this.running = true;
     try {
-      const snapshot = await this.provider.fetchSnapshot(signal);
+      const snapshot = indexOnly && this.provider.fetchMatchIndexSnapshot
+        ? await this.provider.fetchMatchIndexSnapshot(signal)
+        : await this.provider.fetchSnapshot(signal);
       const records = new Map<string, CrikoraEntity>();
 
       // Index-page stubs keep every discovered live/upcoming/recent match in the API.
