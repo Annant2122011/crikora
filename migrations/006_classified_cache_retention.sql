@@ -21,7 +21,7 @@ ALTER TABLE public.crikora_cache
 UPDATE public.crikora_cache
 SET retention_class = CASE
       WHEN entity_type = 'match'
-        AND COALESCE(payload->>'status', 'live') = 'live'
+        AND COALESCE(payload->>'status', 'live') NOT IN ('upcoming', 'completed')
         THEN 'ephemeral'
       WHEN entity_type = 'ranking'
         THEN 'ephemeral'
@@ -43,7 +43,7 @@ SET retention_class = CASE
     END,
     expires_at = CASE
       WHEN (
-        (entity_type = 'match' AND COALESCE(payload->>'status', 'live') = 'live')
+        (entity_type = 'match' AND COALESCE(payload->>'status', 'live') NOT IN ('upcoming', 'completed'))
         OR entity_type = 'ranking'
         OR (
           entity_type = 'metadata'
