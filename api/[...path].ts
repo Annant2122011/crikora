@@ -567,7 +567,7 @@ async function entityDetails(type: EntityType, sourceId: string, url: URL, respo
 async function archiveEntities(type: EntityType, url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
   const before = url.searchParams.get("before") ?? undefined;
-  if (limit === undefined || (before && !/^[0-9]+$/.test(before) && Number.isNaN(Date.parse(before)))) {
+  if (limit === undefined || (before && !/^[0-9]+$/.test(before))) {
     sendJson(response, 400, { error: "Invalid archive entity pagination." });
     return;
   }
@@ -586,7 +586,7 @@ async function archiveEntityHistory(
 ): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
   const before = url.searchParams.get("before") ?? undefined;
-  if (limit === undefined || (before && !/^[0-9]+$/.test(before) && Number.isNaN(Date.parse(before)))) {
+  if (limit === undefined || (before && !/^[0-9]+$/.test(before))) {
     sendJson(response, 400, { error: "Invalid archive history pagination." });
     return;
   }
