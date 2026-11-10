@@ -538,6 +538,30 @@ async function search(url: URL, response: ApiResponse): Promise<void> {
   sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } });
 }
 
+async function archiveCoverage(response: ApiResponse): Promise<void> {
+  const data = await getRepository().getArchiveCoverage();
+  sendJson(response, 200, { data, meta: { retention: "permanent", appendOnly: true } });
+}
+
+async function archiveEntityHistory(
+  type: EntityType,
+  sourceId: string,
+  url: URL,
+  response: ApiResponse
+): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
+  const before = url.searchParams.get("before") ?? undefined;
+  if (limit === undefined || (before && Number.isNaN(Date.parse(before)))) {
+    sendJson(response, 400, { error: "Invalid archive history pagination." });
+    return;
+  }
+  const data = await getRepository().listEntityHistory(type, sourceId, limit, before);
+  sendJson(response, 200, {
+    data,
+    meta: { count: data.length, retention: "permanent", appendOnly: true }
+  });
+}
+
 function applyCors(request: ApiRequest, response: ApiResponse): boolean {
   const configured = (process.env.CORS_ORIGINS ?? "")
     .split(",")
@@ -591,6 +615,17 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   if (parts[0] !== "v1") {
     sendJson(response, 404, { error: "Route not found." });
     return;
+  }
+  if (parts[1] === "archive" && parts[2] === "coverage" && parts.length === 3 && method === "GET") {
+    return archiveCoverage(response);
+  }
+  if (parts[1] === "archive" && parts[2] === "entities" && parts.length === 6 && parts[5] === "history" && method === "GET") {
+    const type = validEntityType(parts[3]);
+    if (!type) {
+      sendJson(response, 400, { error: "Unsupported archive entity type." });
+      return;
+    }
+    return archiveEntityHistory(type, parts[4]!, url, response);
   }
   if (parts[1] === "matches" && parts.length === 2 && method === "GET") {
     return listMatches(url, response);
