@@ -1,7 +1,39 @@
-import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, isAllowedCricbuzzPageUrl } from "./cricbuzz-provider.js";
+import { describe, expect, it, vi } from "vitest";
+import { CricbuzzProvider, classifyCricbuzzEntityUrl, dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, isAllowedCricbuzzPageUrl } from "./cricbuzz-provider.js";
 
 describe("full-crawl route coverage", () => {
+  it.each([403, 404])("skips one page returning HTTP %i without failing the crawl call", async status => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Access denied", {
+      status,
+      headers: { "content-type": "text/html" }
+    })));
+    const provider = new CricbuzzProvider({
+      minRequestIntervalMs: 0,
+      maxMatchesPerPoll: 2,
+      maxProfilesPerPoll: 1,
+      maxTeamsPerPoll: 1,
+      maxSeriesPerPoll: 1,
+      maxVenuesPerPoll: 1,
+      maxContentPagesPerPoll: 1,
+      timeoutMs: 1_000,
+      maxResponseBytes: 100_000,
+      userAgent: "Crikora test suite"
+    });
+
+    try {
+      const result = await provider.fetchCrawlPage(
+        "https://www.cricbuzz.com/cricket-news/140765/sample-story"
+      );
+      expect(result.skipped).toBe(true);
+      expect(result.entity).toBeUndefined();
+      expect(result.discoveredUrls).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      expect(globalThis.fetch).toBe(originalFetch);
+    }
+  });
+
   it("allows facts, scorecard and squad pages used by match enrichment", () => {
     expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-match-facts/161256/example")).toBe(true);
     expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-match-squads/161256/example")).toBe(true);
