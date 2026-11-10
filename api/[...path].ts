@@ -565,6 +565,175 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   const method = (request.method ?? "GET").toUpperCase();
 
+  // Handle root endpoint
+  if (path === "" && method === "GET") {
+    const acceptHeader = request.headers.accept || "";
+    
+    // Serve HTML page with analytics when accessed from a browser
+    if (acceptHeader.includes("text/html")) {
+      response.statusCode = 200;
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.setHeader("cache-control", "public, max-age=60");
+      response.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crikora API</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      line-height: 1.6;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      border-bottom: 3px solid #0070f3;
+      padding-bottom: 10px;
+    }
+    h2 {
+      color: #0070f3;
+      margin-top: 30px;
+    }
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+    }
+    .endpoint {
+      background: #f9f9f9;
+      padding: 15px;
+      margin: 10px 0;
+      border-left: 4px solid #0070f3;
+      border-radius: 4px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      background: #0070f3;
+      color: white;
+      border-radius: 4px;
+      font-size: 0.85em;
+      margin-right: 8px;
+    }
+    a {
+      color: #0070f3;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🏏 Crikora Cricket API</h1>
+    <p>A cricket data ingestion and highlights API providing real-time match data, player profiles, team information, and more.</p>
+    
+    <h2>API Information</h2>
+    <div class="endpoint">
+      <strong>Service:</strong> crikora-api<br>
+      <strong>Source:</strong> cricbuzz<br>
+      <strong>Storage:</strong> postgres<br>
+    </div>
+
+    <h2>Available Endpoints</h2>
+    
+    <div class="endpoint">
+      <span class="badge">GET</span>
+      <code>/api/health</code> - API health check
+    </div>
+    
+    <div class="endpoint">
+      <span class="badge">GET</span>
+      <code>/api/v1/matches</code> - List all matches<br>
+      <span class="badge">GET</span>
+      <code>/api/v1/matches/live</code> - Live matches<br>
+      <span class="badge">GET</span>
+      <code>/api/v1/matches/upcoming</code> - Upcoming matches<br>
+      <span class="badge">GET</span>
+      <code>/api/v1/matches/recent</code> - Recent matches
+    </div>
+    
+    <div class="endpoint">
+      <span class="badge">GET</span>
+      <code>/api/v1/players</code> - List players<br>
+      <span class="badge">GET</span>
+      <code>/api/v1/teams</code> - List teams<br>
+      <span class="badge">GET</span>
+      <code>/api/v1/series</code> - List series<br>
+      <span class="badge">GET</span>
+      <code>/api/v1/venues</code> - List venues
+    </div>
+    
+    <div class="endpoint">
+      <span class="badge">GET</span>
+      <code>/api/v1/content</code> - Content feed (news, videos, galleries)<br>
+      <span class="badge">GET</span>
+      <code>/api/v1/search?q=query</code> - Search API
+    </div>
+
+    <h2>Quick Start</h2>
+    <p>Try these example requests:</p>
+    <ul>
+      <li><a href="/api/health">/api/health</a> - Check API status</li>
+      <li><a href="/api/v1/matches/live">/api/v1/matches/live</a> - View live matches</li>
+      <li><a href="/api/v1/players?limit=10">/api/v1/players?limit=10</a> - List players</li>
+    </ul>
+
+    <h2>Documentation</h2>
+    <p>For detailed API documentation and usage examples, visit the <a href="https://github.com/Annant2122011/crikora" target="_blank">GitHub repository</a>.</p>
+  </div>
+
+  <script>
+    // Vercel Web Analytics
+    (function() {
+      var script = document.createElement('script');
+      script.src = '/_vercel/insights/script.js';
+      script.defer = true;
+      document.head.appendChild(script);
+    })();
+  </script>
+</body>
+</html>`);
+      return;
+    }
+    
+    // Return JSON for API clients
+    sendJson(response, 200, {
+      ok: true,
+      service: "crikora-api",
+      source: "cricbuzz",
+      storage: "postgres",
+      retentionPolicy: RETENTION_POLICY,
+      health: "/api/health",
+      apiBasePath: "/api/v1",
+      endpoints: {
+        matches: "/api/v1/matches",
+        liveMatches: "/api/v1/matches/live",
+        upcomingMatches: "/api/v1/matches/upcoming",
+        recentMatches: "/api/v1/matches/recent",
+        players: "/api/v1/players",
+        teams: "/api/v1/teams",
+        series: "/api/v1/series",
+        venues: "/api/v1/venues",
+        content: "/api/v1/content",
+        search: "/api/v1/search"
+      }
+    });
+    return;
+  }
+
   if (path === "health" && method === "GET") return health(response);
   if (path === "settings" && method === "GET") {
     const settings = await getSettings();
