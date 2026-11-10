@@ -78,6 +78,7 @@ export interface ArchiveCoverage {
   rawPageVersions: number;
   entityVersions: number;
   rawPageBytes: number;
+  storedBytes: number;
   lastFetchedAt: string | null;
 }
 
