@@ -382,7 +382,7 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
           fours: numeric[2] ?? 0,
           sixes: numeric[3] ?? 0,
           ...(numeric.length > 4 && numeric[4] !== undefined ? { strikeRate: numeric[4] } : {}),
-          notOut: /not out|batting/i.test(text) || /not out/i.test(dismissal)
+          notOut: /not out|batting/i.test(text) || /not out/i.test(dismissal ?? "")
         });
       }
     }
