@@ -1,6 +1,7 @@
 import { load, type CheerioAPI } from "cheerio";
 import type { CrikoraEntity, EntityType } from "../domain/entities.js";
-import type { EventType, Match, MatchEvent, MatchStatus, ProviderSnapshot } from "../domain/types.js";
+import type { EventType, Match, MatchEvent, MatchStatus, ProviderSnapshot, SourcePageCapture } from "../domain/types.js";
+import { extractCricbuzzFlightData } from "./cricbuzz-rsc.js";
 import type { CricketProvider } from "./provider.js";
 
 type MatchBucket = "live" | "upcoming" | "completed";
@@ -18,13 +19,14 @@ interface Options {
   userAgent: string;
 }
 interface DiscoveredMatch { id: string; path: string; bucket: MatchBucket; }
-interface PageRecord { url: string; html: string; $: PageDoc; }
+interface PageRecord { url: string; html: string; $: PageDoc; fetchedAt: string; }
 interface LinkRecord { url: string; path: string; text: string; }
 
 export interface CrawledPageResult {
   entity?: CrikoraEntity;
   discoveredUrls: string[];
   skipped: boolean;
+  sourcePages?: SourcePageCapture[];
 }
 
 export interface CricbuzzSitemapDiscoveryResult {
@@ -118,9 +120,11 @@ export class CricbuzzProvider implements CricketProvider {
   async fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
     const discovered = new Map<string, DiscoveredMatch>();
     const indexRecords = new Map<string, Match>();
+    const capturedPages = new Map<string, PageRecord>();
     for (const index of INDEXES) {
       const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
       if (!page) continue;
+      capturedPages.set(page.url, page);
       for (const link of getLinks(page.$, page.url)) {
         const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (match?.[1] && !discovered.has(match[1])) {
@@ -139,7 +143,10 @@ export class CricbuzzProvider implements CricketProvider {
     for (const path of sectionPaths) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
       const page = await this.tryFetchPage(new URL(path, ORIGIN), "section-index", signal);
-      if (page) sectionPages.push(page);
+      if (page) {
+        sectionPages.push(page);
+        capturedPages.set(page.url, page);
+      }
     }
 
     const allMatches = [...discovered.values()];
@@ -202,6 +209,7 @@ export class CricbuzzProvider implements CricketProvider {
       addEntity(entities, "match", discoveredMatch.id, base.url, payload);
 
       for (const page of combinedPages) {
+        capturedPages.set(page.url, page);
         const related = collectRelatedLinks(page.$, page.url);
         mergeLinks(profileLinks, related.profiles);
         mergeLinks(teamLinks, related.teams);
@@ -224,14 +232,14 @@ export class CricbuzzProvider implements CricketProvider {
       if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
     }
 
-    await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, signal);
-    await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, signal);
-    await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, signal);
-    await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, signal);
-    await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, signal);
+    await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, capturedPages, signal);
 
     const fetchedAt = new Date().toISOString();
-    return { matches, events, entities: [...entities.values()], fetchedAt };
+    return { matches, events, entities: [...entities.values()], fetchedAt, sourcePages: [...capturedPages.values()].map(toSourcePageCapture) };
   }
 
   isAllowedCrawlUrl(value: string): boolean {
@@ -372,7 +380,7 @@ export class CricbuzzProvider implements CricketProvider {
     ])]
       .filter(linkUrl => isAllowedCricbuzzPageUrl(linkUrl))
       .slice(0, 250);
-    return { entity, discoveredUrls, skipped: false };
+    return { entity, discoveredUrls, skipped: false, sourcePages: pages.map(toSourcePageCapture) };
   }
 
   private async fetchRelatedEntities(
@@ -380,6 +388,7 @@ export class CricbuzzProvider implements CricketProvider {
     limit: number,
     expectedType: EntityType,
     entities: Map<string, CrikoraEntity>,
+    capturedPages: Map<string, PageRecord>,
     signal?: AbortSignal
   ): Promise<void> {
     if (!limit) return;
@@ -400,6 +409,7 @@ export class CricbuzzProvider implements CricketProvider {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
       const page = await this.tryFetchPage(new URL(link.url), `related:${expectedType}`, signal);
       if (page) {
+        capturedPages.set(page.url, page);
         const parsed = parseEntityPage(page.$, page.url, expectedType);
         if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
       }
@@ -549,8 +559,22 @@ export class CricbuzzProvider implements CricketProvider {
     if (/captcha|robot check|access denied|unusual traffic/i.test(html.slice(0, 100_000))) {
       throw createSourceHttpError("Cricbuzz presented an access challenge; the collector stopped without bypassing it.", 403);
     }
-    return { url: url.toString(), html, $: load(html) };
+    return { url: url.toString(), html, $: load(html), fetchedAt: new Date().toISOString() };
   }
+}
+
+
+function toSourcePageCapture(page: PageRecord): SourcePageCapture {
+  const parsed = new URL(page.url);
+  const identity = classifyCricbuzzEntityUrl(page.url);
+  return {
+    url: page.url,
+    html: page.html,
+    contentType: "text/html; charset=utf-8",
+    fetchedAt: page.fetchedAt,
+    pageKind: parsed.pathname.split("/").filter(Boolean)[0] ?? "root",
+    ...(identity ? { entityType: identity.entityType, sourceId: identity.sourceId } : {})
+  };
 }
 
 function readSourceStatus(error: unknown): number | undefined {
@@ -885,6 +909,12 @@ function extractControls($: PageDoc): Array<Record<string, string>> {
 function extractPageData($: PageDoc, url: string): Record<string, unknown> {
   const title = clean($("h1").first().text() || $("title").text());
   const mainText = getMainText($);
+  const scripts: string[] = [];
+  $("script").each((_i, script) => {
+    const content = $(script).html() ?? "";
+    if (content.includes("self.__next_f.push")) scripts.push(content);
+  });
+  const serverComponents = extractCricbuzzFlightData(scripts);
   return {
     title,
     canonicalUrl: $("link[rel='canonical']").attr("href") || url,
@@ -896,6 +926,7 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     tables: extractTables($),
     sections: extractSections($),
     structuredData: extractStructuredData($),
+    serverComponents,
     controls: extractControls($),
     text: mainText.slice(0, 30000)
   };
