@@ -148,8 +148,16 @@ describe("Cricbuzz source URL classification", () => {
     expect(seriesStats?.sourceId).not.toBe(seriesSquads?.sourceId);
   });
 
-  it("includes women-only ranking URLs in Crikora cricket data", () => {
-    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeDefined();
+  it("excludes women's-only ranking, match and series routes", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeUndefined();
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/live-cricket-scores/555/example-women-vs-women")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-series/555/womens-league")).toBe(false);
+  });
+
+  it("classifies the 1877 historical archive year page", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-scorecard-archives/1877"))
+      .toEqual({ entityType: "metadata", sourceId: "scorecard-archives:1877" });
   });
   it("rejects URLs that are not known entity routes", () => {
     expect(classifyCricbuzzEntityUrl("https://example.com/profiles/11527/paul-walter")).toBeUndefined();
