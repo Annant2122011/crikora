@@ -34,6 +34,14 @@ export interface CricbuzzSitemapDiscoveryResult {
   pageUrls: string[];
 }
 
+function isWomen'sCricketPath(path: string): boolean {
+  return /(?:^|[\\/_-])(?:women|womens|wpl)(?:$|[\\/_-])/i.test(path);
+}
+
+function isWomen'sCricketText(value: string): boolean {
+  return /\\b(?:women(?:'s)?|wpl)\\b/i.test(value);
+}
+
 const ORIGIN = "https://www.cricbuzz.com";
 const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores", bucket: "live" },
@@ -134,6 +142,8 @@ export class CricbuzzProvider implements CricketProvider {
         if (match?.[1] && !discovered.has(match[1])) {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
           const stub = parseMatchIndexStub(item, page, link);
+          const indexText = String((stub.stats as Record<string, unknown>).indexCardText ?? "");
+          if (isWomen'sCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
           discovered.set(match[1], item);
           indexRecords.set(match[1], stub);
         }
@@ -284,6 +294,8 @@ export class CricbuzzProvider implements CricketProvider {
         if (!match?.[1] || discovered.has(match[1])) continue;
         const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
         const stub = parseMatchIndexStub(item, page, link);
+        const indexText = String((stub.stats as Record<string, unknown>).indexCardText ?? "");
+        if (isWomen'sCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
         discovered.set(item.id, item);
         matches.push(stub);
         addEntity(
@@ -381,6 +393,10 @@ export class CricbuzzProvider implements CricketProvider {
     if (!page) return { discoveredUrls: [], skipped: true };
 
     const identity = classifyCricbuzzEntityUrl(page.url);
+    if (identity && (identity.entityType === "match" || identity.entityType === "series") &&
+        isWomen'sCricketText(getMainText(page.$))) {
+      return { discoveredUrls: [], skipped: true };
+    }
     let entity: CrikoraEntity | undefined;
     let pages: PageRecord[] = [page];
     if (identity?.entityType === "match") {
