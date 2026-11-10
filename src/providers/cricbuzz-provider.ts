@@ -291,7 +291,9 @@ export class CricbuzzProvider implements CricketProvider {
       for (const pageUrl of discovered.pageUrls) pageUrls.add(pageUrl);
     }
 
-    if (!pageUrls.size) throw new Error("Cricbuzz sitemap discovery returned no allowed cricket page URLs.");
+    if (!pageUrls.size) {
+      console.warn("Crikora sitemap discovery found no accessible cricket pages; the caller can fall back to the saved cricket-only inventory.");
+    }
     return { sitemapUrls: [...sitemapUrls], pageUrls: [...pageUrls] };
   }
 
