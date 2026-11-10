@@ -7,7 +7,7 @@
 - The crawler parses a page through the existing Cricbuzz provider, stores its normalized entity in `crikora_cache`, and follows further allowlisted links.
 - Match overview, facts, squads and scorecard URLs have distinct classification. The allowlist explicitly accepts match facts and squad paths.
 - A page returning HTTP 401/403, 404 or another non-throttle 4xx, a redirect, or an access-challenge document is marked skipped individually. The run continues with other cricket pages. HTTP 429 honors `Retry-After`; transient 5xx/network failures use bounded retries. A challenge on one sitemap document is skipped while the remaining sitemap documents and saved inventory are still used.
-- At protected full-crawl start, the API reads the current public `/sitemap.xml`, follows its allowlisted child sitemap XML documents, and merges the resulting sitemap-listed page URLs with the saved inventory snapshot. Sitemap XML is discovery metadata, not a cricket entity. The seed allowlist includes the cricket route families and the exact additional public page paths listed by the current sitemap index (homepage, public information pages, careers and the account-info landing URL).
+- At protected full-crawl start, the API reads the current public `/sitemap.xml`, follows available cricket sitemap documents, and merges the resulting page URLs with the saved inventory snapshot. Sitemap XML is discovery metadata, not a cricket entity. Sitemap membership does not make homepage, advertising, careers, account or other non-cricket site pages eligible for collection.
 - A sitemap refresh adds newly discovered URLs to an already queued/running or paused crawl run; existing queue uniqueness prevents duplicate jobs.
 - The durable queue also stores a stable identity key derived from the Cricbuzz entity type and source ID. Alternate slugs for the same match, player, team, series or content item are deduplicated, while match facts, scorecards and squads remain separate page types. Current sitemap URLs take precedence over saved-snapshot aliases.
 - The worker drains the full-crawl queue before returning to normal live/upcoming/recent refreshes.
@@ -60,9 +60,9 @@ Do not put any of these secrets in the browser extension, website bundle, reposi
 
 ## Full crawl operation
 
-1. Apply migrations 001-004 to Neon production.
+1. Confirm migrations 001-005 are applied to Neon production.
 2. Configure the required core and worker environment variables in their respective hosting projects.
-3. Keep automation disabled until the deployment health check confirms that the core API can reach the same Neon production branch and the worker is ready.
+3. Keep the crawler setting disabled until the selected API and worker can reach the same Neon production branch and health checks pass.
 4. Set `CRIKORA_COLLECTION_ENABLED=true` to enable the protected scraper API. This internal switch does not require Cricbuzz-issued API credentials.
 5. Start with `POST /v1/crawl/start` on the worker project.
 6. Inspect `GET /api/crawl/status` on the core API with the admin bearer token.
