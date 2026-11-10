@@ -294,8 +294,7 @@ export class DurableCrawlService {
     if (claimed.rows.length) {
       await this.pool.query(
         `UPDATE public.crikora_archive_coverage
-            SET status = 'processing', last_attempted_at = now(),
-                attempt_count = attempt_count + 1, updated_at = now()
+            SET status = 'processing', last_attempted_at = now(), updated_at = now()
           WHERE source_url = ANY($1::text[])`,
         [claimed.rows.map(row => row.canonical_url)]
       );
