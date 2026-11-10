@@ -298,7 +298,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     }
   }
 
-  async getSourcePageSnapshot(sourceUrl: string, contentHash?: string): Promise<ArchivedSourcePage | undefined> {
+  async getSourcePageSnapshot(sourceUrl: string, requestedContentHash?: string): Promise<ArchivedSourcePage | undefined> {
     if (!validSourcePageUrl(sourceUrl)) throw new Error("Archive lookup refused a URL outside the exact Cricbuzz HTTPS host.");
     const result = await this.pool.query<{
       source_url: string;
@@ -309,15 +309,16 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       content_sha256: string;
       body_gzip: Buffer | null;
       object_key: string | null;
+      body_bytes: number | string;
       fetched_at: Date | string;
     }>(
       `SELECT source_url, page_kind, entity_type, source_id, content_type,
-              content_sha256, body_gzip, object_key, fetched_at
+              content_sha256, body_gzip, object_key, body_bytes, fetched_at
        FROM public.crikora_source_page_snapshots
        WHERE source_url = $1 AND ($2::char(64) IS NULL OR content_sha256 = $2)
        ORDER BY id DESC
        LIMIT 1`,
-      [sourceUrl, contentHash ?? null]
+      [sourceUrl, requestedContentHash ?? null]
     );
     const row = result.rows[0];
     if (!row) return undefined;
@@ -335,8 +336,8 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     }
 
     const raw = gunzipSync(Buffer.from(compressed));
-    const contentHash = createHash("sha256").update(raw).digest("hex");
-    if (contentHash !== row.content_sha256.trim()) {
+    const calculatedHash = createHash("sha256").update(raw).digest("hex");
+    if (calculatedHash !== row.content_sha256.trim()) {
       throw new Error("Archived source page failed SHA-256 integrity verification.");
     }
     if (raw.byteLength !== Number(row.body_bytes)) {
@@ -348,7 +349,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       ...(row.entity_type ? { entityType: row.entity_type } : {}),
       ...(row.source_id ? { sourceId: row.source_id } : {}),
       contentType: row.content_type,
-      contentHash,
+      contentHash: calculatedHash,
       fetchedAt: new Date(row.fetched_at).toISOString(),
       html: raw.toString("utf8")
     };
