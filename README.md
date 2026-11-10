@@ -135,7 +135,7 @@ The permanent archive is an evidence-backed history layer separate from the curr
 
 Use `CrikoraApiClient.getArchiveCoverage()`, `listArchivedEntities()` and `getEntityHistory()` from the website or extension. Browser clients receive normalized JSON only. They never receive database credentials or raw HTML storage access.
 
-The archive crawl is continuous: after the durable backlog is drained, the existing worker keeps checking current match and section indexes, durably queues every indexed match URL for deep enrichment, and re-enqueues newly discovered pages. A large historical backfill can take substantial time. A coverage status of "captured" means that a permitted page was fetched and archived, not that every possible field was present on the page. Check extraction gaps and skipped/failed counts before declaring any route family complete.
+The archive crawl is continuous: after the durable backlog is drained, the existing worker keeps checking current match and section indexes, durably queues every indexed match URL for deep enrichment, and re-enqueues newly discovered pages. The live index feed remains on the configured 10–30-second cadence. Up to 10 already-captured match pages are scheduled for deep refresh per pass (live every 2 minutes; upcoming every 15 minutes), keeping facts, scorecards, squads and commentary current without flooding the historical queue. A large historical backfill can take substantial time. A coverage status of "captured" means that a permitted page was fetched and archived, not that every possible field was present on the page. Check extraction gaps and skipped/failed counts before declaring any route family complete.
 
 ## Neon setup
 
