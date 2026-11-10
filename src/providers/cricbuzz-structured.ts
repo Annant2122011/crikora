@@ -436,15 +436,25 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
         });
       });
     } else if (normalizedHeaders.some(header => header.includes("partnership"))) {
+      const runsIndex = normalizedHeaders.findIndex(header => /^(?:r|runs|partnership|partnershipruns|totalruns)$/.test(header));
+      const ballsIndex = normalizedHeaders.findIndex(header => /^(?:b|balls|totalballs)$/.test(header));
+      const batterOneIndex = normalizedHeaders.findIndex(header => /^(?:batter1|batterone|batsman1|player1)$/.test(header));
+      const batterTwoIndex = normalizedHeaders.findIndex(header => /^(?:batter2|battertwo|batsman2|player2)$/.test(header));
       tableNode.find("tr").each((_i, row) => {
         const cells = $(row).find("th,td").toArray().map(cell => clean($(cell).text()));
-        if (cells.length <= headers.length) {
-          partnershipIndex++;
-          innings.partnerships.push({ partnershipNumber: partnershipIndex, runs: Number(cells[1] ?? 0), description: cells.join(" | ") });
-        }
+        if (cells.length !== headers.length || cells.every((cell, index) => cell === headers[index])) return;
+        const runsText = runsIndex >= 0 ? cells[runsIndex] : cells.find(cell => /^\d+$/.test(cell));
+        if (!runsText || !/^\d+$/.test(runsText)) return;
+        innings.partnerships.push({
+          partnershipNumber: innings.partnerships.length + 1,
+          ...(batterOneIndex >= 0 && cells[batterOneIndex] ? { batterOne: cells[batterOneIndex] } : {}),
+          ...(batterTwoIndex >= 0 && cells[batterTwoIndex] ? { batterTwo: cells[batterTwoIndex] } : {}),
+          runs: Number(runsText),
+          ...(ballsIndex >= 0 && /^\d+$/.test(cells[ballsIndex] ?? "") ? { balls: Number(cells[ballsIndex]) } : {}),
+          description: cells.join(" | ")
+        });
       });
     }
-    void tableText;
   });
 }
 
