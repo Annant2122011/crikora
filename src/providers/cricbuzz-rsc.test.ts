@@ -23,6 +23,25 @@ describe("Cricbuzz React Server Component decoder", () => {
     });
   });
 
+  it("resolves row references inside nested player data", () => {
+    const flight = [
+      '1:{"playerData":{"name":"Example Batter","bio":"$2","career":"$3","unused":"$undefined"}}',
+      "2:TB,This player has a long-form biography.",
+      '3:{"odi":{"matches":12,"runs":700},"test":{"matches":3,"runs":90}}',
+      ""
+    ].join("\n");
+    const script = `self.__next_f.push([1,${JSON.stringify(flight)}]);`;
+
+    const decoded = decodeCricbuzzFlightScripts([script]);
+
+    expect(decoded?.keyedData.playerData?.[0]).toEqual({
+      name: "Example Batter",
+      bio: "This player has a long-form biography.",
+      career: { odi: { matches: 12, runs: 700 }, test: { matches: 3, runs: 90 } },
+      unused: null
+    });
+  });
+
   it("combines multiple React flight chunks", () => {
     const first = '1:{"matchInfo":{"id":123}}\n';
     const second = '2:{"matchHeader":{"state":"Complete"}}\n';
