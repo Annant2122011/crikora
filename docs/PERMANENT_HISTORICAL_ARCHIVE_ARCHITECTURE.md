@@ -30,9 +30,9 @@ The historical crawl must take the year links and match/series links from the so
 ## Permanent-retention rules
 
 - Every distinct normalized payload hash is inserted once per entity identity.
-- Every distinct raw HTML hash is inserted once per canonical source URL.
-- Identical refreshes update last-seen/coverage timestamps but do not duplicate archive bytes.
-- New/changed scorecards, commentary, player profiles, team pages, fixtures, news and statistics create new evidence versions.
+- Raw HTML is compressed and kept as reprocessing evidence. Static/low-churn pages are archived whenever their content changes; high-churn match/live-analysis pages are stored at most once per hour per URL. Every normalized entity change is still archived independently, so delivery/score/profile changes are not lost merely because the raw HTML snapshot cadence is throttled.
+- Identical refreshes update last-seen/coverage timestamps but do not duplicate archive bytes. Collector-generated observation timestamps are excluded from entity content hashes to prevent false versions.
+- New/changed normalized scorecards, commentary, player profiles, team pages, fixtures, news and statistics create new entity evidence versions. High-churn raw HTML is sampled hourly per URL to keep permanent evidence storage sustainable.
 - The live serving cache may still expire volatile rows. This does not delete archive snapshots.
 - No TTL, cleanup function or cache migration may delete from either snapshot table.
 - Stable latest entities are still upserted in `crikora_cache`; historical versions remain in the snapshot table.
