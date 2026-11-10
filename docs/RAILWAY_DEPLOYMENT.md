@@ -1,6 +1,6 @@
-# Railway deployment for Crikora
+# Railway fallback deployment for Crikora
 
-Railway runs the same TypeScript API handler and durable Neon-backed crawl queue as the Vercel adapter. It does not create a second database: Neon PostgreSQL remains the production source of truth.
+Vercel is the primary production runtime. Railway is a prepared fallback used only when Vercel cannot build or deploy (for example, a Hobby build-rate limit). Both runtimes share the same Neon PostgreSQL database and code; do not run both schedulers at once. The Vercel durable workflow owns the singleton Neon worker lease while primary. The Railway worker is configured as standby and must be explicitly enabled only during a fallback.
 
 ## Services
 
@@ -26,7 +26,7 @@ Set these server-side in Railway:
 - `DATABASE_URL`: Neon pooled connection string for the Crikora production branch
 - `CRIKORA_ADMIN_SECRET`: private random bearer secret
 - `CRIKORA_REFRESH_SECRET`: private random bearer secret shared with the worker
-- `CRICBUZZ_AUTOMATION_AUTHORIZED=false` until the source authorization and operational start are explicitly approved
+- `CRIKORA_COLLECTION_ENABLED=false` until the operator enables the chosen API runtime
 - `CRICBUZZ_MIN_REQUEST_INTERVAL_MS=1000`
 - `CRIKORA_CRAWL_BATCH_SIZE=2`
 - `CRIKORA_CRAWL_MAX_ATTEMPTS=4`
@@ -44,15 +44,16 @@ The API's public health route is `GET /api/health`; data routes include `/api/v1
 - `CRIKORA_WORKER_LEASE_SECONDS=180`
 - `CRIKORA_WORKER_IDLE_POLL_SECONDS=10`
 - `CRIKORA_START_FULL_CRAWL=true`
+- `CRIKORA_WORKER_ENABLED=false` while Vercel is primary; set to `true` only during a Railway fallback
 
 Do not place any of these values in browser code, a public repository, logs or screenshots.
 
 ## Safe first deployment
 
-1. Deploy the API and worker with `CRICBUZZ_AUTOMATION_AUTHORIZED=false`. The worker idles and makes no Cricbuzz requests.
+1. Keep Railway deployed but set `CRIKORA_WORKER_ENABLED=false`; the worker waits in standby without acquiring the Neon singleton lease. Keep `CRIKORA_COLLECTION_ENABLED=false` until the Railway API is selected for a fallback.
 2. Verify `GET /api/health` reports PostgreSQL reachable, automation disabled, and 600-second retention.
 3. Verify the worker logs show its disabled/idle state and that the Neon crawl queue remains empty.
-4. Only after the source permission and request policy have been explicitly approved for production operation, set the API variable `CRICBUZZ_AUTOMATION_AUTHORIZED=true` and use the authenticated settings endpoint to enable the crawler. With `CRIKORA_START_FULL_CRAWL=true`, the worker seeds the current sitemap plus saved inventory and drains the durable queue in sequential bounded batches.
+4. During a Vercel build-rate-limit fallback, first disable/stop the Vercel workflow and let it release the Neon worker lease. Then set Railway API `CRIKORA_COLLECTION_ENABLED=true`, set Railway worker `CRIKORA_WORKER_ENABLED=true`, and enable the existing Neon crawler setting. The Railway worker resumes the existing durable queue rather than creating a duplicate run.
 
 To enable via an authenticated server-side request after deployment:
 
@@ -63,7 +64,7 @@ curl -X PUT "https://<api-service-domain>/api/settings" \
   -d '{"enabled":true,"refreshIntervalSeconds":10}'
 ```
 
-Never expose the admin secret to the browser. The 10, 15, 20 and 30-second refresh choices are persisted in Neon. Source pacing is separate from refresh cadence; HTTP 401/403, redirects and 429 responses continue to stop or pause collection rather than being bypassed.
+Never expose the admin secret to the browser. The 10, 15, 20 and 30-second refresh choices are persisted in Neon. Source pacing is separate from refresh cadence. A denied or irrelevant cricket page is skipped; 429 honors `Retry-After`; transient 5xx/network failures retry. No challenge is bypassed.
 
 ## Data completeness and retention
 
@@ -71,4 +72,4 @@ The collector extracts structured fields, links, tables, JSON-LD, visible text a
 
 ## Build validation
 
-Run `npm run typecheck`, `npm run test` and `npm run build:railway`. Railway builds both the API handler and worker entrypoint into `dist-railway/`.
+Run `npm run typecheck`, `npm run test` and `npm run build:railway`. Railway builds both the API handler and worker entrypoint into `dist-railway/`. Keep `CRIKORA_WORKER_ENABLED=false` except during a Vercel deployment fallback.

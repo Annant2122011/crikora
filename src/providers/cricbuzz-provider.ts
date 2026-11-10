@@ -248,31 +248,53 @@ export class CricbuzzProvider implements CricketProvider {
    */
   async discoverSitemapUrls(signal?: AbortSignal): Promise<CricbuzzSitemapDiscoveryResult> {
     const pending = [new URL("/sitemap.xml", ORIGIN)];
+    const visitedSitemaps = new Set<string>();
     const sitemapUrls = new Set<string>();
     const pageUrls = new Set<string>();
 
     while (pending.length) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz sitemap discovery aborted.");
-      if (sitemapUrls.size >= 50) {
+      if (visitedSitemaps.size >= 50) {
         throw new Error("Cricbuzz sitemap discovery exceeded the 50-document safety limit.");
       }
       const sitemapUrl = pending.shift()!;
       const canonicalSitemapUrl = sitemapUrl.toString();
-      if (sitemapUrls.has(canonicalSitemapUrl)) continue;
+      if (visitedSitemaps.has(canonicalSitemapUrl)) continue;
       if (!isAllowedCricbuzzSitemapUrl(canonicalSitemapUrl)) {
         throw new Error("Refusing to fetch a sitemap outside the Cricbuzz sitemap allowlist.");
       }
+      visitedSitemaps.add(canonicalSitemapUrl);
 
-      const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+      let xml: string;
+      try {
+        xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+      } catch (error) {
+        if (signal?.aborted) throw signal.reason ?? error;
+        const status = readSourceStatus(error);
+        if (status === undefined || status === 401 || status === 403 ||
+            (status !== undefined && status >= 300 && status < 400) ||
+            (status !== undefined && status >= 400 && status < 500 && status !== 429)) {
+          console.warn("Crikora skipped an unavailable sitemap document and will continue with other cricket sitemaps or the saved inventory", {
+            url: canonicalSitemapUrl,
+            status,
+            message: error instanceof Error ? error.message : String(error)
+          });
+          continue;
+        }
+        throw error;
+      }
+
       sitemapUrls.add(canonicalSitemapUrl);
       const discovered = parseCricbuzzSitemapXml(xml, canonicalSitemapUrl);
       for (const child of discovered.sitemapUrls) {
-        if (!sitemapUrls.has(child)) pending.push(new URL(child));
+        if (!visitedSitemaps.has(child)) pending.push(new URL(child));
       }
       for (const pageUrl of discovered.pageUrls) pageUrls.add(pageUrl);
     }
 
-    if (!pageUrls.size) throw new Error("Cricbuzz sitemap discovery returned no allowed cricket page URLs.");
+    if (!pageUrls.size) {
+      console.warn("Crikora sitemap discovery found no accessible cricket pages; the caller can fall back to the saved cricket-only inventory.");
+    }
     return { sitemapUrls: [...sitemapUrls], pageUrls: [...pageUrls] };
   }
 
@@ -405,12 +427,17 @@ export class CricbuzzProvider implements CricketProvider {
         });
         return undefined;
       }
-      if (
-        status === 401 ||
-        status === 403 ||
-        status === 429 ||
-        (status !== undefined && status >= 500)
-      ) {
+      if (status === 401 || status === 403 ||
+          (status !== undefined && status >= 400 && status < 500 && status !== 429)) {
+        console.warn("Crikora skipped one challenged or unavailable cricket page; the rest of the crawl will continue", {
+          context,
+          url: url.toString(),
+          status,
+          message: error instanceof Error ? error.message : String(error)
+        });
+        return undefined;
+      }
+      if (status === 429 || (status !== undefined && status >= 500)) {
         throw error;
       }
       console.warn("Crikora skipped an unavailable Cricbuzz page", {
@@ -608,12 +635,11 @@ function assertAllowedPageUrl(url: URL): void {
   if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
-  const cricketPage = /^\/(?:cricket-match(?:-facts|-squads|\/)|cricket-match-highlights\/|live-cricket-|profiles(?:\/|$)|cricket-team(?:\/|$)|cricket-series(?:\/|$)|cricket-news(?:\/|$)|cricket-videos(?:\/|$)|cricket-gallery(?:\/|$)|cricket-photo-gallery(?:\/|$)|cricket-stats(?:\/|$)|cricket-schedule(?:\/|$)|cricket-scorecard-archives(?:\/|$)|cricket-match-forecast\/|player-match-performance\/|special-content\/|player-match-highlights\/)/.test(url.pathname);
-  // Additional public pages explicitly listed in Cricbuzz's sitemap index.
-  // Requests are unauthenticated; redirects are recorded as skipped, never followed.
-  const sitemapListedSitePage = /^\/$|^\/info(?:\/|$)|^\/careers\/?$|^\/premium-subscription\/user\/account-info\/?$/.test(url.pathname);
-  if (!cricketPage && !sitemapListedSitePage) {
-    throw new Error("Page path is outside the Cricbuzz crawler allowlist: " + url.pathname);
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const isKnownCricketIndex = INDEXES.some(index => index.path === path) || SECTION_INDEXES.includes(path);
+  const isKnownCricketDataRoute = Boolean(classifyCricbuzzEntityUrl(url.toString()));
+  if (!isKnownCricketIndex && !isKnownCricketDataRoute) {
+    throw new Error("Page path is outside Crikora's cricket-data scope: " + url.pathname);
   }
 }
 

@@ -14,7 +14,7 @@ const env = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   LOG_LEVEL: z.string().default("info"),
   POLL_INTERVAL_SECONDS: z.enum(["10", "15", "20", "30"]).default("10"),
-  CRICBUZZ_AUTOMATION_AUTHORIZED: z.enum(["true", "false"]).default("false"),
+  CRIKORA_COLLECTION_ENABLED: z.enum(["true", "false"]).default("false"),
   DATABASE_URL: z.string().min(1),
   CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).default(0),
   CRICBUZZ_MAX_MATCHES_PER_POLL: z.coerce.number().int().min(1).max(50).default(2),
@@ -66,7 +66,7 @@ app.get("/", async () => ({
   source: provider.id,
   storage: "postgres",
   retentionSeconds: 600,
-  automationAuthorized: env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+  collectionEnabled: env.CRIKORA_COLLECTION_ENABLED === "true",
   health: "/health",
   apiBasePath: "/v1",
   endpoints: {
@@ -103,7 +103,7 @@ app.get("/health", async (_request, reply) => {
       source: provider.id,
       storage: "postgres",
       retentionSeconds: 600,
-      automationAuthorized: env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+      collectionEnabled: env.CRIKORA_COLLECTION_ENABLED === "true",
       refreshIntervalSeconds: Number(env.POLL_INTERVAL_SECONDS)
     };
   } catch {
@@ -221,7 +221,7 @@ const cleanupTimer = setInterval(() => {
 cleanupTimer.unref();
 
 await app.listen({ host: env.HOST, port: env.PORT });
-if (env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true") {
+if (env.CRIKORA_COLLECTION_ENABLED === "true") {
   void poller.tick().catch(() => undefined);
   poller.start();
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { EntityRepository } from "../domain/entities.js";
 import { dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, type CricbuzzProvider } from "../providers/cricbuzz-provider.js";
 
@@ -129,6 +129,7 @@ export class DurableCrawlService {
       );
       if (active.rows[0]) {
         const runId = active.rows[0].id;
+        await this.skipOutOfScopeJobs(client, runId);
         const inserted = await client.query(
           "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
           [runId, urls, identityKeys, "sitemap"]
@@ -149,6 +150,7 @@ export class DurableCrawlService {
       );
       if (paused.rows[0]) {
         const runId = paused.rows[0].id;
+        await this.skipOutOfScopeJobs(client, runId);
         const inserted = await client.query(
           "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
           [runId, urls, identityKeys, "sitemap"]
@@ -200,6 +202,22 @@ export class DurableCrawlService {
     } finally {
       client.release();
     }
+  }
+
+  private async skipOutOfScopeJobs(client: PoolClient, runId: string): Promise<number> {
+    const queued = await client.query<{ id: string; canonical_url: string }>(
+      "SELECT id, canonical_url FROM public.crikora_crawl_queue WHERE run_id = $1 AND status IN ('pending','processing')",
+      [runId]
+    );
+    const ids = queued.rows
+      .filter(row => !this.provider.isAllowedCrawlUrl(row.canonical_url))
+      .map(row => String(row.id));
+    if (!ids.length) return 0;
+    const result = await client.query(
+      "UPDATE public.crikora_crawl_queue SET status = 'skipped', lease_token = NULL, lease_until = NULL, completed_at = COALESCE(completed_at, now()), last_error = $1, updated_at = now() WHERE run_id = $2 AND id = ANY($3::bigint[]) AND status IN ('pending','processing')",
+      ["Skipped because the URL is outside Crikora's cricket-data scope.", runId, ids]
+    );
+    return result.rowCount ?? 0;
   }
 
   async getLatestStatus(): Promise<CrawlRunSummary | undefined> {
@@ -260,6 +278,14 @@ export class DurableCrawlService {
       }
 
       try {
+        if (!this.provider.isAllowedCrawlUrl(row.canonical_url)) {
+          await this.pool.query(
+            "UPDATE public.crikora_crawl_queue SET status = 'skipped', lease_token = NULL, lease_until = NULL, completed_at = now(), last_error = $1, updated_at = now() WHERE id = $2 AND run_id = $3 AND lease_token = $4",
+            ["Skipped because the URL is outside Crikora's cricket-data scope.", row.id, active.id, leaseToken]
+          );
+          processed += 1;
+          continue;
+        }
         const page = await this.provider.fetchCrawlPage(row.canonical_url, signal);
         if (page.entity) await this.repository.upsertMany([page.entity]);
         if (page.discoveredUrls.length) {
@@ -287,22 +313,19 @@ export class DurableCrawlService {
         const status = sourceStatus(error);
         const message = errorMessage(error);
 
-        if (status === 401 || status === 403 || (status !== undefined && status >= 300 && status < 400)) {
+        if ((status !== undefined && status >= 300 && status < 400) ||
+            (status !== undefined && status >= 400 && status < 500 && status !== 429)) {
           await this.pool.query(
-            "UPDATE public.crikora_crawl_queue SET status = 'pending', lease_token = NULL, lease_until = NULL, last_error = $1, updated_at = now() WHERE id = $2 AND run_id = $3 AND lease_token = $4",
+            "UPDATE public.crikora_crawl_queue SET status = 'skipped', lease_token = NULL, lease_until = NULL, completed_at = now(), last_error = $1, updated_at = now() WHERE id = $2 AND run_id = $3 AND lease_token = $4",
             [message, row.id, active.id, leaseToken]
           );
-          await this.releaseClaimed(active.id, leaseToken);
-          await this.pool.query(
-            "UPDATE public.crikora_crawl_runs SET status = 'paused', last_error = $1 WHERE id = $2",
-            [message, active.id]
-          );
-          await this.pool.query(
-            "UPDATE public.crikora_crawler_settings SET enabled = false, lease_until = NULL, last_error = $1, updated_at = now() WHERE id = 1",
-            [message]
-          );
-          const run = await this.readSummary(active.id);
-          return { active: false, status: "paused", processedThisBatch: processed, run };
+          processed += 1;
+          console.warn("Crikora skipped one unavailable cricket page and continued the durable run", {
+            url: row.canonical_url,
+            status: status ?? null,
+            message
+          });
+          continue;
         }
 
         const attempts = count(row.attempts);

@@ -1,7 +1,39 @@
-import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, isAllowedCricbuzzPageUrl } from "./cricbuzz-provider.js";
+import { describe, expect, it, vi } from "vitest";
+import { CricbuzzProvider, classifyCricbuzzEntityUrl, dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, isAllowedCricbuzzPageUrl } from "./cricbuzz-provider.js";
 
 describe("full-crawl route coverage", () => {
+  it.each([403, 404])("skips one page returning HTTP %i without failing the crawl call", async status => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Access denied", {
+      status,
+      headers: { "content-type": "text/html" }
+    })));
+    const provider = new CricbuzzProvider({
+      minRequestIntervalMs: 0,
+      maxMatchesPerPoll: 2,
+      maxProfilesPerPoll: 1,
+      maxTeamsPerPoll: 1,
+      maxSeriesPerPoll: 1,
+      maxVenuesPerPoll: 1,
+      maxContentPagesPerPoll: 1,
+      timeoutMs: 1_000,
+      maxResponseBytes: 100_000,
+      userAgent: "Crikora test suite"
+    });
+
+    try {
+      const result = await provider.fetchCrawlPage(
+        "https://www.cricbuzz.com/cricket-news/140765/sample-story"
+      );
+      expect(result.skipped).toBe(true);
+      expect(result.entity).toBeUndefined();
+      expect(result.discoveredUrls).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      expect(globalThis.fetch).toBe(originalFetch);
+    }
+  });
+
   it("allows facts, scorecard and squad pages used by match enrichment", () => {
     expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-match-facts/161256/example")).toBe(true);
     expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-match-squads/161256/example")).toBe(true);
@@ -87,10 +119,15 @@ describe("full-crawl route coverage", () => {
     ]);
   });
 
-  it("accepts the additional public pages explicitly listed in Cricbuzz's sitemap index", () => {
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/")).toBe(true);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/info/contact")).toBe(true);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/careers")).toBe(true);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/premium-subscription/user/account-info")).toBe(true);
+  it("keeps the crawl focused on cricket data and rejects general site pages", () => {
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-match/live-scores")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-news")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/profiles/11527/paul-walter")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-team/india/2")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/info/contact")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/info/advertise")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/careers")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/premium-subscription/user/account-info")).toBe(false);
   });
 });
