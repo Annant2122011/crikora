@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { Pool } from "pg";
+import type { SourcePageCapture } from "../domain/types.js";
+import type { ArchiveCoverageRow, ArchiveRepository, EntityHistoryRecord } from "./archive-repository.js";
 import {
   DATA_TTL_SECONDS,
   getEntityRetentionClass,
@@ -31,8 +35,40 @@ function hydrate(row: CacheRow): StoredEntity {
   };
 }
 
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const key of Object.keys(record).sort()) {
+    if (["fetchedAt", "updatedAt", "fetched_at", "updated_at", "observedAt"].includes(key)) continue;
+    output[key] = stableValue(record[key]);
+  }
+  return output;
+}
+
+export function hashEntityPayload(payload: Record<string, unknown>): string {
+  return createHash("sha256").update(JSON.stringify(stableValue(payload))).digest("hex");
+}
+
+function validSourcePageUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "www.cricbuzz.com" &&
+      !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+function toIso(value: Date | string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error("Archive timestamp must be a valid date.");
+  return date.toISOString();
+}
+
 /** PostgreSQL JSON store with per-entity volatile or persistent retention. */
-export class PostgresEntityRepository implements EntityRepository {
+export class PostgresEntityRepository implements EntityRepository, ArchiveRepository {
   private readonly pool: Pool;
   constructor(connectionString: string) {
     this.pool = new Pool({
@@ -57,6 +93,14 @@ export class PostgresEntityRepository implements EntityRepository {
         const expiresAt = retentionClass === "ephemeral"
           ? new Date(fetchedAt.getTime() + DATA_TTL_SECONDS * 1000).toISOString()
           : null;
+        const payloadHash = hashEntityPayload(entity.payload);
+        await client.query(
+          `INSERT INTO public.crikora_entity_snapshots
+            (entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at)
+           VALUES ($1, $2, $3, $4, 1, $5::jsonb, $6::timestamptz)
+           ON CONFLICT (entity_type, source_id, payload_hash) DO NOTHING`,
+          [entity.entityType, entity.sourceId, entity.sourceUrl, payloadHash, JSON.stringify(entity.payload), fetchedAt.toISOString()]
+        );
         await client.query(
           `INSERT INTO public.crikora_cache
             (entity_type, source_id, source_url, payload, fetched_at, expires_at, retention_class, updated_at)
@@ -126,6 +170,125 @@ export class PostgresEntityRepository implements EntityRepository {
       "DELETE FROM public.crikora_cache WHERE expires_at IS NOT NULL AND expires_at <= now()"
     );
     return result.rowCount ?? 0;
+  }
+
+
+  async recordSourcePages(pages: SourcePageCapture[]): Promise<{ inserted: number; duplicates: number }> {
+    if (!pages.length) return { inserted: 0, duplicates: 0 };
+    const client = await this.pool.connect();
+    let inserted = 0;
+    let duplicates = 0;
+    try {
+      await client.query("BEGIN");
+      for (const page of pages) {
+        if (!validSourcePageUrl(page.url)) throw new Error("Archive refused a source page outside the exact Cricbuzz HTTPS host.");
+        const fetchedAt = toIso(page.fetchedAt);
+        const raw = Buffer.from(page.html, "utf8");
+        const contentHash = createHash("sha256").update(raw).digest("hex");
+        const compressed = gzipSync(raw);
+        const pageKind = (page.pageKind || "unknown").slice(0, 120);
+        const write = await client.query(
+          `INSERT INTO public.crikora_source_page_snapshots
+            (source_url, page_kind, entity_type, source_id, content_type, content_sha256, body_gzip, body_bytes, fetched_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)
+           ON CONFLICT (source_url, content_sha256) DO NOTHING
+           RETURNING id`,
+          [page.url, pageKind, page.entityType ?? null, page.sourceId ?? null,
+            page.contentType || "text/html; charset=utf-8", contentHash, compressed, raw.byteLength, fetchedAt]
+        );
+        const wasInserted = write.rowCount === 1;
+        if (wasInserted) inserted += 1;
+        else duplicates += 1;
+        await client.query(
+          `INSERT INTO public.crikora_archive_coverage
+            (source_url, identity_key, page_kind, status, last_attempted_at, last_fetched_at,
+             last_http_status, last_content_sha256, fetch_count, version_count, attempt_count, updated_at)
+           VALUES ($1, $2, $3, 'captured', $4::timestamptz, $4::timestamptz, 200, $5, 1, $6, 1, now())
+           ON CONFLICT (source_url) DO UPDATE SET
+             identity_key = EXCLUDED.identity_key,
+             page_kind = EXCLUDED.page_kind,
+             status = 'captured',
+             last_attempted_at = EXCLUDED.last_attempted_at,
+             last_fetched_at = EXCLUDED.last_fetched_at,
+             last_http_status = 200,
+             last_content_sha256 = EXCLUDED.last_content_sha256,
+             fetch_count = public.crikora_archive_coverage.fetch_count + 1,
+             version_count = public.crikora_archive_coverage.version_count + EXCLUDED.version_count,
+             attempt_count = public.crikora_archive_coverage.attempt_count + 1,
+             last_error = NULL,
+             updated_at = now()`,
+          [page.url, `page:${page.pageKind}:${page.sourceId ?? contentHash.slice(0, 20)}`,
+            pageKind, fetchedAt, contentHash, wasInserted ? 1 : 0]
+        );
+      }
+      await client.query("COMMIT");
+      return { inserted, duplicates };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listEntityHistory(entityType: EntityType, sourceId: string, limit = 50, before?: string): Promise<EntityHistoryRecord[]> {
+    const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
+    const cursor = before ? toIso(before) : null;
+    const result = await this.pool.query<{
+      id: string | number;
+      entity_type: EntityType;
+      source_id: string;
+      source_url: string;
+      payload_hash: string;
+      schema_version: number;
+      payload: Record<string, unknown>;
+      observed_at: Date | string;
+    }>(
+      `SELECT id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
+       FROM public.crikora_entity_snapshots
+       WHERE entity_type = $1 AND source_id = $2
+         AND ($4::timestamptz IS NULL OR observed_at < $4::timestamptz)
+       ORDER BY observed_at DESC, id DESC
+       LIMIT $3`,
+      [entityType, sourceId, safeLimit, cursor]
+    );
+    return result.rows.map(row => ({
+      id: String(row.id),
+      entityType: row.entity_type,
+      sourceId: row.source_id,
+      sourceUrl: row.source_url,
+      payloadHash: row.payload_hash.trim(),
+      schemaVersion: row.schema_version,
+      payload: row.payload,
+      observedAt: new Date(row.observed_at).toISOString()
+    }));
+  }
+
+  async getArchiveCoverage(): Promise<ArchiveCoverageRow[]> {
+    const result = await this.pool.query<{
+      page_kind: string;
+      status: string;
+      page_count: string | number;
+      total_fetches: string | number;
+      total_versions: string | number;
+      last_fetched_at: Date | string | null;
+    }>(
+      `SELECT page_kind, status, count(*) AS page_count,
+              COALESCE(sum(fetch_count), 0) AS total_fetches,
+              COALESCE(sum(version_count), 0) AS total_versions,
+              max(last_fetched_at) AS last_fetched_at
+       FROM public.crikora_archive_coverage
+       GROUP BY page_kind, status
+       ORDER BY page_kind, status`
+    );
+    return result.rows.map(row => ({
+      pageKind: row.page_kind,
+      status: row.status,
+      pageCount: Number(row.page_count),
+      totalFetches: Number(row.total_fetches),
+      totalVersions: Number(row.total_versions),
+      lastFetchedAt: row.last_fetched_at ? new Date(row.last_fetched_at).toISOString() : null
+    }));
   }
 
   async close(): Promise<void> { await this.pool.end(); }
