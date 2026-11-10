@@ -78,7 +78,7 @@ A full historical archive may take hours or days depending on page count, upstre
 
 ## Product scope
 
-The Crikora product's established scope is men's cricket. Women's-only route families and rankings are excluded at URL discovery; match/series cards and pages are also filtered when the source labels them as women's cricket. Generic public profile indexes can be ambiguous when the source does not expose a gender/competition label, so the crawler must not infer gender from a player's name. Source authorization and source restrictions always take precedence. If scope is changed later, it must be an explicit product decision and not an accidental parser side effect.
+The Crikora product's established scope is men's cricket. Women's-only route families and rankings are excluded at URL discovery; match, series, player and team pages are also filtered when the source explicitly labels them as women's cricket. Generic public profile indexes can be ambiguous when the source does not expose a competition label, so the crawler does not infer gender from a player's name. Source authorization and source restrictions always take precedence. If scope is changed later, it must be an explicit product decision and not an accidental parser side effect.
 
 ## Deployment and acceptance gates
 
