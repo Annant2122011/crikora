@@ -383,8 +383,29 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
   // Keep the saved inventory as a backstop, then merge the current public sitemap URLs.
   // Sitemap XML requests use the same source allowlist, spacing, timeout and denial handling.
   const savedInventoryUrls = getSitemapUrls();
-  const liveSitemap = await getProvider().discoverSitemapUrls(AbortSignal.timeout(45_000));
+  let liveSitemap = { sitemapUrls: [] as string[], pageUrls: [] as string[] };
+  try {
+    liveSitemap = await getProvider().discoverSitemapUrls(AbortSignal.timeout(45_000));
+  } catch (error) {
+    const status = error && typeof error === "object" && "sourceStatus" in error
+      ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+      : undefined;
+    if (
+      status === 401 || status === 403 ||
+      (status !== undefined && status >= 300 && status < 400) ||
+      (status !== undefined && status >= 400 && status < 500 && status !== 429)
+    ) {
+      console.warn(
+        "Crikora could not refresh one or more live sitemap documents; continuing with the saved cricket-only inventory.",
+        { status, message: error instanceof Error ? error.message : String(error) }
+      );
+    } else {
+      // Preserve 429 Retry-After and transient 5xx/network failures.
+      throw error;
+    }
+  }
   // Current sitemap URLs take precedence over saved aliases with stale or malformed slugs.
+  // Individual non-cricket and source-denied pages are filtered or skipped by the provider.
   const mergedCandidateUrls = [...new Set([...liveSitemap.pageUrls, ...savedInventoryUrls])];
   const crawlUrls = dedupeCricbuzzPageUrls(mergedCandidateUrls);
   const result = await getDurableCrawl().startFullCrawl(crawlUrls);
