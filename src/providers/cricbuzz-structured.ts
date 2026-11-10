@@ -481,7 +481,13 @@ function flattenProfileAttributes(value: unknown, path: string, section: string 
 }
 
 function profileValue(source: DataRecord[], aliases: string[]): string | undefined {
+  const wanted = new Set(aliases.map(keyOf));
   for (const record of source) {
+    const sourceLabel = asString(scalar(record, ["label", "fieldLabel", "displayLabel"]));
+    if (sourceLabel && wanted.has(keyOf(sourceLabel))) {
+      const labelled = asString(scalar(record, ["value", "text", "displayValue"]));
+      if (labelled) return labelled;
+    }
     const value = stringField(record, aliases);
     if (value) return value;
   }
