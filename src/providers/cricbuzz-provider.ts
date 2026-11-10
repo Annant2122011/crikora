@@ -54,11 +54,15 @@ const SECTION_INDEXES = [
   "/cricket-schedule/series/all",
   "/cricket-schedule/upcoming-series/international",
   "/cricket-stats/icc-rankings/men/batting",
-  "/cricket-stats/icc-rankings/women/batting",
   "/cricket-stats/points-table/test/icc-world-test-championship",
   "/cricket-series/auctions",
   "/cricket-scorecard-archives"
 ];
+
+export function getCricbuzzDiscoverySeedUrls(): string[] {
+  return [...INDEXES.map(item => new URL(item.path, ORIGIN).toString()),
+    ...SECTION_INDEXES.map(path => new URL(path, ORIGIN).toString())];
+}
 
 const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = [
   { type: "match", pattern: /^\/live-cricket-scores\/(\d+)\/[^/]+\/?$/ },
@@ -228,6 +232,7 @@ export class CricbuzzProvider implements CricketProvider {
 
       for (const page of combinedPages) {
         capturedPages.set(page.url, page);
+        this.queueRelatedPageLinks(page.$, page.url);
         const related = collectRelatedLinks(page.$, page.url);
         mergeLinks(profileLinks, related.profiles);
         mergeLinks(teamLinks, related.teams);
@@ -240,6 +245,7 @@ export class CricbuzzProvider implements CricketProvider {
     }
 
     for (const page of sectionPages) {
+      this.queueRelatedPageLinks(page.$, page.url);
       const related = collectRelatedLinks(page.$, page.url);
       mergeLinks(profileLinks, related.profiles);
       mergeLinks(teamLinks, related.teams);
@@ -454,6 +460,24 @@ export class CricbuzzProvider implements CricketProvider {
     return { entity, discoveredUrls, skipped: false, sourcePages: pages.map(toSourcePageCapture) };
   }
 
+  private queueRelatedPageLinks($: PageDoc, baseUrl: string): void {
+    for (const link of getLinks($, baseUrl)) {
+      const identity = classifyCricbuzzEntityUrl(link.url);
+      if (!identity) continue;
+      let pending = this.pendingRelatedLinks.get(identity.entityType);
+      if (!pending) {
+        pending = new Map<string, LinkRecord>();
+        this.pendingRelatedLinks.set(identity.entityType, pending);
+      }
+      if (!pending.has(link.url)) pending.set(link.url, link);
+      while (pending.size > 2_000) {
+        const newest = [...pending.keys()].at(-1);
+        if (!newest) break;
+        pending.delete(newest);
+      }
+    }
+  }
+
   private async fetchRelatedEntities(
     links: Map<string, LinkRecord>,
     limit: number,
@@ -481,6 +505,7 @@ export class CricbuzzProvider implements CricketProvider {
       const page = await this.tryFetchPage(new URL(link.url), `related:${expectedType}`, signal);
       if (page) {
         capturedPages.set(page.url, page);
+        this.queueRelatedPageLinks(page.$, page.url);
         const parsed = parseEntityPage(page.$, page.url, expectedType);
         if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
       }
