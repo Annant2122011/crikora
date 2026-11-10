@@ -1,7 +1,7 @@
 import { load, type CheerioAPI } from "cheerio";
 import type { CrikoraEntity, EntityType } from "../domain/entities.js";
 import type { EventType, Match, MatchEvent, MatchStatus, ProviderSnapshot, SourcePageCapture } from "../domain/types.js";
-import { extractCricbuzzFlightData } from "./cricbuzz-rsc.js";
+import { decodeCricbuzzFlightScripts } from "./cricbuzz-rsc.js";
 import type { CricketProvider } from "./provider.js";
 
 type MatchBucket = "live" | "upcoming" | "completed";
@@ -916,7 +916,7 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     const content = $(script).html() ?? "";
     if (content.includes("self.__next_f.push")) scripts.push(content);
   });
-  const serverComponents = extractCricbuzzFlightData(scripts);
+  const serverComponents = decodeCricbuzzFlightScripts(scripts);
   return {
     title,
     canonicalUrl: $("link[rel='canonical']").attr("href") || url,
