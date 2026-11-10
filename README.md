@@ -128,7 +128,7 @@ PostgreSQL cleanup still deletes only expired cache rows. It never touches the p
 The permanent archive is an evidence-backed history layer separate from the current cache. It begins with every permitted current/saved sitemap URL, follows Cricbuzz's own scorecard-archive year links (including the source-published 1877 archive), then follows series, match, player, team, venue, news, statistics and media metadata links exposed by those pages. It does not synthesize missing years or claim that every statistic or delivery exists for every historical match.
 
 - `crikora_entity_snapshots` stores every observed distinct normalized entity version. A later return to an earlier payload is stored as a new observation.
-- `crikora_source_page_snapshots` stores gzip-compressed raw HTML and its SHA-256 digest, including embedded React flight scripts. Low-churn pages are captured whenever their content changes; high-churn match/live-analysis URLs are captured at most once per hour to prevent repeated full HTML from exhausting database storage. This does not throttle normalized entity snapshots.
+- `crikora_source_page_snapshots` stores source URL, page kind, SHA-256, original/compressed byte counts and an object key. The compressed HTML (including embedded React flight scripts) is stored in the private Neon Object Storage bucket `crikora-raw-archive`, not in PostgreSQL. Existing legacy `body_gzip` rows remain readable during migration. Low-churn pages are captured whenever content changes; high-churn match/live-analysis/index URLs are captured at most once per hour per URL. This does not throttle normalized entity snapshots.
 - `crikora_archive_coverage` records discovered, pending, processing, captured, skipped and failed URLs by route family.
 - `GET /v1/archive/coverage` reports the current archive coverage ledger.
 - `GET /v1/archive/entities/:entityType` lists each entity's latest archived version with cursor pagination.
@@ -192,11 +192,11 @@ GitHub Actions runs typecheck, build and tests on pushes and pull requests to `m
 
 ## Durable full-site crawl
 
-The initial crawl merges the saved 4,721-URL snapshot with the current sitemap inventory and then applies the cricket-only route allowlist; the raw sitemap count is not the number of queued cricket pages. Migration `004_crikora_durable_crawl.sql` adds a Neon-backed run and URL queue with lease recovery, retries and progress tracking. The worker starts it with `POST /v1/crawl/start` and drains it in bounded sequential batches before returning to live refresh.
+The initial crawl merges the saved 4,721-URL snapshot with the current sitemap inventory, explicitly seeds the scorecard archive and cricket directories, then applies the men's-cricket route allowlist; the raw sitemap count is not the number of queued cricket pages. Migration `004_crikora_durable_crawl.sql` adds a Neon-backed run and URL queue with lease recovery, retries and progress tracking. The worker drains one bounded historical page batch, then calls the lightweight `POST /api/refresh/index` route to keep live/upcoming/recent match summaries fresh while the backlog is still running.
 
 - Core API: `POST /api/crawl/start`, `GET /api/crawl/status`, `POST /api/crawl/step`, `POST /api/cleanup`.
 - Worker: `POST /v1/crawl/start` (requires the worker admin bearer token).
-- Volatile serving-cache payloads expire after 600 seconds. Migration 007 stores permanent normalized entity versions and gzip-compressed raw HTML versions separately from the serving cache. Queue metadata remains durable in Neon; page content is stored in the append-only archive tables.
+- Volatile serving-cache payloads expire after 600 seconds. Migration 007 stores permanent normalized entity versions and gzip-compressed raw HTML in private Neon Object Storage, with indexed hashes, keys, sizes and coverage metadata in PostgreSQL. Queue metadata remains durable in Neon.
 - The collector reads static HTML from the cricket-data routes in its allowlist. It ignores homepage, advertising, careers, account/login and unrelated site pages. It does not execute browser JavaScript, access private services, bypass CAPTCHA or source denials, or download video streams.
 
 See [the durable crawl runbook](./docs/DURABLE_FULL_CRAWL.md) for the complete route and deployment setup.
