@@ -29,6 +29,7 @@ interface Config {
   leaseSeconds: number;
   idlePollSeconds: number;
   startFullCrawlOnEnable: boolean;
+  workerEnabled: boolean;
 }
 
 interface ApiResult {
@@ -85,7 +86,8 @@ function readConfig(): Config {
     refreshSecret: requiredEnv("CRIKORA_REFRESH_SECRET"),
     leaseSeconds,
     idlePollSeconds,
-    startFullCrawlOnEnable: process.env.CRIKORA_START_FULL_CRAWL === "true"
+    startFullCrawlOnEnable: process.env.CRIKORA_START_FULL_CRAWL === "true",
+    workerEnabled: process.env.CRIKORA_WORKER_ENABLED !== "false"
   };
 }
 
@@ -315,6 +317,15 @@ async function main(): Promise<void> {
   }
 
   const config = readConfig();
+  if (!config.workerEnabled) {
+    log("Standalone Railway worker is in standby; Vercel is the primary scheduler. Set CRIKORA_WORKER_ENABLED=true only during a Vercel deployment fallback.");
+    while (!stopped.value) {
+      await new Promise(resolve => setTimeout(resolve, 60_000));
+    }
+    log("Standby worker stopped.");
+    return;
+  }
+
   const pool = new Pool({
     connectionString: config.databaseUrl,
     max: 1,
