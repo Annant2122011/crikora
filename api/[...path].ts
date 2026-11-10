@@ -79,7 +79,7 @@ function getDurableCrawl(): DurableCrawlService {
       getPool(),
       getProvider(),
       getRepository(),
-      Number(process.env.CRIKORA_CRAWL_BATCH_SIZE ?? 2),
+      Number(process.env.CRIKORA_CRAWL_BATCH_SIZE ?? 1),
       Number(process.env.CRIKORA_CRAWL_MAX_ATTEMPTS ?? 4),
       75
     );
