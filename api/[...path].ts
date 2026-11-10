@@ -263,7 +263,7 @@ async function updateSettings(request: ApiRequest, response: ApiResponse): Promi
   });
 }
 
-async function refresh(request: ApiRequest, response: ApiResponse): Promise<void> {
+async function refresh(request: ApiRequest, response: ApiResponse, indexOnly = false): Promise<void> {
   const expected = process.env.CRIKORA_REFRESH_SECRET;
   if (!expected) {
     sendJson(response, 503, { error: "CRIKORA_REFRESH_SECRET is not configured." });
@@ -318,7 +318,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
 
   try {
     // Leave ten seconds inside Vercel's 60-second function limit for Neon writes and error cleanup.
-    await getPoller().tick(AbortSignal.timeout(50_000));
+    await getPoller().tick(AbortSignal.timeout(50_000), indexOnly);
     const queuedFollowups = await getDurableCrawl().enqueueDiscoveredUrls(getProvider().getPendingRelatedUrls());
     await pool.query(
       `UPDATE public.crikora_crawler_settings
@@ -642,6 +642,7 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   }
   if (path === "settings" && method === "PUT") return updateSettings(request, response);
   if (path === "refresh" && method === "POST") return refresh(request, response);
+  if (path === "refresh/index" && method === "POST") return refresh(request, response, true);
   if (path === "crawl/start" && method === "POST") return startFullCrawl(request, response);
   if (path === "crawl/status" && method === "GET") return crawlStatus(request, response);
   if (path === "crawl/step" && method === "POST") return crawlStep(request, response);
