@@ -238,7 +238,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
              attempt_count = public.crikora_archive_coverage.attempt_count + 1,
              last_error = NULL,
              updated_at = now()`,
-          [page.url, `page:${page.pageKind}:${page.sourceId ?? contentHash.slice(0, 20)}`,
+          [page.url, page.entityType && page.sourceId ? `${page.entityType}:${page.sourceId}` : `url:${page.url}`,
             pageKind, fetchedAt, contentHash, wasInserted ? 1 : 0]
         );
       }
