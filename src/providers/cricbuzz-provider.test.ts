@@ -52,7 +52,7 @@ describe("Cricbuzz discovery seeds", () => {
     expect(seeds).toContain("https://www.cricbuzz.com/cricket-team");
     expect(seeds).toContain("https://www.cricbuzz.com/cricket-news");
     expect(seeds.every(isAllowedCricbuzzPageUrl)).toBe(true);
-    expect(seeds.some(url => /icc-rankings\\/women/i.test(url))).toBe(false);
+    expect(seeds.some(url => url.includes("/icc-rankings/women/"))).toBe(false);
   });
 });
 
