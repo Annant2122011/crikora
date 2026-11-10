@@ -926,7 +926,9 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     tables: extractTables($),
     sections: extractSections($),
     structuredData: extractStructuredData($),
-    serverComponents,
+    serverComponents: serverComponents
+      ? { rowCount: serverComponents.rowCount, keyedData: serverComponents.keyedData }
+      : undefined,
     controls: extractControls($),
     text: mainText.slice(0, 30000)
   };
