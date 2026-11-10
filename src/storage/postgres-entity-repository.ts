@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
+import { createArchiveObjectStoreFromEnv, type ArchiveObjectStore } from "./neon-s3-archive-object-store.js";
 import { Pool } from "pg";
 import type { SourcePageCapture } from "../domain/types.js";
 import type { ArchiveCoverageRow, ArchiveRepository, EntityHistoryRecord } from "./archive-repository.js";
@@ -81,7 +82,17 @@ function toIso(value: Date | string): string {
 /** PostgreSQL JSON store with per-entity volatile or persistent retention. */
 export class PostgresEntityRepository implements EntityRepository, ArchiveRepository {
   private readonly pool: Pool;
-  constructor(connectionString: string) {
+  private readonly archiveObjectStore?: ArchiveObjectStore;
+  constructor(
+    connectionString: string,
+    archiveObjectStore: ArchiveObjectStore | undefined = createArchiveObjectStoreFromEnv()
+  ) {
+    this.archiveObjectStore = archiveObjectStore;
+    if (process.env.NODE_ENV === "production" && !this.archiveObjectStore) {
+      throw new Error(
+        "Production historical archiving requires Neon Object Storage. Configure AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and CRIKORA_ARCHIVE_BUCKET."
+      );
+    }
     this.pool = new Pool({
       connectionString,
       max: 5,
@@ -232,12 +243,23 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
         const wasInserted = contentChanged && !rawCaptureThrottled;
         if (rawCaptureThrottled) deferred += 1;
         if (wasInserted) {
+          const objectKey = this.archiveObjectStore
+            ? `pages/sha256/${contentHash.slice(0, 2)}/${contentHash}.html.gz`
+            : null;
+          if (objectKey && this.archiveObjectStore) {
+            // Content-addressed keys make retries idempotent. A failed SQL
+            // transaction can leave an unreferenced blob, but can never make
+            // a committed DB row point to an upload that did not succeed.
+            await this.archiveObjectStore.put(objectKey, compressed, "application/gzip");
+          }
           await client.query(
             `INSERT INTO public.crikora_source_page_snapshots
-              (source_url, page_kind, entity_type, source_id, content_type, content_sha256, body_gzip, body_bytes, fetched_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)`,
-            [page.url, pageKind, page.entityType ?? null, page.sourceId ?? null,
-              page.contentType || "text/html; charset=utf-8", contentHash, compressed, raw.byteLength, fetchedAt]
+              (source_url, page_kind, entity_type, source_id, content_type, content_sha256,
+               body_gzip, object_key, body_bytes, fetched_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz)`,
+            [page.url, pageKind, page.entityType ?? null,
+              page.sourceId ?? null, page.contentType || "text/html; charset=utf-8",
+              contentHash, objectKey ? null : compressed, objectKey, raw.byteLength, fetchedAt]
           );
         }
         if (wasInserted) inserted += 1;
