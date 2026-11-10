@@ -111,6 +111,7 @@ Public read routes include:
 - `GET /v1/archive/coverage`
 - `GET /v1/archive/entities/:entityType?limit=50&before=<cursor>`
 - `GET /v1/archive/entities/:entityType/:sourceId/history?limit=50&before=<cursor>`
+- `GET /v1/entities/:entityType/:sourceId/details?limit=100` returns the latest entity plus its archived, linked subpages (for example a player's batting/bowling tabs).
 
 The API returns JSON envelopes with `data` and `meta`; timestamps, `retentionClass`, nullable `expiresAt` and a per-record `ttlSeconds` travel with stored entities. Browser code must use public GET routes only. Keep `DATABASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` server-side. Refresh and crawl control routes are protected and must never be called from the browser.
 
