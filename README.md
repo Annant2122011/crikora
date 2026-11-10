@@ -118,7 +118,7 @@ The API returns JSON envelopes with `data` and `meta`; timestamps, `retentionCla
 
 The cache applies a ten-minute lifetime only to volatile records: live match scores, player-stat subpages, rankings, live commentary, live graphs, over-by-over data, forecasts and other live-analysis pages. These records are refreshed by later collection cycles and are removed after 600 seconds without a refresh.
 
-Stable records are retained in the serving cache until their source identity is refreshed. The cache remains an up-to-date read model, not the historical record. Each distinct normalized entity version is also inserted into the permanent append-only `crikora_entity_snapshots` table. Each distinct consecutive raw Cricbuzz HTML page version is gzip-compressed and stored in `crikora_source_page_snapshots`. Both snapshot tables reject UPDATE and DELETE operations. The URL-level `crikora_archive_coverage` ledger records discovery and capture outcomes independently of cache expiry.
+Stable records are retained in the serving cache until their source identity is refreshed. The cache remains an up-to-date read model, not the historical record. Each distinct normalized entity version is also inserted into the permanent append-only `crikora_entity_snapshots` table. Raw Cricbuzz HTML is gzip-compressed in `crikora_source_page_snapshots`: low-churn pages are saved on each content change, while high-churn match/live-analysis pages are sampled at most once per hour per URL. Every normalized score, delivery/event, profile and statistics change continues to be versioned independently. Both snapshot tables reject UPDATE and DELETE operations. The URL-level `crikora_archive_coverage` ledger records discovery and capture outcomes independently of cache expiry.
 
 PostgreSQL cleanup still deletes only expired cache rows. It never touches the permanent snapshot tables. If source content changes A → B → A, all three observations are retained; identical consecutive refreshes are deduplicated. This is permanent application-level retention, not a replacement for independent Neon backups and exports.
 
@@ -127,7 +127,7 @@ PostgreSQL cleanup still deletes only expired cache rows. It never touches the p
 The permanent archive is an evidence-backed history layer separate from the current cache. It begins with every permitted current/saved sitemap URL, follows Cricbuzz's own scorecard-archive year links (including the source-published 1877 archive), then follows series, match, player, team, venue, news, statistics and media metadata links exposed by those pages. It does not synthesize missing years or claim that every statistic or delivery exists for every historical match.
 
 - `crikora_entity_snapshots` stores every observed distinct normalized entity version. A later return to an earlier payload is stored as a new observation.
-- `crikora_source_page_snapshots` stores gzip-compressed raw HTML and its SHA-256 digest, including embedded React flight scripts. Raw pages can be reparsed when field-specific extractors improve.
+- `crikora_source_page_snapshots` stores gzip-compressed raw HTML and its SHA-256 digest, including embedded React flight scripts. Low-churn pages are captured whenever their content changes; high-churn match/live-analysis URLs are captured at most once per hour to prevent repeated full HTML from exhausting database storage. This does not throttle normalized entity snapshots.
 - `crikora_archive_coverage` records discovered, pending, processing, captured, skipped and failed URLs by route family.
 - `GET /v1/archive/coverage` reports the current archive coverage ledger.
 - `GET /v1/archive/entities/:entityType` lists each entity's latest archived version with cursor pagination.
@@ -135,7 +135,7 @@ The permanent archive is an evidence-backed history layer separate from the curr
 
 Use `CrikoraApiClient.getArchiveCoverage()`, `listArchivedEntities()` and `getEntityHistory()` from the website or extension. Browser clients receive normalized JSON only. They never receive database credentials or raw HTML storage access.
 
-The archive crawl is continuous: after the durable backlog is drained, the existing worker keeps checking current match and section indexes and re-enqueues newly discovered pages. A large historical backfill can take substantial time. A coverage status of "captured" means that a permitted page was fetched and archived, not that every possible field was present on the page. Check extraction gaps and skipped/failed counts before declaring any route family complete.
+The archive crawl is continuous: after the durable backlog is drained, the existing worker keeps checking current match and section indexes, durably queues every indexed match URL for deep enrichment, and re-enqueues newly discovered pages. A large historical backfill can take substantial time. A coverage status of "captured" means that a permitted page was fetched and archived, not that every possible field was present on the page. Check extraction gaps and skipped/failed counts before declaring any route family complete.
 
 ## Neon setup
 
