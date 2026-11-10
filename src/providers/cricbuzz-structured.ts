@@ -248,7 +248,8 @@ function extrasFromRecord(record: DataRecord): NormalizedExtras {
   const wides = numberField(value, ["wides", "wide", "wd", "w"]) ?? parseExtrasText(text).wides;
   const noBalls = numberField(value, ["noBalls", "noballs", "nb"]) ?? parseExtrasText(text).noBalls;
   const penalty = numberField(value, ["penalty", "penaltyRuns", "p"]) ?? parseExtrasText(text).penalty;
-  const total = numberField(value, ["total", "totalExtras", "runs"]) ?? numberField(record, ["totalExtras", "extrasTotal"]) ??
+  const total = numberField(value, ["total", "totalExtras", "runs"]) ??
+    numberField(record, ["totalExtras", "extrasTotal", "extraRuns", "extras"]) ??
     (byes + legByes + wides + noBalls + penalty);
   return { total, byes, legByes, wides, noBalls, penalty };
 }

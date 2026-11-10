@@ -97,6 +97,13 @@ function nullableNumber(value: unknown): number | null {
 function jsonValue(value: unknown): string {
   return JSON.stringify(value ?? {});
 }
+function dateOnly(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const iso = value.match(/^\d{4}-\d{2}-\d{2}$/);
+  if (iso) return value;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
 
 /** PostgreSQL JSON store with per-entity volatile or persistent retention. */
 export class PostgresEntityRepository implements EntityRepository, ArchiveRepository {
@@ -225,7 +232,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
           ? String(attribute.valueType) : "text";
         const textValue = type === "text" ? String(value ?? "") : null;
         const numericValue = type === "numeric" ? nullableNumber(typeof value === "number" ? value : Number(value)) : null;
-        const dateValue = type === "date" ? nullableString(value) : null;
+        const dateValue = type === "date" ? dateOnly(value) : null;
         const booleanValue = type === "boolean" ? Boolean(value) : null;
         const jsonAttribute = type === "json" ? jsonValue(value) : null;
         await client.query(
