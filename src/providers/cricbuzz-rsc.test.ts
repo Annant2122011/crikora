@@ -26,7 +26,7 @@ describe("Cricbuzz React Server Component decoder", () => {
   it("resolves row references inside nested player data", () => {
     const flight = [
       '1:{"playerData":{"name":"Example Batter","bio":"$2","career":"$3","unused":"$undefined"}}',
-      "2:TB,This player has a long-form biography.",
+      "2:T26,This player has a long-form biography.",
       '3:{"odi":{"matches":12,"runs":700},"test":{"matches":3,"runs":90}}',
       ""
     ].join("\n");
