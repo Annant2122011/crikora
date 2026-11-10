@@ -18,6 +18,20 @@ describe("permanent archive entity hashing", () => {
     expect(refreshed).toBe(first);
   });
 
+  it("ignores collector-generated delivery observation timestamps", () => {
+    const first = hashEntityPayload({
+      sourceId: "match-1",
+      runs: 100,
+      events: [{ type: "four", summary: "FOUR", occurredAt: "2026-11-10T10:00:00.000Z" }]
+    });
+    const refreshed = hashEntityPayload({
+      sourceId: "match-1",
+      runs: 100,
+      events: [{ type: "four", summary: "FOUR", occurredAt: "2026-11-10T10:00:10.000Z" }]
+    });
+    expect(refreshed).toBe(first);
+  });
+
   it("creates a new content hash when an actual cricket field changes", () => {
     const previous = hashEntityPayload({ sourceId: "match-1", runs: 100, wickets: 2 });
     const next = hashEntityPayload({ sourceId: "match-1", runs: 101, wickets: 2 });
