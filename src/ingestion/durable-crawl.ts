@@ -313,7 +313,7 @@ export class DurableCrawlService {
     if (scheduled) {
       await this.pool.query(
         "UPDATE public.crikora_crawl_runs SET status = CASE WHEN status = 'completed' THEN 'running' ELSE status END, completed_at = NULL, discovered_url_count = discovered_url_count + $2 WHERE id = $1",
-        [run.id, scheduled]
+        [run.id, added]
       );
     }
     return scheduled;
