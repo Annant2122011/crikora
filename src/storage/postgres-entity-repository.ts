@@ -95,12 +95,23 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
           : null;
         const payloadHash = hashEntityPayload(entity.payload);
         await client.query(
-          `INSERT INTO public.crikora_entity_snapshots
-            (entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at)
-           VALUES ($1, $2, $3, $4, 1, $5::jsonb, $6::timestamptz)
-           ON CONFLICT (entity_type, source_id, payload_hash) DO NOTHING`,
-          [entity.entityType, entity.sourceId, entity.sourceUrl, payloadHash, JSON.stringify(entity.payload), fetchedAt.toISOString()]
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`entity:${entity.entityType}:${entity.sourceId}`]
         );
+        const latestSnapshot = await client.query<{ payload_hash: string }>(
+          `SELECT payload_hash FROM public.crikora_entity_snapshots
+           WHERE entity_type = $1 AND source_id = $2
+           ORDER BY observed_at DESC, id DESC LIMIT 1`,
+          [entity.entityType, entity.sourceId]
+        );
+        if (latestSnapshot.rows[0]?.payload_hash.trim() !== payloadHash) {
+          await client.query(
+            `INSERT INTO public.crikora_entity_snapshots
+              (entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at)
+             VALUES ($1, $2, $3, $4, 1, $5::jsonb, $6::timestamptz)`,
+            [entity.entityType, entity.sourceId, entity.sourceUrl, payloadHash, JSON.stringify(entity.payload), fetchedAt.toISOString()]
+          );
+        }
         await client.query(
           `INSERT INTO public.crikora_cache
             (entity_type, source_id, source_url, payload, fetched_at, expires_at, retention_class, updated_at)
@@ -187,16 +198,26 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
         const contentHash = createHash("sha256").update(raw).digest("hex");
         const compressed = gzipSync(raw);
         const pageKind = (page.pageKind || "unknown").slice(0, 120);
-        const write = await client.query(
-          `INSERT INTO public.crikora_source_page_snapshots
-            (source_url, page_kind, entity_type, source_id, content_type, content_sha256, body_gzip, body_bytes, fetched_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)
-           ON CONFLICT (source_url, content_sha256) DO NOTHING
-           RETURNING id`,
-          [page.url, pageKind, page.entityType ?? null, page.sourceId ?? null,
-            page.contentType || "text/html; charset=utf-8", contentHash, compressed, raw.byteLength, fetchedAt]
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`archive-page:${page.url}`]
         );
-        const wasInserted = write.rowCount === 1;
+        const latestPage = await client.query<{ content_sha256: string }>(
+          `SELECT content_sha256 FROM public.crikora_source_page_snapshots
+           WHERE source_url = $1
+           ORDER BY fetched_at DESC, id DESC LIMIT 1`,
+          [page.url]
+        );
+        const wasInserted = latestPage.rows[0]?.content_sha256.trim() !== contentHash;
+        if (wasInserted) {
+          await client.query(
+            `INSERT INTO public.crikora_source_page_snapshots
+              (source_url, page_kind, entity_type, source_id, content_type, content_sha256, body_gzip, body_bytes, fetched_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)`,
+            [page.url, pageKind, page.entityType ?? null, page.sourceId ?? null,
+              page.contentType || "text/html; charset=utf-8", contentHash, compressed, raw.byteLength, fetchedAt]
+          );
+        }
         if (wasInserted) inserted += 1;
         else duplicates += 1;
         await client.query(
