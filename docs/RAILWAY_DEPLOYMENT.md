@@ -26,7 +26,7 @@ Set these server-side in Railway:
 - `DATABASE_URL`: Neon pooled connection string for the Crikora production branch
 - `CRIKORA_ADMIN_SECRET`: private random bearer secret
 - `CRIKORA_REFRESH_SECRET`: private random bearer secret shared with the worker
-- `CRICBUZZ_AUTOMATION_AUTHORIZED=false` until the source authorization and operational start are explicitly approved
+- `CRIKORA_COLLECTION_ENABLED=false` until the source authorization and operational start are explicitly approved
 - `CRICBUZZ_MIN_REQUEST_INTERVAL_MS=1000`
 - `CRIKORA_CRAWL_BATCH_SIZE=2`
 - `CRIKORA_CRAWL_MAX_ATTEMPTS=4`
@@ -49,10 +49,10 @@ Do not place any of these values in browser code, a public repository, logs or s
 
 ## Safe first deployment
 
-1. Deploy the API and worker with `CRICBUZZ_AUTOMATION_AUTHORIZED=false`. The worker idles and makes no Cricbuzz requests.
+1. Deploy the API and worker with `CRIKORA_COLLECTION_ENABLED=false`. The worker idles and makes no Cricbuzz requests.
 2. Verify `GET /api/health` reports PostgreSQL reachable, automation disabled, and 600-second retention.
 3. Verify the worker logs show its disabled/idle state and that the Neon crawl queue remains empty.
-4. Only after the source permission and request policy have been explicitly approved for production operation, set the API variable `CRICBUZZ_AUTOMATION_AUTHORIZED=true` and use the authenticated settings endpoint to enable the crawler. With `CRIKORA_START_FULL_CRAWL=true`, the worker seeds the current sitemap plus saved inventory and drains the durable queue in sequential bounded batches.
+4. Only after the source permission and request policy have been explicitly approved for production operation, set the API variable `CRIKORA_COLLECTION_ENABLED=true` and use the authenticated settings endpoint to enable the crawler. With `CRIKORA_START_FULL_CRAWL=true`, the worker seeds the current sitemap plus saved inventory and drains the durable queue in sequential bounded batches.
 
 To enable via an authenticated server-side request after deployment:
 
