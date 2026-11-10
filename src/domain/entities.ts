@@ -53,7 +53,7 @@ export function getEntityRetentionClass(
   entity: Pick<CrikoraEntity, "entityType" | "payload">
 ): RetentionClass {
   if (entity.entityType === "match") {
-    return entity.payload.status === "live" ? "ephemeral" : "persistent";
+    return entity.payload.status === "upcoming" || entity.payload.status === "completed" ? "persistent" : "ephemeral";
   }
   if (entity.entityType === "ranking") return "ephemeral";
   if (entity.entityType === "metadata") {
