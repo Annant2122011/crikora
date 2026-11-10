@@ -276,8 +276,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
 
   async listEntityHistory(entityType: EntityType, sourceId: string, limit = 50, before?: string): Promise<EntityHistoryRecord[]> {
     const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
-    const cursorId = before && /^\\d+$/.test(before) ? before : null;
-    const cursorTime = before && !cursorId ? toIso(before) : null;
+    const cursorId = before && /^[0-9]+$/.test(before) ? before : null;
     const result = await this.pool.query<{
       id: string | number;
       entity_type: EntityType;
@@ -291,11 +290,10 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       `SELECT id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
        FROM public.crikora_entity_snapshots
        WHERE entity_type = $1 AND source_id = $2
-         AND (($4::bigint IS NOT NULL AND id < $4::bigint)
-           OR ($4::bigint IS NULL AND ($5::timestamptz IS NULL OR observed_at < $5::timestamptz)))
-       ORDER BY observed_at DESC, id DESC
+         AND ($4::bigint IS NULL OR id < $4::bigint)
+       ORDER BY id DESC
        LIMIT $3`,
-      [entityType, sourceId, safeLimit, cursorId, cursorTime]
+      [entityType, sourceId, safeLimit, cursorId]
     );
     return result.rows.map(row => ({
       id: String(row.id),
@@ -311,8 +309,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
 
   async listArchivedEntities(entityType: EntityType, limit = 50, before?: string): Promise<EntityHistoryRecord[]> {
     const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
-    const cursorId = before && /^\\d+$/.test(before) ? before : null;
-    const cursorTime = before && !cursorId ? toIso(before) : null;
+    const cursorId = before && /^[0-9]+$/.test(before) ? before : null;
     const result = await this.pool.query<{
       id: string | number;
       entity_type: EntityType;
@@ -332,11 +329,10 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
        )
        SELECT id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
        FROM latest_per_entity
-       WHERE (($3::bigint IS NOT NULL AND id < $3::bigint)
-         OR ($3::bigint IS NULL AND ($4::timestamptz IS NULL OR observed_at < $4::timestamptz)))
-       ORDER BY observed_at DESC, id DESC
+       WHERE ($3::bigint IS NULL OR id < $3::bigint)
+       ORDER BY id DESC
        LIMIT $2`,
-      [entityType, safeLimit, cursorId, cursorTime]
+      [entityType, safeLimit, cursorId]
     );
     return result.rows.map(row => ({
       id: String(row.id),
@@ -369,7 +365,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
          WHERE entity_type = 'metadata'
            AND payload->>'relatedEntityType' = $1
            AND payload->>'relatedSourceId' = $2
-         ORDER BY source_id, observed_at DESC, id DESC
+         ORDER BY source_id, id DESC
        )
        SELECT id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
        FROM latest_per_page
