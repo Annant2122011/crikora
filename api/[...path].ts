@@ -565,7 +565,7 @@ async function archiveEntityHistory(
 ): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
   const before = url.searchParams.get("before") ?? undefined;
-  if (limit === undefined || (before && Number.isNaN(Date.parse(before)))) {
+  if (limit === undefined || (before && !/^\\d+$/.test(before) && Number.isNaN(Date.parse(before)))) {
     sendJson(response, 400, { error: "Invalid archive history pagination." });
     return;
   }
