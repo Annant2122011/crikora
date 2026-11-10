@@ -266,6 +266,46 @@ export class CricbuzzProvider implements CricketProvider {
     return { matches, events, entities: [...entities.values()], fetchedAt, sourcePages: [...capturedPages.values()].map(toSourcePageCapture) };
   }
 
+  async fetchMatchIndexSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
+    const discovered = new Map<string, DiscoveredMatch>();
+    const matches: Match[] = [];
+    const entities = new Map<string, CrikoraEntity>();
+    const capturedPages = new Map<string, PageRecord>();
+
+    // This is deliberately a small, index-only snapshot. It keeps the live,
+    // upcoming and recent catalogs fresh while historical deep-page work runs.
+    for (const index of INDEXES) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz index refresh aborted.");
+      const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
+      if (!page) continue;
+      capturedPages.set(page.url, page);
+      for (const link of getLinks(page.$, page.url)) {
+        const match = link.path.match(/^\\/live-cricket-scores\\/(\\d+)(?:\\/|$)/);
+        if (!match?.[1] || discovered.has(match[1])) continue;
+        const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
+        const stub = parseMatchIndexStub(item, page, link);
+        discovered.set(item.id, item);
+        matches.push(stub);
+        addEntity(
+          entities,
+          "match",
+          item.id,
+          stub.sourceUrl ?? link.url,
+          stub as unknown as Record<string, unknown>
+        );
+      }
+    }
+
+    const fetchedAt = new Date().toISOString();
+    return {
+      matches,
+      events: [],
+      entities: [...entities.values()],
+      fetchedAt,
+      sourcePages: [...capturedPages.values()].map(toSourcePageCapture)
+    };
+  }
+
   isAllowedCrawlUrl(value: string): boolean {
     return isAllowedCricbuzzPageUrl(value);
   }
