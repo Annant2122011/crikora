@@ -130,6 +130,25 @@ app.get("/v1/entities/:entityType/:sourceId", async (request, reply) => {
   return { data: present(row), meta: { retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 
+app.get("/v1/entities/:entityType/:sourceId/details", async (request, reply) => {
+  const params = z.object({
+    entityType: z.enum(ENTITY_TYPES),
+    sourceId: z.string().min(1).max(200)
+  }).safeParse(request.params);
+  const query = z.object({ limit: z.coerce.number().int().min(1).max(200).default(100) }).safeParse(request.query);
+  if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid entity details query." });
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const current = await repository.get(params.data.entityType, params.data.sourceId);
+  const latestHistory = current ? [] : await repository.listEntityHistory(params.data.entityType, params.data.sourceId, 1);
+  const related = await repository.listRelatedEntityPages(params.data.entityType, params.data.sourceId, query.data.limit);
+  const entity = current ? present(current) : latestHistory[0] ?? null;
+  if (!entity && !related.length) return reply.code(404).send({ error: "Entity and its archived detail pages were not found." });
+  return {
+    data: { entity, related },
+    meta: { relatedCount: related.length, retention: "permanent", source: provider.id }
+  };
+});
+
 app.get("/v1/matches", async (request, reply) => {
   const query = z.object({
     status: z.enum(["live", "upcoming", "completed"]).optional(),
