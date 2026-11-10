@@ -565,7 +565,7 @@ export class CricbuzzProvider implements CricketProvider {
 
 function toSourcePageCapture(page: PageRecord): SourcePageCapture {
   const parsed = new URL(page.url);
-  const path = parsed.pathname.replace(/\\/+$/, "") || "/";
+  const path = parsed.pathname.replace(/\/+$/, "") || "/";
   const identity = classifyCricbuzzEntityUrl(page.url);
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   const pageKind = rule?.kind ?? identity?.entityType ?? path.split("/").filter(Boolean)[0] ?? "root";
