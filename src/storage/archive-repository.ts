@@ -22,7 +22,7 @@ export interface ArchiveCoverageRow {
 }
 
 export interface ArchiveRepository {
-  recordSourcePages(pages: SourcePageCapture[], crawlRunId?: string): Promise<{ inserted: number; duplicates: number }>;
+  recordSourcePages(pages: SourcePageCapture[], crawlRunId?: string): Promise<{ inserted: number; duplicates: number; deferred: number }>;
   listEntityHistory(entityType: EntityType, sourceId: string, limit?: number, before?: string): Promise<EntityHistoryRecord[]>;
   listArchivedEntities(entityType: EntityType, limit?: number, before?: string): Promise<EntityHistoryRecord[]>;
   getArchiveCoverage(): Promise<ArchiveCoverageRow[]>;
