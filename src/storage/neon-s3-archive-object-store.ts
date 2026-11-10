@@ -53,7 +53,7 @@ export function buildNeonS3Authorization(input: {
     `host:${input.endpoint.host}`,
     `x-amz-content-sha256:${input.payloadHash}`,
     `x-amz-date:${amzDate}`
-  ].join("\n");
+  ].join("\n") + "\n";
   const canonicalRequest = [
     input.method,
     input.path,
