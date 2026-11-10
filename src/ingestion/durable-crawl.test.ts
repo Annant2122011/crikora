@@ -31,6 +31,7 @@ describe("DurableCrawlService page-level failure isolation", () => {
     });
     const updates: Array<{ sql: string; values: unknown[] }> = [];
     let queueCountsRead = 0;
+    let completed = false;
 
     const pool = {
       async query(sql: string, values: unknown[] = []) {
@@ -47,7 +48,7 @@ describe("DurableCrawlService page-level failure isolation", () => {
           return {
             rows: [{
               id: RUN_ID,
-              status: "running",
+              status: completed ? "completed" : "running",
               seeded_url_count: 1,
               discovered_url_count: 1,
               failed_count: 0,
@@ -80,6 +81,7 @@ describe("DurableCrawlService page-level failure isolation", () => {
           return { rows: [], rowCount: 1 };
         }
         if (sql.includes("UPDATE public.crikora_crawl_runs SET status = 'completed'")) {
+          completed = true;
           updates.push({ sql, values });
           return { rows: [], rowCount: 1 };
         }
