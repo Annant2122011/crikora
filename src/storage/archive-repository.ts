@@ -48,6 +48,7 @@ export function isArchiveRepository(value: unknown): value is ArchiveRepository 
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<ArchiveRepository>;
   return typeof candidate.recordSourcePages === "function" &&
+    typeof candidate.getSourcePageSnapshot === "function" &&
     typeof candidate.listEntityHistory === "function" &&
     typeof candidate.listArchivedEntities === "function" &&
     typeof candidate.listRelatedEntityPages === "function" &&
