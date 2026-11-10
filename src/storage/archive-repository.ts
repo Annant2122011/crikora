@@ -19,6 +19,7 @@ export interface ArchiveCoverageRow {
   totalFetches: number;
   rawPageVersions: number;
   entityVersions: number;
+  rawPageBytes: number;
   lastFetchedAt: string | null;
 }
 
