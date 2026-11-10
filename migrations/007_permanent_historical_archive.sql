@@ -92,6 +92,25 @@ CREATE TABLE IF NOT EXISTS public.crikora_source_page_snapshots (
   fetched_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Old development captures may remain in bytea; new production captures use
+-- a private S3 object key so large historical HTML does not consume PG storage.
+ALTER TABLE public.crikora_source_page_snapshots
+  ADD COLUMN IF NOT EXISTS object_key text;
+
+ALTER TABLE public.crikora_source_page_snapshots
+  ALTER COLUMN body_gzip DROP NOT NULL;
+
+ALTER TABLE public.crikora_source_page_snapshots
+  DROP CONSTRAINT IF EXISTS crikora_source_page_snapshots_storage_location_check;
+
+ALTER TABLE public.crikora_source_page_snapshots
+  ADD CONSTRAINT crikora_source_page_snapshots_storage_location_check
+  CHECK ((body_gzip IS NULL) <> (object_key IS NULL));
+
+CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_object_key_idx
+  ON public.crikora_source_page_snapshots (object_key)
+  WHERE object_key IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_url_idx
   ON public.crikora_source_page_snapshots (source_url, fetched_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_hash_idx
