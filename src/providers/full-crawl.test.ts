@@ -87,10 +87,15 @@ describe("full-crawl route coverage", () => {
     ]);
   });
 
-  it("accepts the additional public pages explicitly listed in Cricbuzz's sitemap index", () => {
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/")).toBe(true);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/info/contact")).toBe(true);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/careers")).toBe(true);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/premium-subscription/user/account-info")).toBe(true);
+  it("keeps the crawl focused on cricket data and rejects general site pages", () => {
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-match/live-scores")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-news")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/profiles/11527/paul-walter")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-team/india/2")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/info/contact")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/info/advertise")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/careers")).toBe(false);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/premium-subscription/user/account-info")).toBe(false);
   });
 });
