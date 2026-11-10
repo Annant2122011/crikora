@@ -40,7 +40,7 @@ Required:
 - `DATABASE_URL`
 - `CRIKORA_ADMIN_SECRET`
 - `CRIKORA_REFRESH_SECRET`
-- `CRICBUZZ_AUTOMATION_AUTHORIZED=true` only after source authorization and the deployment are ready
+- `CRIKORA_COLLECTION_ENABLED=true` only after source authorization and the deployment are ready
 
 Optional crawl controls:
 - `CRIKORA_CRAWL_BATCH_SIZE=2` (allowed values: 1 to 3)
@@ -63,7 +63,7 @@ Do not put any of these secrets in the browser extension, website bundle, reposi
 1. Apply migrations 001-004 to Neon production.
 2. Configure the required core and worker environment variables in their respective hosting projects.
 3. Keep automation disabled until the deployment health check confirms that the core API can reach the same Neon production branch and the worker is ready.
-4. Set `CRICBUZZ_AUTOMATION_AUTHORIZED=true` only after the source access permission and request policy are confirmed.
+4. Set `CRIKORA_COLLECTION_ENABLED=true` only after the source access permission and request policy are confirmed.
 5. Start with `POST /v1/crawl/start` on the worker project.
 6. Inspect `GET /api/crawl/status` on the core API with the admin bearer token.
 
