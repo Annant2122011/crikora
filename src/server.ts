@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import { z } from "zod";
 import { CricbuzzProvider } from "./providers/cricbuzz-provider.js";
-import { ENTITY_TYPES, type EntityRepository, type StoredEntity } from "./domain/entities.js";
+import { ENTITY_TYPES, RETENTION_POLICY, type EntityRepository, type StoredEntity } from "./domain/entities.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
 import { Poller } from "./ingestion/poller.js";
 
@@ -65,7 +65,7 @@ app.get("/", async () => ({
   service: "crikora-api",
   source: provider.id,
   storage: "postgres",
-  retentionSeconds: 600,
+  retentionPolicy: RETENTION_POLICY,
   collectionEnabled: env.CRIKORA_COLLECTION_ENABLED === "true",
   health: "/health",
   apiBasePath: "/v1",
@@ -91,7 +91,8 @@ function present(row: StoredEntity): Record<string, unknown> {
     sourceUrl: row.sourceUrl,
     fetchedAt: row.fetchedAt,
     expiresAt: row.expiresAt,
-    ttlSeconds: 600
+    retentionClass: row.retentionClass,
+    ttlSeconds: row.retentionClass === "ephemeral" ? RETENTION_POLICY.ephemeralSeconds : null
   };
 }
 app.get("/health", async (_request, reply) => {
@@ -102,7 +103,7 @@ app.get("/health", async (_request, reply) => {
       service: "crikora-api",
       source: provider.id,
       storage: "postgres",
-      retentionSeconds: 600,
+      retentionPolicy: RETENTION_POLICY,
       collectionEnabled: env.CRIKORA_COLLECTION_ENABLED === "true",
       refreshIntervalSeconds: Number(env.POLL_INTERVAL_SECONDS)
     };
@@ -117,7 +118,7 @@ app.get("/v1/entities/:entityType", async (request, reply) => {
   const query = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }).safeParse(request.query);
   if (!query.success) return reply.code(400).send({ error: "Invalid limit" });
   const rows = await repository.list(params.data.entityType, query.data.limit);
-  return { data: rows.map(present), meta: { count: rows.length, retentionSeconds: 600, source: provider.id } };
+  return { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 
 app.get("/v1/entities/:entityType/:sourceId", async (request, reply) => {
@@ -125,7 +126,7 @@ app.get("/v1/entities/:entityType/:sourceId", async (request, reply) => {
   if (!params.success) return reply.code(400).send({ error: "Invalid entity path" });
   const row = await repository.get(params.data.entityType, params.data.sourceId);
   if (!row) return reply.code(404).send({ error: "Entity not found or expired" });
-  return { data: present(row), meta: { retentionSeconds: 600, source: provider.id } };
+  return { data: present(row), meta: { retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 
 app.get("/v1/matches", async (request, reply) => {
@@ -136,34 +137,34 @@ app.get("/v1/matches", async (request, reply) => {
   if (!query.success) return reply.code(400).send({ error: "Invalid match query" });
   const rows = await repository.list("match", query.data.limit);
   const data = rows.filter(row => !query.data.status || row.payload.status === query.data.status).map(present);
-  return { data, meta: { count: data.length, retentionSeconds: 600, source: provider.id } };
+  return { data, meta: { count: data.length, retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 app.get("/v1/matches/live", async () => {
   const rows = await repository.list("match", 500);
   const data = rows.filter(row => row.payload.status === "live").map(present);
-  return { data, meta: { count: data.length, retentionSeconds: 600, source: provider.id } };
+  return { data, meta: { count: data.length, retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 app.get("/v1/matches/upcoming", async () => {
   const rows = await repository.list("match", 500);
   const data = rows.filter(row => row.payload.status === "upcoming").map(present);
-  return { data, meta: { count: data.length, retentionSeconds: 600, source: provider.id } };
+  return { data, meta: { count: data.length, retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 app.get("/v1/matches/recent", async () => {
   const rows = await repository.list("match", 500);
   const data = rows.filter(row => row.payload.status === "completed").map(present);
-  return { data, meta: { count: data.length, retentionSeconds: 600, source: provider.id } };
+  return { data, meta: { count: data.length, retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 app.get("/v1/matches/:matchId/events", async (request, reply) => {
   const { matchId } = request.params as { matchId: string };
   const row = await repository.get("match", matchId.replace(/^cricbuzz:/, ""));
   if (!row) return reply.code(404).send({ error: "Match not found or expired" });
-  return { data: Array.isArray(row.payload.events) ? row.payload.events : [], meta: { retentionSeconds: 600 } };
+  return { data: Array.isArray(row.payload.events) ? row.payload.events : [], meta: { retentionPolicy: RETENTION_POLICY } };
 });
 app.get("/v1/matches/:matchId", async (request, reply) => {
   const { matchId } = request.params as { matchId: string };
   const row = await repository.get("match", matchId.replace(/^cricbuzz:/, ""));
   if (!row) return reply.code(404).send({ error: "Match not found or expired" });
-  return { data: present(row), meta: { retentionSeconds: 600, source: provider.id } };
+  return { data: present(row), meta: { retentionPolicy: RETENTION_POLICY, source: provider.id } };
 });
 
 for (const [route, type] of [
@@ -174,13 +175,13 @@ for (const [route, type] of [
     const query = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid limit" });
     const rows = await repository.list(type, query.data.limit);
-    return { data: rows.map(present), meta: { count: rows.length, retentionSeconds: 600 } };
+    return { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } };
   });
   app.get(`${route}/:sourceId`, async (request, reply) => {
     const { sourceId } = request.params as { sourceId: string };
     const row = await repository.get(type, sourceId);
     if (!row) return reply.code(404).send({ error: "Entity not found or expired" });
-    return { data: present(row), meta: { retentionSeconds: 600 } };
+    return { data: present(row), meta: { retentionPolicy: RETENTION_POLICY } };
   });
 }
 app.get("/v1/content", async (request, reply) => {
@@ -196,7 +197,7 @@ app.get("/v1/content", async (request, reply) => {
     .map(present);
   return {
     data,
-    meta: { count: data.length, kind: query.data.kind ?? "all", retentionSeconds: 600, source: provider.id }
+    meta: { count: data.length, kind: query.data.kind ?? "all", retentionPolicy: RETENTION_POLICY, source: provider.id }
   };
 });
 
@@ -204,7 +205,7 @@ app.get("/v1/search", async (request, reply) => {
   const query = z.object({ q: z.string().trim().min(1).max(120), limit: z.coerce.number().int().min(1).max(100).default(30) }).safeParse(request.query);
   if (!query.success) return reply.code(400).send({ error: "Supply a search term q and an optional limit." });
   const rows = await repository.search(query.data.q, query.data.limit);
-  return { data: rows.map(present), meta: { count: rows.length, retentionSeconds: 600 } };
+  return { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } };
 });
 
 app.setErrorHandler((error, _request, reply) => {
