@@ -1,0 +1,80 @@
+-- Permanent, versioned historical archive.
+-- Unlike crikora_cache, these tables are append-only and are never TTL-cleaned.
+CREATE TABLE IF NOT EXISTS public.crikora_entity_snapshots (
+  id bigserial PRIMARY KEY,
+  entity_type text NOT NULL CHECK (entity_type IN ('match','player','team','series','venue','competition','ranking','metadata')),
+  source_id text NOT NULL,
+  source_url text NOT NULL,
+  payload_hash char(64) NOT NULL,
+  schema_version integer NOT NULL DEFAULT 1 CHECK (schema_version > 0),
+  payload jsonb NOT NULL,
+  observed_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (entity_type, source_id, payload_hash)
+);
+CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_history_idx
+  ON public.crikora_entity_snapshots (entity_type, source_id, observed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_observed_idx
+  ON public.crikora_entity_snapshots (observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.crikora_source_page_snapshots (
+  id bigserial PRIMARY KEY,
+  source_url text NOT NULL,
+  page_kind text NOT NULL,
+  entity_type text,
+  source_id text,
+  content_type text NOT NULL DEFAULT 'text/html; charset=utf-8',
+  content_sha256 char(64) NOT NULL,
+  body_gzip bytea NOT NULL,
+  body_bytes integer NOT NULL CHECK (body_bytes >= 0),
+  fetched_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (source_url, content_sha256)
+);
+CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_url_idx
+  ON public.crikora_source_page_snapshots (source_url, fetched_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_kind_idx
+  ON public.crikora_source_page_snapshots (page_kind, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_fetched_idx
+  ON public.crikora_source_page_snapshots (fetched_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.crikora_archive_coverage (
+  source_url text PRIMARY KEY,
+  identity_key text NOT NULL,
+  page_kind text NOT NULL,
+  status text NOT NULL DEFAULT 'discovered'
+    CHECK (status IN ('discovered','pending','processing','captured','skipped','failed')),
+  first_discovered_at timestamptz NOT NULL DEFAULT now(),
+  last_discovered_at timestamptz NOT NULL DEFAULT now(),
+  last_attempted_at timestamptz,
+  last_fetched_at timestamptz,
+  last_http_status integer,
+  last_content_sha256 char(64),
+  fetch_count bigint NOT NULL DEFAULT 0 CHECK (fetch_count >= 0),
+  version_count bigint NOT NULL DEFAULT 0 CHECK (version_count >= 0),
+  attempt_count bigint NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  last_error text,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS crikora_archive_coverage_status_idx
+  ON public.crikora_archive_coverage (status, page_kind, last_discovered_at DESC);
+CREATE INDEX IF NOT EXISTS crikora_archive_coverage_identity_idx
+  ON public.crikora_archive_coverage (identity_key);
+
+-- Keep the evidence tables immutable at the database boundary.
+CREATE OR REPLACE FUNCTION public.crikora_reject_archive_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Crikora archive evidence is append-only; % is not permitted on %', TG_OP, TG_TABLE_NAME;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS crikora_entity_snapshots_immutable ON public.crikora_entity_snapshots;
+CREATE TRIGGER crikora_entity_snapshots_immutable
+  BEFORE UPDATE OR DELETE ON public.crikora_entity_snapshots
+  FOR EACH ROW EXECUTE FUNCTION public.crikora_reject_archive_mutation();
+
+DROP TRIGGER IF EXISTS crikora_source_page_snapshots_immutable ON public.crikora_source_page_snapshots;
+CREATE TRIGGER crikora_source_page_snapshots_immutable
+  BEFORE UPDATE OR DELETE ON public.crikora_source_page_snapshots
+  FOR EACH ROW EXECUTE FUNCTION public.crikora_reject_archive_mutation();
