@@ -4,7 +4,7 @@ Crikora is a cricket data collector and JSON API for the Crikora browser extensi
 
 ## Sitemap-backed content inventory
 
-On 8 November 2026, the saved sitemap-included URL map returned **4,721 unique URLs** (the request cap was 10,000). The saved inventory is [`docs/cricbuzz-sitemap-inventory.json`](./docs/cricbuzz-sitemap-inventory.json) and is retained as a fallback snapshot. When a full crawl is explicitly started, the API now discovers the current public sitemap documents from `/sitemap.xml`, follows their child XML documents and unions their allowed cricket-page URLs with the saved snapshot. A 9 November sitemap-only map returned 4,393 unique URLs; 85 were new to that map and 413 saved URLs were absent, so the implementation deliberately preserves both sets. This is URL discovery, not a full HTML-body crawl or a guarantee that every dynamically generated, private or authenticated URL is listed. See [the Stage 1 source coverage audit](./docs/STAGE_1_SOURCE_COVERAGE_AUDIT.md).
+The saved sitemap snapshot contains **4,721 raw URLs** and the 9 November current sitemap map contains **4,393 raw URLs**. Those counts are discovery totals, not the crawl queue size: the scraper now filters the union to cricket-data routes only and excludes advertising, careers, account/login and unrelated site pages. Current sitemap URLs take precedence over saved aliases. The saved inventory is [`docs/cricbuzz-sitemap-inventory.json`](./docs/cricbuzz-sitemap-inventory.json) and remains a fallback when a current sitemap document is unavailable. This is URL discovery, not a guarantee that every dynamic field appears in static HTML. See [the Stage 1 source coverage audit](./docs/STAGE_1_SOURCE_COVERAGE_AUDIT.md).
 
 | Route family | URLs in latest map |
 | --- | ---: |
@@ -78,7 +78,7 @@ const { data: players } = await crikora.listPlayers();
 // The API's CRIKORA_REFRESH_SECRET must never be bundled into the extension.
 ```
 
-The client exposes typed methods for live/upcoming/recent matches, match details and events, players, teams, series, venues, entity lookup, search and health checks. It uses JSON-only GET requests, disables browser HTTP caching, supports `AbortSignal`, URL-encodes IDs and surfaces structured HTTP errors. The browser must call the Crikora API, never Cricbuzz directly. Keep `DATABASE_URL`, source credentials and provider secrets on the backend only.
+The client exposes typed methods for live/upcoming/recent matches, match details and events, players, teams, series, venues, entity lookup, search and health checks. It uses JSON-only GET requests, disables browser HTTP caching, supports `AbortSignal`, URL-encodes IDs and surfaces structured HTTP errors. The browser must call the Crikora API, never Cricbuzz directly. Keep `DATABASE_URL` and Crikora's own admin/refresh secrets on the backend only. The public-HTML scraper does not need Cricbuzz-issued API credentials.
 
 
 
@@ -178,7 +178,7 @@ GitHub Actions runs typecheck, build and tests on pushes and pull requests to `m
 
 ## Durable full-site crawl
 
-The initial crawl uses the sitemap inventory in `docs/cricbuzz-sitemap-inventory.json` (4,721 discovered URLs, filtered by the same-host allowlist). Migration `004_crikora_durable_crawl.sql` adds a Neon-backed run and URL queue with lease recovery, retries and progress tracking. The worker starts it with `POST /v1/crawl/start` and drains it in bounded sequential batches before returning to live refresh.
+The initial crawl merges the saved 4,721-URL snapshot with the current sitemap inventory and then applies the cricket-only route allowlist; the raw sitemap count is not the number of queued cricket pages. Migration `004_crikora_durable_crawl.sql` adds a Neon-backed run and URL queue with lease recovery, retries and progress tracking. The worker starts it with `POST /v1/crawl/start` and drains it in bounded sequential batches before returning to live refresh.
 
 - Core API: `POST /api/crawl/start`, `GET /api/crawl/status`, `POST /api/crawl/step`, `POST /api/cleanup`.
 - Worker: `POST /v1/crawl/start` (requires the worker admin bearer token).
