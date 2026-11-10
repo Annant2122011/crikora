@@ -378,8 +378,7 @@ export class CricbuzzProvider implements CricketProvider {
       ...pages.slice(1).map(item => item.url),
       ...pages.flatMap(item => getLinks(item.$, item.url).map(link => link.url))
     ])]
-      .filter(linkUrl => isAllowedCricbuzzPageUrl(linkUrl))
-      .slice(0, 250);
+      .filter(linkUrl => isAllowedCricbuzzPageUrl(linkUrl));
     return { entity, discoveredUrls, skipped: false, sourcePages: pages.map(toSourcePageCapture) };
   }
 
