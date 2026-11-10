@@ -1,11 +1,70 @@
-import { describe, expect, it } from "vitest";
-import {
+import { describe, expect, it, vi } from "vitest";
+import { CricbuzzProvider,
   isAllowedCricbuzzPageUrl,
   isAllowedCricbuzzSitemapUrl,
   parseCricbuzzSitemapXml
 } from "./cricbuzz-provider.js";
 
 describe("Cricbuzz sitemap discovery", () => {
+  it.each([403, 404])("returns an empty live inventory when the root sitemap returns HTTP %i", async status => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Access denied", {
+      status,
+      headers: { "content-type": "text/html" }
+    })));
+    const provider = new CricbuzzProvider({
+      minRequestIntervalMs: 0,
+      maxMatchesPerPoll: 2,
+      maxProfilesPerPoll: 1,
+      maxTeamsPerPoll: 1,
+      maxSeriesPerPoll: 1,
+      maxVenuesPerPoll: 1,
+      maxContentPagesPerPoll: 1,
+      timeoutMs: 1_000,
+      maxResponseBytes: 100_000,
+      userAgent: "Crikora test suite"
+    });
+
+    try {
+      const result = await provider.discoverSitemapUrls();
+      expect(result.sitemapUrls).toEqual([]);
+      expect(result.pageUrls).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      expect(globalThis.fetch).toBe(originalFetch);
+    }
+  });
+
+  it("continues to surface a source 429 so the caller can honor Retry-After", async () => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Rate limited", {
+      status: 429,
+      headers: { "content-type": "text/plain", "retry-after": "25" }
+    })));
+    const provider = new CricbuzzProvider({
+      minRequestIntervalMs: 0,
+      maxMatchesPerPoll: 2,
+      maxProfilesPerPoll: 1,
+      maxTeamsPerPoll: 1,
+      maxSeriesPerPoll: 1,
+      maxVenuesPerPoll: 1,
+      maxContentPagesPerPoll: 1,
+      timeoutMs: 1_000,
+      maxResponseBytes: 100_000,
+      userAgent: "Crikora test suite"
+    });
+
+    try {
+      await expect(provider.discoverSitemapUrls()).rejects.toMatchObject({
+        sourceStatus: 429,
+        retryAfterMs: 25_000
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      expect(globalThis.fetch).toBe(originalFetch);
+    }
+  });
+
   it("separates child sitemap documents from allowed cricket pages", () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
       <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
