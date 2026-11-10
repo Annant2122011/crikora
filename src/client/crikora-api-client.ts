@@ -95,6 +95,12 @@ export interface ArchiveHistoryQuery {
   before?: string;
 }
 
+export interface CrikoraEntityDetails {
+  entity: CrikoraEntity | CrikoraEntitySnapshot | null;
+  related: CrikoraEntitySnapshot[];
+}
+
+
 export class CrikoraApiError extends Error {
   constructor(
     message: string,
@@ -205,6 +211,19 @@ export class CrikoraApiClient {
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/search?${params.toString()}`, signal);
   }
 
+
+  getEntityDetails(
+    entityType: string,
+    sourceId: string,
+    limit = 100,
+    signal?: AbortSignal
+  ): Promise<CrikoraEnvelope<CrikoraEntityDetails>> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    return this.request<CrikoraEnvelope<CrikoraEntityDetails>>(
+      `/v1/entities/${encodeURIComponent(entityType)}/${encodeURIComponent(sourceId)}/details?${params.toString()}`,
+      signal
+    );
+  }
 
   getArchiveCoverage(signal?: AbortSignal): Promise<CrikoraEnvelope<ArchiveCoverage[]>> {
     return this.request<CrikoraEnvelope<ArchiveCoverage[]>>("/v1/archive/coverage", signal);
