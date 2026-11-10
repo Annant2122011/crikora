@@ -325,7 +325,8 @@ export class DurableCrawlService {
         if (page.skipped) {
           await this.pool.query(
             `UPDATE public.crikora_archive_coverage
-                SET status = 'skipped', updated_at = now()
+                SET status = 'skipped', last_attempted_at = now(),
+                    attempt_count = attempt_count + 1, updated_at = now()
               WHERE source_url = $1`,
             [row.canonical_url]
           );
