@@ -35,9 +35,20 @@ export interface MatchEvent {
   over?: string; occurredAt: string; sourceEventId: string;
   runs?: number; wickets?: number; dismissal?: string;
 }
+export interface SourcePageCapture {
+  url: string;
+  html: string;
+  contentType: string;
+  fetchedAt: string;
+  pageKind: string;
+  entityType?: string;
+  sourceId?: string;
+}
+
 export interface ProviderSnapshot {
   matches: Match[];
   events: MatchEvent[];
   fetchedAt: string;
   entities: import("./entities.js").CrikoraEntity[];
+  sourcePages?: SourcePageCapture[];
 }
