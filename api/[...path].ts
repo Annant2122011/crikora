@@ -185,7 +185,7 @@ async function health(response: ApiResponse): Promise<void> {
       retentionSeconds: 600,
       refreshIntervalSeconds: settings.refresh_interval_seconds,
       enabled: settings.enabled,
-      automationAuthorized: process.env.CRICBUZZ_AUTOMATION_AUTHORIZED === "true",
+      collectionEnabled: process.env.CRIKORA_COLLECTION_ENABLED === "true",
       secretsConfigured: {
         databaseUrl: Boolean(process.env.DATABASE_URL),
         adminSecret: Boolean(process.env.CRIKORA_ADMIN_SECRET),
@@ -230,7 +230,7 @@ async function updateSettings(request: ApiRequest, response: ApiResponse): Promi
     sendJson(response, 400, { error: "enabled must be a boolean." });
     return;
   }
-  if (body.enabled === true && process.env.CRICBUZZ_AUTOMATION_AUTHORIZED !== "true") {
+  if (body.enabled === true && process.env.CRIKORA_COLLECTION_ENABLED !== "true") {
     sendJson(response, 403, {
       error: "The Cricbuzz collector is not marked as authorized in the server environment."
     });
@@ -272,7 +272,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
     sendJson(response, 401, { error: "Unauthorized" });
     return;
   }
-  if (process.env.CRICBUZZ_AUTOMATION_AUTHORIZED !== "true") {
+  if (process.env.CRIKORA_COLLECTION_ENABLED !== "true") {
     sendJson(response, 403, { error: "Cricbuzz automation is not enabled in the server environment." });
     return;
   }
@@ -376,7 +376,7 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
   const expected = process.env.CRIKORA_ADMIN_SECRET;
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
   if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
-  if (process.env.CRICBUZZ_AUTOMATION_AUTHORIZED !== "true") {
+  if (process.env.CRIKORA_COLLECTION_ENABLED !== "true") {
     return sendJson(response, 403, { error: "Cricbuzz collection is not enabled in the server environment." });
   }
 
@@ -439,7 +439,7 @@ async function crawlStep(request: ApiRequest, response: ApiResponse): Promise<vo
   const expected = process.env.CRIKORA_REFRESH_SECRET;
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_REFRESH_SECRET is not configured." });
   if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
-  if (process.env.CRICBUZZ_AUTOMATION_AUTHORIZED !== "true") {
+  if (process.env.CRIKORA_COLLECTION_ENABLED !== "true") {
     return sendJson(response, 403, { error: "Cricbuzz collection is not enabled in the server environment." });
   }
   const settings = await getSettings();
