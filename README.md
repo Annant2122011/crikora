@@ -44,7 +44,7 @@ Image assets are returned as Cricbuzz-hosted HTTPS URLs and metadata. The collec
 
 ## JSON API
 
-All successful data endpoints return JSON with a `data` field and small `meta` object. Index discovery makes the full visible match list available immediately; the detail fields for matches, players, teams, series and venues are progressively enriched over successive collection cycles. Every entity contains `id`, `entityType`, `sourceUrl`, `fetchedAt`, `expiresAt` and `ttlSeconds: 600`, alongside its normalized fields and page-derived payload.
+All successful data endpoints return JSON with a `data` field and small `meta` object. Index discovery makes the full visible match list available immediately; the detail fields for matches, players, teams, series and venues are progressively enriched over successive collection cycles. Every entity contains `id`, `entityType`, `sourceUrl`, `fetchedAt`, `retentionClass` and `expiresAt`. `ttlSeconds` is 600 for ephemeral records and `null` for persistent records. Response metadata describes the shared retention policy.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -109,26 +109,21 @@ Public read routes include:
 - `GET /v1/content?kind=news|video|gallery&limit=100`
 - `GET /v1/search?q=india&limit=30`
 
-The API returns JSON envelopes with `data` and `meta`; timestamps and `ttlSeconds: 600` travel with stored entities. Browser code must use public GET routes only. Keep `DATABASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` server-side. Refresh and crawl control routes are protected and must never be called from the browser.
+The API returns JSON envelopes with `data` and `meta`; timestamps, `retentionClass`, nullable `expiresAt` and a per-record `ttlSeconds` travel with stored entities. Browser code must use public GET routes only. Keep `DATABASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` server-side. Refresh and crawl control routes are protected and must never be called from the browser.
 
-## Ten-minute retention
+## Classified cache retention
 
-Every JSON entity is assigned a database expiry exactly ten minutes after it is fetched/refreshed:
+The cache applies a ten-minute lifetime only to volatile records: live match scores, player-stat subpages, rankings, live commentary, live graphs, over-by-over data, forecasts and other live-analysis pages. These records are refreshed by later collection cycles and are removed after 600 seconds without a refresh.
 
-- PostgreSQL stores normalized records as JSONB.
-- Reads always filter out records whose `expires_at` is in the past.
-- The local long-running API deletes expired rows every 5 seconds and performs cleanup on startup.
-- Reads never return expired rows, even if the cleanup scheduler is temporarily unavailable.
-- A Neon scheduled Function calls the authenticated core API cleanup endpoint every minute, independently of scraper activity and compatible with scale-to-zero.
-- Successful upserts refresh the ten-minute window for records seen again.
+Stable records are retained until their source identity is fetched again: upcoming fixtures, completed match records, player profiles, teams, series, venues, news, videos and galleries. A live match record is ephemeral while its status is live; when a later refresh marks it completed, the same source row becomes persistent. Stable rows are updated in place using `(entity_type, source_id)`, not stored as a versioned history.
 
-The in-memory development repository follows the same ten-minute expiry contract. No permanent historical archive is kept by this cache.
+PostgreSQL reads ignore only expired ephemeral rows. Cleanup deletes only rows with a non-null expired timestamp; persistent rows have `expires_at = NULL`. The local in-memory repository follows the same classification. A Neon scheduled Function can continue calling the cleanup endpoint every minute. This cache is not a permanent historical archive.
 
 ## Neon setup
 
 A separate Neon project named `crikora` was created for cricket data. The existing `resolvX` support-bot database was left untouched.
 
-1. Apply migrations `001_crikora_cache.sql` through `004_crikora_durable_crawl.sql` to the Crikora production database.
+1. Apply migrations `001_crikora_cache.sql` through `006_classified_cache_retention.sql` to the Crikora production database, in numeric order.
 2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
 3. Keep `CRIKORA_COLLECTION_ENABLED=false` until the selected runtime and worker have passed their health checks. This is Crikora’s own operator-controlled feature switch, not a Cricbuzz-issued credential or source-side allowlist.
 4. Set `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` as Vercel server-only secrets. Set `CORS_ORIGINS` to exact deployed origins when browser calls are introduced.
@@ -170,7 +165,7 @@ Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` 
 - Images are exposed as external URLs. They are not copied to Crikora object storage.
 - HTML schemas can change. Keep representative fixtures and re-run the parser tests when Cricbuzz changes markup.
 - This is a static-HTML collector, not a full browser automation engine. It does not execute Cricbuzz client-side JavaScript, trigger interactive tabs, or retrieve data that only appears after browser-side hydration. Some profile tabs, charts, or statistics may therefore be absent. The collector returns fields and links it can verify in the fetched HTML and does not fabricate missing values.
-- The database cache is a ten-minute feed cache, not a historical score archive.
+- Volatile feed data expires after ten minutes; stable records remain until refreshed. This is not a versioned historical score archive.
 
 ## CI
 
@@ -182,7 +177,7 @@ The initial crawl merges the saved 4,721-URL snapshot with the current sitemap i
 
 - Core API: `POST /api/crawl/start`, `GET /api/crawl/status`, `POST /api/crawl/step`, `POST /api/cleanup`.
 - Worker: `POST /v1/crawl/start` (requires the worker admin bearer token).
-- The cache payloads still expire after 600 seconds. The durable queue retains URLs and operational status only, not page contents. This is a live cache and a multi-hour crawl, not a permanent historical snapshot. A complete cross-provider snapshot would require a separate, explicit archive/export retention policy.
+- Volatile cache payloads expire after 600 seconds, while fixtures and other stable records remain until refreshed. The durable queue retains URLs and operational status only, not page contents. A complete versioned cross-provider snapshot would require a separate, explicit archive/export retention policy.
 - The collector reads static HTML from the cricket-data routes in its allowlist. It ignores homepage, advertising, careers, account/login and unrelated site pages. It does not execute browser JavaScript, access private services, bypass CAPTCHA or source denials, or download video streams.
 
 See [the durable crawl runbook](./docs/DURABLE_FULL_CRAWL.md) for the complete route and deployment setup.
