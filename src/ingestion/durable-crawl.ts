@@ -264,13 +264,59 @@ export class DurableCrawlService {
       [run.id, urls, identityKeys, "discovered"]
     );
     const added = inserted.rowCount ?? 0;
-    if (added) {
+
+    // Re-enrich a bounded number of already-captured match pages. The short
+    // live index poll updates every visible score; this slower durable pass
+    // refreshes facts, scorecard, squads and commentary without flooding the
+    // queue or permanently starving the refresh workflow.
+    const dueMatches = await this.pool.query(
+      `WITH due AS (
+         SELECT queue.id
+         FROM public.crikora_crawl_queue AS queue
+         JOIN public.crikora_archive_coverage AS coverage
+           ON coverage.source_url = queue.canonical_url
+         JOIN public.crikora_cache AS cached
+           ON cached.entity_type = 'match'
+          AND cached.source_id = substring(queue.identity_key from 7)
+         WHERE queue.run_id = $1
+           AND queue.canonical_url = ANY($2::text[])
+           AND queue.status = 'completed'
+           AND coverage.page_kind = 'match'
+           AND coverage.last_fetched_at IS NOT NULL
+           AND (
+             (cached.payload->>'status' = 'live'
+               AND coverage.last_fetched_at <= now() - interval '2 minutes')
+             OR
+             (cached.payload->>'status' = 'upcoming'
+               AND coverage.last_fetched_at <= now() - interval '15 minutes')
+           )
+         ORDER BY coverage.last_fetched_at ASC, queue.id ASC
+         LIMIT 10
+         FOR UPDATE OF queue SKIP LOCKED
+       )
+       UPDATE public.crikora_crawl_queue AS queue
+          SET status = 'pending',
+              next_attempt_at = now(),
+              attempts = 0,
+              lease_token = NULL,
+              lease_until = NULL,
+              completed_at = NULL,
+              last_error = NULL,
+              updated_at = now()
+         FROM due
+        WHERE queue.id = due.id
+       RETURNING queue.id`,
+      [run.id, urls]
+    );
+    const refreshed = dueMatches.rowCount ?? 0;
+    const scheduled = added + refreshed;
+    if (scheduled) {
       await this.pool.query(
         "UPDATE public.crikora_crawl_runs SET status = CASE WHEN status = 'completed' THEN 'running' ELSE status END, completed_at = NULL, discovered_url_count = discovered_url_count + $2 WHERE id = $1",
-        [run.id, added]
+        [run.id, scheduled]
       );
     }
-    return added;
+    return scheduled;
   }
 
   async processBatch(signal?: AbortSignal): Promise<CrawlStepResult> {
