@@ -150,6 +150,24 @@ export class CricbuzzProvider implements CricketProvider {
     }
 
     const allMatches = [...discovered.values()];
+    // Persist every match URL into the durable crawl queue, not only the small
+    // per-poll deep-enrichment slice. This prevents cold starts from repeatedly
+    // enriching only the first few matches in the index.
+    let pendingMatches = this.pendingRelatedLinks.get("match");
+    if (!pendingMatches) {
+      pendingMatches = new Map<string, LinkRecord>();
+      this.pendingRelatedLinks.set("match", pendingMatches);
+    }
+    for (const item of allMatches) {
+      const url = new URL(item.path, ORIGIN).toString();
+      if (!pendingMatches.has(url)) pendingMatches.set(url, { url, path: item.path, text: "match index" });
+    }
+    while (pendingMatches.size > 2_000) {
+      const oldest = pendingMatches.keys().next().value as string | undefined;
+      if (!oldest) break;
+      pendingMatches.delete(oldest);
+    }
+
     const selected = rotate(allMatches, this.matchCursor, this.options.maxMatchesPerPoll);
     if (allMatches.length) this.matchCursor = (this.matchCursor + selected.length) % allMatches.length;
 
