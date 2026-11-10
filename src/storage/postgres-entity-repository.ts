@@ -350,6 +350,45 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     }));
   }
 
+  async listRelatedEntityPages(entityType: EntityType, sourceId: string, limit = 100): Promise<EntityHistoryRecord[]> {
+    const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
+    const result = await this.pool.query<{
+      id: string | number;
+      entity_type: EntityType;
+      source_id: string;
+      source_url: string;
+      payload_hash: string;
+      schema_version: number;
+      payload: Record<string, unknown>;
+      observed_at: Date | string;
+    }>(
+      `WITH latest_per_page AS (
+         SELECT DISTINCT ON (source_id)
+           id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
+         FROM public.crikora_entity_snapshots
+         WHERE entity_type = 'metadata'
+           AND payload->>'relatedEntityType' = $1
+           AND payload->>'relatedSourceId' = $2
+         ORDER BY source_id, observed_at DESC, id DESC
+       )
+       SELECT id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
+       FROM latest_per_page
+       ORDER BY observed_at DESC, id DESC
+       LIMIT $3`,
+      [entityType, sourceId, safeLimit]
+    );
+    return result.rows.map(row => ({
+      id: String(row.id),
+      entityType: row.entity_type,
+      sourceId: row.source_id,
+      sourceUrl: row.source_url,
+      payloadHash: row.payload_hash.trim(),
+      schemaVersion: row.schema_version,
+      payload: row.payload,
+      observedAt: new Date(row.observed_at).toISOString()
+    }));
+  }
+
   async getArchiveCoverage(): Promise<ArchiveCoverageRow[]> {
     const result = await this.pool.query<{
       page_kind: string;
