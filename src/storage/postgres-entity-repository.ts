@@ -41,11 +41,22 @@ function stableValue(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   const output: Record<string, unknown> = {};
   for (const key of Object.keys(record).sort()) {
-    if (["fetchedAt", "updatedAt", "fetched_at", "updated_at", "observedAt"].includes(key)) continue;
+    if ([
+      "fetchedAt", "updatedAt", "fetched_at", "updated_at", "observedAt",
+      "occurredAt", "responseLastUpdated", "responseUpdatedAt", "lastUpdatedAt"
+    ].includes(key)) continue;
     output[key] = stableValue(record[key]);
   }
   return output;
 }
+
+const RAW_PAGE_MIN_INTERVAL_MS = 60 * 60 * 1000;
+const HIGH_CHURN_PAGE_KINDS = new Set([
+  "match", "match-facts", "match-scorecard", "match-squads", "commentary",
+  "live-stream-page", "live-graphs", "over-by-over", "match-highlights",
+  "match-forecast", "wicket-zone", "player-match-performance",
+  "ranking-or-statistics", "player-stats"
+]);
 
 export function hashEntityPayload(payload: Record<string, unknown>): string {
   return createHash("sha256").update(JSON.stringify(stableValue(payload))).digest("hex");
@@ -185,11 +196,12 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
   }
 
 
-  async recordSourcePages(pages: SourcePageCapture[]): Promise<{ inserted: number; duplicates: number }> {
-    if (!pages.length) return { inserted: 0, duplicates: 0 };
+  async recordSourcePages(pages: SourcePageCapture[]): Promise<{ inserted: number; duplicates: number; deferred: number }> {
+    if (!pages.length) return { inserted: 0, duplicates: 0, deferred: 0 };
     const client = await this.pool.connect();
     let inserted = 0;
     let duplicates = 0;
+    let deferred = 0;
     try {
       await client.query("BEGIN");
       const orderedPages = [...pages].sort((left, right) => left.url.localeCompare(right.url));
@@ -204,13 +216,21 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
           "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
           [`archive-page:${page.url}`]
         );
-        const latestPage = await client.query<{ content_sha256: string }>(
-          `SELECT content_sha256 FROM public.crikora_source_page_snapshots
+        const latestPage = await client.query<{ content_sha256: string; fetched_at: Date | string }>(
+          `SELECT content_sha256, fetched_at FROM public.crikora_source_page_snapshots
            WHERE source_url = $1
            ORDER BY fetched_at DESC, id DESC LIMIT 1`,
           [page.url]
         );
-        const wasInserted = latestPage.rows[0]?.content_sha256.trim() !== contentHash;
+        const previousPage = latestPage.rows[0];
+        const contentChanged = previousPage?.content_sha256.trim() !== contentHash;
+        const previousCapturedAt = previousPage ? new Date(previousPage.fetched_at).getTime() : 0;
+        const rawCaptureThrottled = contentChanged &&
+          HIGH_CHURN_PAGE_KINDS.has(pageKind) &&
+          previousCapturedAt > 0 &&
+          new Date(fetchedAt).getTime() - previousCapturedAt < RAW_PAGE_MIN_INTERVAL_MS;
+        const wasInserted = contentChanged && !rawCaptureThrottled;
+        if (rawCaptureThrottled) deferred += 1;
         if (wasInserted) {
           await client.query(
             `INSERT INTO public.crikora_source_page_snapshots
@@ -221,7 +241,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
           );
         }
         if (wasInserted) inserted += 1;
-        else duplicates += 1;
+        else if (!rawCaptureThrottled) duplicates += 1;
         await client.query(
           `INSERT INTO public.crikora_archive_coverage
             (source_url, identity_key, page_kind, status, last_attempted_at, last_fetched_at,
@@ -245,7 +265,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
         );
       }
       await client.query("COMMIT");
-      return { inserted, duplicates };
+      return { inserted, duplicates, deferred };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
