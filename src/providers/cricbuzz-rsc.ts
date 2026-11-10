@@ -8,7 +8,7 @@ export interface CricbuzzFlightPayload {
   keyedData: Record<string, unknown[]>;
 }
 
-const CHUNK = new RegExp('self\\\\.__next_f\\\\.push\\\\(\\\\[1,"((?:[^"\\\\\\\\]|\\\\\\\\.)*)"\\\\]\\\\)', "gs");
+const CHUNK = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/gs;
 const ROW_ID = /^[0-9a-f]+$/i;
 const INTERESTING_KEYS = [
   "playerData", "matchInfo", "matchHeader", "miniscore", "commentaryPageData",
