@@ -36,6 +36,20 @@ describe("Cricbuzz player detail extraction", () => {
     );
   });
 
+  it("links player statistics tabs back to the parent player identity", () => {
+    const entity = parseCricbuzzEntityHtml(
+      "<html><main><h1>Example Player Batting</h1><table><tr><th>Matches</th><td>20</td></tr></table></main></html>",
+      "https://www.cricbuzz.com/profiles/999999/example-player/all-matches/batting"
+    );
+    expect(entity?.entityType).toBe("metadata");
+    expect(entity?.payload).toMatchObject({
+      pageKind: "player-stats",
+      relatedEntityType: "player",
+      relatedSourceId: "999999",
+      statistics: [{ headers: ["Matches"], rows: [["20"]] }]
+    });
+  });
+
   it("extracts flattened label/value pairs without truncating at whitespace", () => {
     const text = "Born 22 May 1987 Birth Place Durban Role All-rounder Batting Style Right hand bat Teams South Africa, Titans";
     expect(labeledValue(text, "Born")).toBe("22 May 1987");
