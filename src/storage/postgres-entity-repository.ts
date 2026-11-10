@@ -113,7 +113,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
         const latestSnapshot = await client.query<{ payload_hash: string }>(
           `SELECT payload_hash FROM public.crikora_entity_snapshots
            WHERE entity_type = $1 AND source_id = $2
-           ORDER BY observed_at DESC, id DESC LIMIT 1`,
+           ORDER BY id DESC LIMIT 1`,
           [entity.entityType, entity.sourceId]
         );
         if (latestSnapshot.rows[0]?.payload_hash.trim() !== payloadHash) {
@@ -328,7 +328,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
            id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
          FROM public.crikora_entity_snapshots
          WHERE entity_type = $1
-         ORDER BY source_id, observed_at DESC, id DESC
+         ORDER BY source_id, id DESC
        )
        SELECT id, entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at
        FROM latest_per_entity
