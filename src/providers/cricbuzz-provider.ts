@@ -282,13 +282,14 @@ export class CricbuzzProvider implements CricketProvider {
     const entities = new Map<string, CrikoraEntity>();
     const capturedPages = new Map<string, PageRecord>();
 
-    // This is deliberately a small, index-only snapshot. It keeps the live,
-    // upcoming and recent catalogs fresh while historical deep-page work runs.
+    // Keep the live catalog lightweight, while sampling the changing section
+    // directories on a time-derived cursor that survives serverless cold starts.
     for (const index of INDEXES) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz index refresh aborted.");
       const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
       if (!page) continue;
       capturedPages.set(page.url, page);
+      this.queueRelatedPageLinks(page.$, page.url);
       for (const link of getLinks(page.$, page.url)) {
         const match = link.path.match(/^\\/live-cricket-scores\\/(\\d+)(?:\\/|$)/);
         if (!match?.[1] || discovered.has(match[1])) continue;
@@ -306,6 +307,18 @@ export class CricbuzzProvider implements CricketProvider {
           stub as unknown as Record<string, unknown>
         );
       }
+    }
+
+    const sectionTick = Math.floor(Date.now() / 10_000);
+    const sectionStart = (sectionTick * 2) % SECTION_INDEXES.length;
+    for (const path of rotate(SECTION_INDEXES, sectionStart, 2)) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz section refresh aborted.");
+      const page = await this.tryFetchPage(new URL(path, ORIGIN), "section-index", signal);
+      if (!page) continue;
+      capturedPages.set(page.url, page);
+      this.queueRelatedPageLinks(page.$, page.url);
+      const generic = parseEntityPage(page.$, page.url);
+      if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
     }
 
     const fetchedAt = new Date().toISOString();
