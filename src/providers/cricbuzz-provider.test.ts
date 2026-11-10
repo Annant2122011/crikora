@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, classifyMatchFormat, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
+import { classifyCricbuzzEntityUrl, classifyMatchFormat, labeledValue, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
 
 describe("Crikora cricket scope and format classification", () => {
   it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
@@ -10,6 +10,40 @@ describe("Crikora cricket scope and format classification", () => {
   });
 
 });
+describe("Cricbuzz player detail extraction", () => {
+  it("extracts all labelled profile fields, not only a fixed handful", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><main><h1>Example Player</h1><table>
+        <tr><th>Born</th><td>22 May 1987</td></tr>
+        <tr><th>Role</th><td>All-rounder</td></tr>
+        <tr><th>Batting Style</th><td>Right hand bat</td></tr>
+        <tr><th>Test Debut</th><td>1 January 2008</td></tr>
+        <tr><th>IPL Debut</th><td>2009</td></tr>
+      </table><h2>Summary</h2><p>Example career summary.</p></main></html>`,
+      "https://www.cricbuzz.com/profiles/999999/example-player"
+    );
+    const profile = entity?.payload.profile as Record<string, unknown>;
+    const allFields = profile.allFields as Record<string, string>;
+    expect(allFields).toMatchObject({
+      Born: "22 May 1987",
+      Role: "All-rounder",
+      "Batting Style": "Right hand bat",
+      "Test Debut": "1 January 2008",
+      "IPL Debut": "2009"
+    });
+    expect(profile.biographySections).toEqual(
+      expect.arrayContaining([expect.objectContaining({ heading: "Summary", text: "Example career summary." })])
+    );
+  });
+
+  it("extracts flattened label/value pairs without truncating at whitespace", () => {
+    const text = "Born 22 May 1987 Birth Place Durban Role All-rounder Batting Style Right hand bat Teams South Africa, Titans";
+    expect(labeledValue(text, "Born")).toBe("22 May 1987");
+    expect(labeledValue(text, "Birth Place")).toBe("Durban");
+    expect(labeledValue(text, "Teams")).toBe("South Africa, Titans");
+  });
+});
+
 describe("Cricbuzz source URL classification", () => {
   it("identifies player profiles by their stable numeric ID", () => {
     expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/11527/paul-walter"))
