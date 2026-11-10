@@ -210,6 +210,21 @@ export class CrikoraApiClient {
     return this.request<CrikoraEnvelope<ArchiveCoverage[]>>("/v1/archive/coverage", signal);
   }
 
+  listArchivedEntities(
+    entityType: string,
+    query: ArchiveHistoryQuery = {},
+    signal?: AbortSignal
+  ): Promise<CrikoraEnvelope<CrikoraEntitySnapshot[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.before) params.set("before", query.before);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraEntitySnapshot[]>>(
+      `/v1/archive/entities/${encodeURIComponent(entityType)}${suffix}`,
+      signal
+    );
+  }
+
   getEntityHistory(
     entityType: string,
     sourceId: string,
