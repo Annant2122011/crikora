@@ -76,6 +76,8 @@ CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_hash_idx
   ON public.crikora_entity_snapshots (entity_type, source_id, payload_hash);
 CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_observed_idx
   ON public.crikora_entity_snapshots (observed_at DESC);
+CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_source_url_idx
+  ON public.crikora_entity_snapshots (source_url, id DESC);
 
 CREATE TABLE IF NOT EXISTS public.crikora_source_page_snapshots (
   id bigserial PRIMARY KEY,
