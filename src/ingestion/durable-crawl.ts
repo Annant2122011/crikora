@@ -257,43 +257,59 @@ export class DurableCrawlService {
   async enqueueDiscoveredUrls(values: string[]): Promise<number> {
     const urls = dedupeCricbuzzPageUrls(values.filter(url => this.provider.isAllowedCrawlUrl(url)));
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
-    if (!urls.length) return 0;
-    await this.recordCoverageTargets(urls);
+    if (urls.length) await this.recordCoverageTargets(urls);
+
     const latest = await this.pool.query<{ id: string; status: RunStatus }>(
       "SELECT id, status FROM public.crikora_crawl_runs ORDER BY created_at DESC LIMIT 1"
     );
     const run = latest.rows[0];
     if (!run || run.status === "paused") return 0;
-    const inserted = await this.pool.query(
-      "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'live-index' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-      [run.id, urls, identityKeys, "discovered"]
-    );
-    const added = inserted.rowCount ?? 0;
 
-    // Re-enrich a bounded number of already-captured match pages. The short
-    // live index poll updates every visible score; this slower durable pass
-    // refreshes facts, scorecard, squads and commentary without flooding the
-    // queue or permanently starving the refresh workflow.
-    const dueMatches = await this.pool.query(
+    let added = 0;
+    if (urls.length) {
+      const inserted = await this.pool.query(
+        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'live-index' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
+        [run.id, urls, identityKeys, "discovered"]
+      );
+      added = inserted.rowCount ?? 0;
+    }
+
+    // Re-enrich changed, already-captured records on their own cadence. Match
+    // details are refreshed most often; player career/stat pages and stable
+    // entity pages are refreshed daily; volatile directories are revisited
+    // more frequently. Selection is DB-wide, not limited to the in-memory map.
+    const duePages = await this.pool.query(
       `WITH due AS (
          SELECT queue.id
          FROM public.crikora_crawl_queue AS queue
          JOIN public.crikora_archive_coverage AS coverage
            ON coverage.source_url = queue.canonical_url
-         JOIN public.crikora_cache AS cached
+         LEFT JOIN public.crikora_cache AS cached
            ON cached.entity_type = 'match'
           AND cached.source_id = substring(queue.identity_key from 7)
          WHERE queue.run_id = $1
-           AND queue.canonical_url = ANY($2::text[])
            AND queue.status = 'completed'
-           AND coverage.page_kind = 'match'
            AND coverage.last_fetched_at IS NOT NULL
            AND (
-             (cached.payload->>'status' = 'live'
-               AND coverage.last_fetched_at <= now() - interval '2 minutes')
+             (
+               coverage.page_kind = 'match'
+               AND (
+                 (cached.payload->>'status' = 'live'
+                   AND coverage.last_fetched_at <= now() - interval '2 minutes')
+                 OR
+                 (cached.payload->>'status' = 'upcoming'
+                   AND coverage.last_fetched_at <= now() - interval '15 minutes')
+               )
+             )
              OR
-             (cached.payload->>'status' = 'upcoming'
-               AND coverage.last_fetched_at <= now() - interval '15 minutes')
+             (coverage.page_kind IN ('player', 'player-stats', 'team', 'team-subpage',
+                'series', 'series-subpage', 'series-auction', 'venue')
+               AND coverage.last_fetched_at <= now() - interval '24 hours')
+             OR
+             (coverage.page_kind IN ('ranking-or-statistics', 'schedule', 'news-index',
+                'news-category', 'video-index', 'video-collection', 'gallery-index',
+                'player-directory', 'team-directory', 'scorecard-archives')
+               AND coverage.last_fetched_at <= now() - interval '30 minutes')
            )
          ORDER BY coverage.last_fetched_at ASC, queue.id ASC
          LIMIT 10
@@ -311,9 +327,9 @@ export class DurableCrawlService {
          FROM due
         WHERE queue.id = due.id
        RETURNING queue.id`,
-      [run.id, urls]
+      [run.id]
     );
-    const refreshed = dueMatches.rowCount ?? 0;
+    const refreshed = duePages.rowCount ?? 0;
     const scheduled = added + refreshed;
     if (scheduled) {
       await this.pool.query(
