@@ -255,11 +255,11 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
           await client.query(
             `INSERT INTO public.crikora_source_page_snapshots
               (source_url, page_kind, entity_type, source_id, content_type, content_sha256,
-               body_gzip, object_key, body_bytes, fetched_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz)`,
+               body_gzip, object_key, body_bytes, stored_bytes, fetched_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)`,
             [page.url, pageKind, page.entityType ?? null,
               page.sourceId ?? null, page.contentType || "text/html; charset=utf-8",
-              contentHash, objectKey ? null : compressed, objectKey, raw.byteLength, fetchedAt]
+              contentHash, objectKey ? null : compressed, objectKey, raw.byteLength, compressed.byteLength, fetchedAt]
           );
         }
         if (wasInserted) inserted += 1;
@@ -464,6 +464,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       raw_page_versions: string | number;
       entity_versions: string | number;
       raw_page_bytes: string | number;
+      stored_bytes: string | number;
       last_fetched_at: Date | string | null;
     }>(
       `SELECT coverage.page_kind, coverage.status,
@@ -472,6 +473,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
               COALESCE(sum(coverage.version_count), 0) AS raw_page_versions,
               COALESCE(sum(entity_versions.count), 0) AS entity_versions,
               COALESCE(sum(page_storage.raw_page_bytes), 0) AS raw_page_bytes,
+              COALESCE(sum(page_storage.stored_bytes), 0) AS stored_bytes,
               max(coverage.last_fetched_at) AS last_fetched_at
        FROM public.crikora_archive_coverage AS coverage
        LEFT JOIN LATERAL (
@@ -480,7 +482,8 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
          WHERE snapshot.source_url = coverage.source_url
        ) AS entity_versions ON true
        LEFT JOIN LATERAL (
-         SELECT COALESCE(sum(body_bytes), 0) AS raw_page_bytes
+         SELECT COALESCE(sum(body_bytes), 0) AS raw_page_bytes,
+                COALESCE(sum(stored_bytes), 0) AS stored_bytes
          FROM public.crikora_source_page_snapshots AS page
          WHERE page.source_url = coverage.source_url
        ) AS page_storage ON true
@@ -495,6 +498,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       rawPageVersions: Number(row.raw_page_versions),
       entityVersions: Number(row.entity_versions),
       rawPageBytes: Number(row.raw_page_bytes),
+      storedBytes: Number(row.stored_bytes),
       lastFetchedAt: row.last_fetched_at ? new Date(row.last_fetched_at).toISOString() : null
     }));
   }
