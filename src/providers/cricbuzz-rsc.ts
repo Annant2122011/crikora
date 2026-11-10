@@ -16,16 +16,50 @@ const INTERESTING_KEYS = [
   "graphsData", "initialStats", "playerNews", "storyList", "squads", "team1", "team2"
 ];
 
-function findValues(value: unknown, key: string, found: unknown[], depth = 0): void {
+function resolveReferences(
+  value: unknown,
+  rows: Record<string, unknown>,
+  depth = 0,
+  visited: Set<string> = new Set()
+): unknown {
+  if (depth > 40) return value;
+  if (typeof value === "string" && value.startsWith("$")) {
+    if (value === "$undefined") return null;
+    const reference = value.slice(1);
+    if (/^[0-9a-f]+$/i.test(reference) && rows[reference] !== undefined && !visited.has(reference)) {
+      const next = new Set(visited);
+      next.add(reference);
+      return resolveReferences(rows[reference], rows, depth + 1, next);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(item => resolveReferences(item, rows, depth + 1, visited));
+  if (!value || typeof value !== "object") return value;
+  const resolved: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    resolved[key] = resolveReferences(child, rows, depth + 1, visited);
+  }
+  return resolved;
+}
+
+function findValues(
+  value: unknown,
+  key: string,
+  found: unknown[],
+  rows: Record<string, unknown>,
+  depth = 0
+): void {
   if (depth > 32 || found.length >= 50) return;
   if (Array.isArray(value)) {
-    for (const child of value) findValues(child, key, found, depth + 1);
+    for (const child of value) findValues(child, key, found, rows, depth + 1);
     return;
   }
   if (!value || typeof value !== "object") return;
   const record = value as Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(record, key)) found.push(record[key]);
-  for (const child of Object.values(record)) findValues(child, key, found, depth + 1);
+  if (Object.prototype.hasOwnProperty.call(record, key)) {
+    found.push(resolveReferences(record[key], rows));
+  }
+  for (const child of Object.values(record)) findValues(child, key, found, rows, depth + 1);
 }
 
 function parseRows(flight: string): Record<string, unknown> {
@@ -89,7 +123,7 @@ export function decodeCricbuzzFlightScripts(scripts: string[]): CricbuzzFlightPa
   const keyedData: Record<string, unknown[]> = {};
   for (const key of INTERESTING_KEYS) {
     const values: unknown[] = [];
-    for (const row of Object.values(rows)) findValues(row, key, values);
+    for (const row of Object.values(rows)) findValues(row, key, values, rows);
     if (values.length) keyedData[key] = values.slice(0, 50);
   }
   return { rowCount: Object.keys(rows).length, rows, keyedData };
