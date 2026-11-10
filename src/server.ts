@@ -215,6 +215,21 @@ app.get("/v1/archive/coverage", async (_request, reply) => {
   return { data, meta: { retention: "permanent", appendOnly: true } };
 });
 
+app.get("/v1/archive/entities/:entityType", async (request, reply) => {
+  const params = z.object({ entityType: z.enum(ENTITY_TYPES) }).safeParse(request.params);
+  const query = z.object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    before: z.string().min(1).optional()
+  }).safeParse(request.query);
+  if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid archive entity query." });
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const data = await repository.listArchivedEntities(params.data.entityType, query.data.limit, query.data.before);
+  return {
+    data,
+    meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true }
+  };
+});
+
 app.get("/v1/archive/entities/:entityType/:sourceId/history", async (request, reply) => {
   const params = z.object({
     entityType: z.enum(ENTITY_TYPES),
@@ -229,7 +244,7 @@ app.get("/v1/archive/entities/:entityType/:sourceId/history", async (request, re
   const data = await repository.listEntityHistory(
     params.data.entityType, params.data.sourceId, query.data.limit, query.data.before
   );
-  return { data, meta: { count: data.length, retention: "permanent", appendOnly: true } };
+  return { data, meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true } };
 });
 
 app.setErrorHandler((error, _request, reply) => {
