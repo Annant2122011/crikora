@@ -75,6 +75,7 @@ export interface NormalizedDelivery {
   extraRuns: number;
   totalRuns: number;
   extraType?: string;
+  extras: NormalizedExtras;
   isWicket: boolean;
   dismissalType?: string;
   dismissedPlayer?: string;
@@ -209,16 +210,54 @@ function parseOverBall(record: DataRecord): { over?: number; ball?: number } {
   const overText = asString(rawOver);
   const notation = overText?.match(/^(\d+)\.(\d+)$/) ?? asString(rawBall)?.match(/^(\d+)\.(\d+)$/);
   if (notation) return { over: Number(notation[1]), ball: Number(notation[2]) };
-  return {
-    over: asNumber(rawOver),
-    ball: asNumber(rawBall)
-  };
+  const explicitOver = asNumber(rawOver);
+  const explicitBall = asNumber(rawBall);
+  if (explicitOver !== undefined || explicitBall !== undefined) {
+    return { ...(explicitOver !== undefined ? { over: explicitOver } : {}), ...(explicitBall !== undefined ? { ball: explicitBall } : {}) };
+  }
+  const ballNbr = numberField(record, ["ballNbr", "ballNumberInInnings", "deliveryNumberInInnings"]);
+  if (ballNbr !== undefined && ballNbr > 0) {
+    return { over: Math.floor((ballNbr - 1) / 6), ball: ((ballNbr - 1) % 6) + 1 };
+  }
+  return {};
+}
+
+function nestedString(record: DataRecord, objectAliases: string[], valueAliases: string[]): string | undefined {
+  const nested = asRecord(scalar(record, objectAliases));
+  return nested ? stringField(nested, valueAliases) : undefined;
+}
+
+function nestedNumber(record: DataRecord, objectAliases: string[], valueAliases: string[]): number | undefined {
+  const nested = asRecord(scalar(record, objectAliases));
+  return nested ? numberField(nested, valueAliases) : undefined;
+}
+
+function commentaryText(record: DataRecord): string | undefined {
+  const raw = stringField(record, ["commentary", "commText", "comment", "description", "eventDescription", "text"]);
+  if (!raw) return undefined;
+  const formats = asRecord(scalar(record, ["commentaryFormats", "formats"]));
+  if (!formats) return raw;
+  let rendered = raw;
+  for (const value of Object.values(formats)) {
+    const format = asRecord(value);
+    if (!format) continue;
+    const ids = scalar(format, ["formatId", "id"]);
+    const values = scalar(format, ["formatValue", "value", "text"]);
+    const idList = Array.isArray(ids) ? ids : ids === undefined ? [] : [ids];
+    const valueList = Array.isArray(values) ? values : values === undefined ? [] : [values];
+    for (let index = 0; index < Math.min(idList.length, valueList.length); index++) {
+      if (typeof idList[index] === "string" && typeof valueList[index] === "string") {
+        rendered = rendered.split(idList[index] as string).join(valueList[index] as string);
+      }
+    }
+  }
+  return clean(rendered);
 }
 
 function parseInningsNumber(record: DataRecord): number {
-  const value = scalar(record, ["inningsNumber", "inningsNo", "inningNumber", "innings", "inning"]);
+  const value = scalar(record, ["inningsNumber", "inningsNo", "inningNumber", "inningsId", "inningId", "innings", "inning"]);
   const explicit = asNumber(value);
-  if (explicit && explicit > 0) return Math.trunc(explicit);
+  if (explicit !== undefined && explicit >= 0) return Math.trunc(explicit);
   const text = asString(value) ?? "";
   const ordinal = text.match(/(1st|2nd|3rd|4th|first|second|third|fourth)/i)?.[1]?.toLowerCase();
   return ordinal ? ({ "1st": 1, first: 1, "2nd": 2, second: 2, "3rd": 3, third: 3, "4th": 4, fourth: 4 } as Record<string, number>)[ordinal] ?? 1 : 1;
@@ -246,11 +285,11 @@ function parseExtrasText(value: string): NormalizedExtras {
 function extrasFromRecord(record: DataRecord): NormalizedExtras {
   const value = asRecord(scalar(record, ["extras", "extraRuns", "extrasData", "extra"])) ?? {};
   const text = stringField(record, ["extrasText", "extrasString"]) ?? "";
-  const byes = numberField(value, ["byes", "b"]) ?? parseExtrasText(text).byes;
-  const legByes = numberField(value, ["legByes", "legbye", "lb"]) ?? parseExtrasText(text).legByes;
-  const wides = numberField(value, ["wides", "wide", "wd", "w"]) ?? parseExtrasText(text).wides;
-  const noBalls = numberField(value, ["noBalls", "noballs", "nb"]) ?? parseExtrasText(text).noBalls;
-  const penalty = numberField(value, ["penalty", "penaltyRuns", "p"]) ?? parseExtrasText(text).penalty;
+  const byes = numberField(value, ["byes", "b"]) ?? numberField(record, ["byes", "byeRuns", "bye"]) ?? parseExtrasText(text).byes;
+  const legByes = numberField(value, ["legByes", "legbye", "lb"]) ?? numberField(record, ["legByes", "legByeRuns", "legBye"]) ?? parseExtrasText(text).legByes;
+  const wides = numberField(value, ["wides", "wide", "wd", "w"]) ?? numberField(record, ["wides", "wideRuns", "wide"]) ?? parseExtrasText(text).wides;
+  const noBalls = numberField(value, ["noBalls", "noballs", "nb", "no_balls"]) ?? numberField(record, ["noBalls", "noballs", "no_balls", "noBallRuns"]) ?? parseExtrasText(text).noBalls;
+  const penalty = numberField(value, ["penalty", "penaltyRuns", "p"]) ?? numberField(record, ["penalty", "penaltyRuns"]) ?? parseExtrasText(text).penalty;
   const total = numberField(value, ["total", "totalExtras", "runs"]) ??
     numberField(record, ["totalExtras", "extrasTotal", "extraRuns", "extras"]) ??
     (byes + legByes + wides + noBalls + penalty);
@@ -556,7 +595,8 @@ export function normalizeCricbuzzPlayerProfile(
     values(["biography", "bio", "description", "playerDescription", "summary"]);
   const image = $("meta[property='og:image']").attr("content") ||
     $("img[alt]").filter((_i, element) => /player|profile/i.test($(element).attr("alt") ?? "")).first().attr("src") ||
-    $("img[alt]").first().attr("src");
+    $("img[alt]").first().attr("src") ||
+    values(["image", "profileImage", "profileImageUrl", "faceImage"]);
   const teamValue = values(["teams", "team", "currentTeams", "domesticTeams"]);
   const teams = teamValue ? teamValue.split(/[,;|]/).map(clean).filter(Boolean) : [];
   const attributes: NormalizedPlayerAttribute[] = [];
@@ -586,6 +626,12 @@ export function normalizeCricbuzzPlayerProfile(
       allFields[label] = String(value);
     }
   }
+  // Include every scalar React payload field under its original source key as well as HTML labels.
+  for (const attribute of attributes) {
+    if (attribute.sourceLabel && (typeof attribute.value === "string" || typeof attribute.value === "number" || typeof attribute.value === "boolean")) {
+      allFields[attribute.sourceLabel] ??= String(attribute.value);
+    }
+  }
   const uniqueAttributes = [...new Map(attributes.map(attribute => [attribute.fieldPath + ":" + String(attribute.value), attribute])).values()];
   const statistics: NormalizedPlayerStatistic[] = [];
   $("table").each((tableIndex, table) => {
@@ -613,11 +659,11 @@ export function normalizeCricbuzzPlayerProfile(
   return {
     schemaVersion: 1,
     fullName: values(["fullName", "name", "playerName"]) || clean($("h1").first().text()) || undefined,
-    country: values(["country", "nationality", "internationalTeam", "countryName"]),
+    country: values(["country", "nationality", "internationalTeam", "intlTeam", "countryName"]),
     role: values(["role", "playingRole", "playerRole"]),
-    battingStyle: values(["battingStyle", "batStyle"]),
-    bowlingStyle: values(["bowlingStyle", "bowlStyle"]),
-    birthDate: parseBirthDate(values(["dateOfBirth", "dob", "born"])),
+    battingStyle: values(["battingStyle", "batStyle", "bat"]),
+    bowlingStyle: values(["bowlingStyle", "bowlStyle", "bowl"]),
+    birthDate: parseBirthDate(values(["dateOfBirth", "dob", "dobFormat", "born"])),
     birthPlace,
     ...(heightNumber !== undefined ? { heightCm: /m$/.test(height ?? "") && heightNumber < 3 ? heightNumber * 100 : heightNumber } : {}),
     biography,
@@ -640,28 +686,45 @@ function collectStructuredRecords(root: unknown, predicate: (record: DataRecord)
 
 function normalizeStructuredDelivery(record: DataRecord, matchId: string): NormalizedDelivery | undefined {
   const { over, ball } = parseOverBall(record);
-  const commentary = stringField(record, ["commentary", "commText", "comment", "description", "eventDescription", "text", "event"]);
-  const batter = stringField(record, ["batsmanStriker", "striker", "batter", "batsman", "batsmanName", "strikerName"]);
-  const bowler = stringField(record, ["bowler", "bowlerName", "bowlingPlayer"]);
-  const batRuns = numberField(record, ["batRuns", "batsmanRuns", "batterRuns", "runsOffBat"]) ?? 0;
-  const extras = extrasFromRecord(record);
-  const explicitTotal = numberField(record, ["totalRuns", "totalRun", "score", "deliveryRuns"]);
-  const totalRuns = explicitTotal ?? batRuns + extras.total;
-  const dismissalType = stringField(record, ["dismissalType", "wicketType", "dismissal", "howOut", "kind"]);
+  const commentary = commentaryText(record);
+  const batter = stringField(record, ["batter", "batsman", "striker", "batsmanName", "strikerName"]) ??
+    nestedString(record, ["batsmanStriker"], ["batName", "batsmanName", "playerName", "name"]);
+  const nonStriker = stringField(record, ["nonStriker", "nonStrikerName", "batsmanNonStriker"]) ??
+    nestedString(record, ["batsmanNonStriker", "nonStrikerDetails"], ["batName", "batsmanName", "playerName", "name"]);
+  const bowler = stringField(record, ["bowler", "bowlerName", "bowlingPlayer"]) ??
+    nestedString(record, ["bowlerStriker"], ["bowlName", "bowlerName", "playerName", "name"]);
+  const batRuns = numberField(record, ["batRuns", "batsmanRuns", "batterRuns", "runsOffBat"]) ??
+    nestedNumber(record, ["batsmanStriker"], ["batRuns", "runs"]) ?? 0;
+  const rawExtras = extrasFromRecord(record);
+  const explicitExtraRuns = numberField(record, ["extraRuns", "extrasRuns", "totalExtraRuns"]);
+  const explicitTotal = numberField(record, ["totalRuns", "totalRun", "deliveryRuns"]);
+  const totalRuns = explicitTotal ?? batRuns + (explicitExtraRuns ?? rawExtras.total);
+  const extraRuns = explicitExtraRuns ?? Math.max(0, totalRuns - batRuns, rawExtras.total);
+  const extras: NormalizedExtras = {
+    ...rawExtras,
+    total: Math.max(rawExtras.total, extraRuns)
+  };
+  const eventType = stringField(record, ["eventType", "event", "type", "kind"]);
+  const wicketCode = stringField(record, ["wicketCode", "dismissalType", "wicketType", "dismissal", "howOut", "kind"]) ??
+    nestedString(record, ["batsmanStriker"], ["wicketCode", "dismissalType"]);
+  const strikerDismissal = nestedString(record, ["batsmanStriker"], ["outDesc", "dismissal", "howOut"]);
+  const dismissalType = wicketCode ?? strikerDismissal;
   const wicketFlag = scalar(record, ["isWicket", "wicket", "out"]);
   const explicitWicket = wicketFlag === true ||
     (typeof wicketFlag === "number" && wicketFlag > 0) ||
     (typeof wicketFlag === "string" && /^(?:true|yes|1|out|wicket)$/i.test(wicketFlag.trim()));
   const isWicket = explicitWicket ||
-    Boolean(dismissalType && !/not out|none|false/i.test(dismissalType)) ||
+    Boolean(wicketCode && !/^(?:none|false|not out|)$/i.test(wicketCode)) ||
+    Boolean(strikerDismissal && !/^(?:none|false|not out|retired hurt)$/i.test(strikerDismissal)) ||
+    /\b(?:WICKET|CAUGHT|BOWLED|LBW|RUN OUT|STUMPED|HIT WICKET|RETD_OUT)\b/i.test(eventType ?? "") ||
     /\b(?:OUT|WICKET|CAUGHT|BOWLED|LBW|RUN OUT|STUMPED|HIT WICKET)\b/i.test(commentary ?? "");
-  if (over === undefined && ball === undefined && !commentary) return undefined;
-  if (!commentary && !batter && !bowler && over === undefined) return undefined;
   const inningsNumber = parseInningsNumber(record);
+  const ballNbr = numberField(record, ["ballNbr"]);
   const explicitId = stringField(record, ["sourceEventId", "eventId", "commentaryId", "deliveryId", "id", "key"]);
-  const hasDeliveryIdentity = ball !== undefined || Boolean(explicitId) ||
+  // A ballNbr of zero is Cricbuzz's pre-match/toss/team-note convention, not a delivery.
+  const hasDeliveryIdentity = (ball ?? 0) > 0 || Boolean(explicitId && (batter || bowler || over !== undefined)) ||
     (over !== undefined && Boolean(batter && bowler));
-  if (!hasDeliveryIdentity) return undefined;
+  if (!hasDeliveryIdentity || inningsNumber <= 0) return undefined;
   const signature = [matchId, inningsNumber, over ?? "", ball ?? "", batter ?? "", bowler ?? "", commentary ?? "", JSON.stringify(record)].join("|");
   return {
     sourceEventId: explicitId || matchId + ":" + inningsNumber + ":" + (over ?? "x") + "." + (ball ?? "x") + ":" + stableHash(signature),
@@ -669,42 +732,77 @@ function normalizeStructuredDelivery(record: DataRecord, matchId: string): Norma
     ...(over !== undefined ? { overNumber: over } : {}),
     ...(ball !== undefined ? { ballNumber: ball } : {}),
     ...(batter ? { batter } : {}),
-    ...(stringField(record, ["nonStriker", "nonStrikerName", "batsmanNonStriker"]) ? { nonStriker: stringField(record, ["nonStriker", "nonStrikerName", "batsmanNonStriker"]) } : {}),
+    ...(nonStriker ? { nonStriker } : {}),
     ...(bowler ? { bowler } : {}),
     batRuns,
-    extraRuns: extras.total,
+    extraRuns,
     totalRuns,
     ...(stringField(record, ["extraType", "extrasType", "extra"]) ? { extraType: stringField(record, ["extraType", "extrasType", "extra"]) } : {}),
+    extras,
     isWicket,
     ...(dismissalType ? { dismissalType } : {}),
     ...(stringField(record, ["dismissedPlayer", "playerOut", "outBatsman"]) ? { dismissedPlayer: stringField(record, ["dismissedPlayer", "playerOut", "outBatsman"]) } : {}),
     ...(stringField(record, ["fielder", "fielderName", "catcher"]) ? { fielder: stringField(record, ["fielder", "fielderName", "catcher"]) } : {}),
     ...(stringField(record, ["description", "eventDescription"]) ? { description: stringField(record, ["description", "eventDescription"]) } : {}),
     ...(commentary ? { commentary } : {}),
-    ...(stringField(record, ["eventType", "type", "kind"]) ? { eventType: stringField(record, ["eventType", "type", "kind"]) } : {}),
+    ...(eventType ? { eventType } : {}),
     rawData: record
   };
 }
 
 function normalizeCommentary(record: DataRecord, matchId: string): NormalizedCommentary | undefined {
-  const commentary = stringField(record, ["commentary", "commText", "comment", "description", "eventDescription", "text"]);
+  const commentary = commentaryText(record);
   if (!commentary) return undefined;
   const { over, ball } = parseOverBall(record);
   const inningsNumber = parseInningsNumber(record);
   const id = stringField(record, ["sourceEventId", "eventId", "commentaryId", "id", "key"]);
-  const signature = [matchId, inningsNumber, over ?? "", ball ?? "", commentary].join("|");
+  const timestamp = scalar(record, ["timestamp", "timeStamp", "commentaryTimestamp"]);
+  const signature = [matchId, inningsNumber, over ?? "", ball ?? "", timestamp ?? "", commentary].join("|");
+  const eventType = stringField(record, ["eventType", "event", "type", "kind"]);
+  const batter = stringField(record, ["batter", "batsman", "striker"]) ??
+    nestedString(record, ["batsmanStriker"], ["batName", "batsmanName", "playerName", "name"]);
+  const bowler = stringField(record, ["bowler", "bowlerName"]) ??
+    nestedString(record, ["bowlerStriker"], ["bowlName", "bowlerName", "playerName", "name"]);
   return {
     sourceEventId: id || matchId + ":commentary:" + stableHash(signature),
     inningsNumber,
     ...(over !== undefined ? { overNumber: over } : {}),
     ...(ball !== undefined ? { ballNumber: ball } : {}),
-    ...(stringField(record, ["eventType", "type", "kind"]) ? { eventType: stringField(record, ["eventType", "type", "kind"]) } : {}),
-    ...(stringField(record, ["batter", "batsman", "striker", "batsmanStriker"]) ? { batter: stringField(record, ["batter", "batsman", "striker", "batsmanStriker"]) } : {}),
-    ...(stringField(record, ["bowler", "bowlerName"]) ? { bowler: stringField(record, ["bowler", "bowlerName"]) } : {}),
+    ...(eventType ? { eventType } : {}),
+    ...(batter ? { batter } : {}),
+    ...(bowler ? { bowler } : {}),
     ...(stringField(record, ["description", "eventDescription"]) ? { description: stringField(record, ["description", "eventDescription"]) } : {}),
     commentary,
     rawData: record
   };
+}
+
+function collectCricbuzzCommentaryRecords(
+  root: unknown,
+  inheritedInnings?: number,
+  depth = 0,
+  seen = new Set<object>(),
+  output: DataRecord[] = []
+): DataRecord[] {
+  if (depth > 40 || !root || typeof root !== "object" || seen.has(root as object)) return output;
+  seen.add(root as object);
+  if (Array.isArray(root)) {
+    for (const child of root) collectCricbuzzCommentaryRecords(child, inheritedInnings, depth + 1, seen, output);
+    return output;
+  }
+  const record = root as DataRecord;
+  const rawInnings = scalar(record, ["inningsNumber", "inningsNo", "inningNumber", "inningsId", "inningId"]);
+  const currentInnings = rawInnings !== undefined ? parseInningsNumber({ inningsId: rawInnings }) : inheritedInnings;
+  if (scalar(record, ["commText", "commentary", "comment", "text"]) !== undefined) {
+    output.push({
+      ...record,
+      ...(rawInnings === undefined && currentInnings !== undefined ? { inningsId: currentInnings } : {})
+    });
+  }
+  for (const child of Object.values(record)) {
+    collectCricbuzzCommentaryRecords(child, currentInnings, depth + 1, seen, output);
+  }
+  return output;
 }
 
 function parseHtmlCommentary($: CheerioAPI, matchId: string): { deliveries: NormalizedDelivery[]; commentary: NormalizedCommentary[] } {
@@ -817,7 +915,7 @@ function parseStructuredInnings(root: unknown, inningsMap: Map<number, Normalize
         maidens: numberField(bowler, ["maidens", "maidenOvers", "m"]) ?? 0,
         runs: numberField(bowler, ["runs", "conceded", "runsConceded", "r"]) ?? 0,
         wickets: numberField(bowler, ["wickets", "wkts", "w"]) ?? 0,
-        ...(numberField(bowler, ["noBalls", "noballs", "nb"]) !== undefined ? { noBalls: numberField(bowler, ["noBalls", "noballs", "nb"]) } : {}),
+        ...(numberField(bowler, ["noBalls", "noballs", "nb", "no_balls"]) !== undefined ? { noBalls: numberField(bowler, ["noBalls", "noballs", "nb", "no_balls"]) } : {}),
         ...(numberField(bowler, ["wides", "wide", "wd"]) !== undefined ? { wides: numberField(bowler, ["wides", "wide", "wd"]) } : {}),
         ...(numberField(bowler, ["economy", "econ", "economyRate"]) !== undefined ? { economy: numberField(bowler, ["economy", "econ", "economyRate"]) } : {})
       };
@@ -885,32 +983,16 @@ export function parseCricbuzzMatchData(
   const inningsMap = new Map<number, NormalizedInnings>();
   if (scorecard) parseHtmlScorecard(scorecard, inningsMap);
   parseStructuredInnings(serverComponents, inningsMap);
-  const roots = collectStructuredRecords(serverComponents, record =>
-    Object.keys(record).some(key => /^(scorecard|scorecardData|innings|batTeamDetails|bowlTeamDetails|commentaryPageData|commentaryList|commentaryData|ballByBall|deliveries|partnerships|partnership|extras)$/i.test(key))
-  );
   const deliveries = new Map<string, NormalizedDelivery>();
   const commentary = new Map<string, NormalizedCommentary>();
-  for (const root of roots) {
-    const candidates = collectStructuredRecords(root, record => {
-      const hasDeliveryCoordinate =
-        scalar(record, ["ballNumber", "ballNum", "ballNo", "deliveryNumber", "ball"]) !== undefined ||
-        scalar(record, ["overNumber", "overNum", "overNo"]) !== undefined;
-      const hasEventIdentity = scalar(record, ["sourceEventId", "eventId", "commentaryId", "deliveryId"]) !== undefined;
-      const hasBatterAndBowler =
-        scalar(record, ["batsmanStriker", "striker", "batter", "batsman", "batsmanName"]) !== undefined &&
-        scalar(record, ["bowler", "bowlerName", "bowlingPlayer"]) !== undefined &&
-        scalar(record, ["overNumber", "overNum", "overNo", "over"]) !== undefined;
-      const hasEventText = scalar(record, ["commentary", "commText", "comment", "description", "eventDescription", "text"]) !== undefined;
-      return (hasDeliveryCoordinate || hasEventIdentity || hasBatterAndBowler) && hasEventText;
-    });
-    for (const record of candidates) {
-      const delivery = normalizeStructuredDelivery(record, matchId);
-      if (delivery) deliveries.set(delivery.sourceEventId, delivery);
-      const comment = normalizeCommentary(record, matchId);
-      if (comment) commentary.set(comment.sourceEventId, comment);
-      // Innings summary fields are normalized separately above. A delivery's
-      // totalRuns/wickets/extras must never overwrite the innings aggregate.
-    }
+  // Cricbuzz serves comment lines inside matchPreviewFullComm.commentary[].commentaryList[].
+  // Parent inningsId is inherited for each child ball/commentary record.
+  const commentaryRecords = collectCricbuzzCommentaryRecords(serverComponents);
+  for (const record of commentaryRecords) {
+    const delivery = normalizeStructuredDelivery(record, matchId);
+    if (delivery) deliveries.set(delivery.sourceEventId, delivery);
+    const comment = normalizeCommentary(record, matchId);
+    if (comment) commentary.set(comment.sourceEventId, comment);
   }
   if (commentaryPage) {
     const html = parseHtmlCommentary(commentaryPage, matchId);

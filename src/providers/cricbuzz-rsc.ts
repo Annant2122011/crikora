@@ -14,10 +14,11 @@ const INTERESTING_KEYS = [
   "playerData", "matchInfo", "matchHeader", "miniscore", "commentaryPageData",
   "seriesInfoData", "matchesData", "pointsTableData", "teamInfo", "venueDetails",
   "graphsData", "initialStats", "playerNews", "storyList", "squads", "team1", "team2",
-  "playerInfo", "playerProfile", "profileData", "bioData", "scorecardData", "scorecard",
+  "playerInfo", "playerProfile", "profileData", "bioData", "scorecardApiData", "scoreCard", "scorecardData", "scorecard",
   "innings", "batTeamDetails", "bowlTeamDetails", "partnerships", "partnershipsData",
   "wicketsData", "extrasData", "commentaryData", "commentaryList", "ballByBall",
-  "deliveries", "overSummary", "batTeamScore", "bowlTeamScore", "batsmenData", "bowlersData"
+  "deliveries", "overSummary", "batTeamScore", "bowlTeamScore", "batsmenData", "bowlersData",
+  "matchPreviewFullComm", "matchDetails", "matchScoreDetails", "inningsScoreList", "commentarySnippetList", "overSummaryList"
 ];
 
 function resolveReferences(

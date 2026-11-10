@@ -348,14 +348,21 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       await client.query(
         `INSERT INTO public.crikora_match_deliveries
           (match_source_id,source_event_id,innings_number,over_number,ball_number,batter,non_striker,bowler,
-           bat_runs,extra_runs,total_runs,extra_type,is_wicket,dismissal_type,dismissed_player,fielder,description,commentary,event_type,raw_data,observed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::timestamptz)`,
+           bat_runs,extra_runs,total_runs,extra_type,byes,leg_byes,wides,no_balls,penalty,
+           is_wicket,dismissal_type,dismissed_player,fielder,description,commentary,event_type,raw_data,observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25::timestamptz)`,
         [
           matchId, String(delivery.sourceEventId ?? "event_" + JSON.stringify(delivery)),
           Number(delivery.inningsNumber ?? 1), nullableNumber(delivery.overNumber), nullableNumber(delivery.ballNumber),
           nullableString(delivery.batter), nullableString(delivery.nonStriker), nullableString(delivery.bowler),
           Number(delivery.batRuns ?? 0), Number(delivery.extraRuns ?? 0), Number(delivery.totalRuns ?? 0),
-          nullableString(delivery.extraType), Boolean(delivery.isWicket), nullableString(delivery.dismissalType),
+          nullableString(delivery.extraType),
+          Number(isRecord(delivery.extras) ? delivery.extras.byes ?? 0 : 0),
+          Number(isRecord(delivery.extras) ? delivery.extras.legByes ?? 0 : 0),
+          Number(isRecord(delivery.extras) ? delivery.extras.wides ?? 0 : 0),
+          Number(isRecord(delivery.extras) ? delivery.extras.noBalls ?? 0 : 0),
+          Number(isRecord(delivery.extras) ? delivery.extras.penalty ?? 0 : 0),
+          Boolean(delivery.isWicket), nullableString(delivery.dismissalType),
           nullableString(delivery.dismissedPlayer), nullableString(delivery.fielder), nullableString(delivery.description),
           nullableString(delivery.commentary), nullableString(delivery.eventType), jsonValue(delivery.rawData ?? delivery), observedAt
         ]

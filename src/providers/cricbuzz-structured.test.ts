@@ -114,3 +114,171 @@ describe("typed Crikora scorecard and ball-by-ball extraction", () => {
     ]);
   });
 });
+
+
+describe("Cricbuzz live React Server Component schema compatibility", () => {
+  it("normalizes Cricbuzz scoreCard innings, totals, extras, batting, bowling, partnerships and wickets", () => {
+    const data = parseCricbuzzMatchData("162823", undefined, undefined, {
+      scorecard: {
+        scorecardApiData: {
+          scoreCard: [{
+            matchId: 162823,
+            inningsId: 2,
+            batTeamDetails: {
+              batTeamId: 355,
+              batTeamName: "Adelaide Strikers Women",
+              batTeamShortName: "ADSW",
+              batsmenData: {
+                bat_1: {
+                  batId: 9653, batName: "Lizelle Lee", runs: 19, balls: 18,
+                  fours: 4, sixes: 0, strikeRate: 105.56, outDesc: "lbw b Sophie Ecclestone",
+                  wicketCode: "LBW"
+                }
+              }
+            },
+            bowlTeamDetails: {
+              bowlTeamId: 357,
+              bowlTeamName: "Hobart Hurricanes Women",
+              bowlersData: {
+                bowl_1: {
+                  bowlerId: 38748, bowlName: "Eleanor Larosa", overs: 2,
+                  maidens: 0, runs: 13, wickets: 0, economy: 6.5,
+                  no_balls: 0, wides: 1
+                }
+              }
+            },
+            scoreDetails: { ballNbr: 120, overs: 20, runRate: 6.9, runs: 139, wickets: 6 },
+            extrasData: { byes: 2, legByes: 3, noBalls: 0, penalty: 0, total: 14, wides: 9 },
+            partnershipsData: {
+              pat_1: { bat1Id: 9653, bat1Name: "Lizelle Lee", bat2Id: 9149,
+                bat2Name: "Chamari Athapaththu", totalRuns: 21, totalBalls: 23 }
+            },
+            wicketsData: {
+              wkt_1: { batId: 9653, batName: "Lizelle Lee", wktOver: 3.5, wktRuns: 21, ballNbr: 23, wktNbr: 1 }
+            }
+          }]
+        }
+      }
+    });
+    expect(data.innings).toHaveLength(1);
+    expect(data.innings[0]).toMatchObject({
+      inningsNumber: 2,
+      teamName: "Adelaide Strikers Women",
+      runs: 139,
+      wickets: 6,
+      overs: "20",
+      extras: { total: 14, byes: 2, legByes: 3, noBalls: 0, wides: 9, penalty: 0 },
+      batters: [expect.objectContaining({
+        playerSourceId: "9653", playerName: "Lizelle Lee", runs: 19,
+        balls: 18, fours: 4, strikeRate: 105.56, dismissal: "lbw b Sophie Ecclestone"
+      })],
+      bowlers: [expect.objectContaining({
+        playerSourceId: "38748", playerName: "Eleanor Larosa",
+        overs: "2", runs: 13, wickets: 0, economy: 6.5, wides: 1
+      })],
+      partnerships: [expect.objectContaining({
+        partnershipNumber: 1, batterOne: "Lizelle Lee",
+        batterTwo: "Chamari Athapaththu", runs: 21, balls: 23
+      })],
+      fallOfWickets: [expect.objectContaining({
+        wicketNumber: 1, batterName: "Lizelle Lee", score: 21, over: "3.5"
+      })]
+    });
+    expect(data.coverage.deliveryCompleteness).toBe("not-exposed");
+  });
+
+  it("inherits inningsId and parses nested striker/bowler objects and ballNbr without turning ballNbr zero notes into deliveries", () => {
+    const data = parseCricbuzzMatchData("162823", undefined, undefined, {
+      commentary: {
+        matchPreviewFullComm: {
+          matchId: 162823,
+          commentary: [{
+            inningsId: 0,
+            commentaryList: [{
+              commText: "B0$",
+              timestamp: 1000,
+              ballNbr: 0,
+              event: "NONE",
+              commentaryFormats: { bold: { formatId: ["B0$"], formatValue: ["Teams:"] } }
+            }]
+          }, {
+            inningsId: 2,
+            commentaryList: [{
+              commText: "FOUR,OVER-BREAK",
+              timestamp: 2000,
+              ballNbr: 14,
+              event: "FOUR,OVER-BREAK",
+              batTeamName: "ADSW",
+              batsmanStriker: { batId: 9653, batName: "Lizelle Lee", batRuns: 4, batBalls: 1 },
+              batsmanNonStriker: { batId: 9149, batName: "Chamari Athapaththu" },
+              bowlerStriker: { bowlId: 38748, bowlName: "Eleanor Larosa" },
+              extras: { wides: 1, total: 1 },
+              legalRuns: 4,
+              totalRuns: 5
+            }]
+          }]
+        }
+      }
+    });
+    expect(data.commentary).toHaveLength(2);
+    expect(data.commentary[0]).toMatchObject({ inningsNumber: 0, commentary: "Teams:" });
+    expect(data.deliveries).toEqual([
+      expect.objectContaining({
+        inningsNumber: 2,
+        overNumber: 2,
+        ballNumber: 2,
+        batter: "Lizelle Lee",
+        nonStriker: "Chamari Athapaththu",
+        bowler: "Eleanor Larosa",
+        batRuns: 4,
+        extraRuns: 1,
+        totalRuns: 5,
+        eventType: "FOUR,OVER-BREAK",
+        extras: { total: 1, byes: 0, legByes: 0, wides: 1, noBalls: 0, penalty: 0 }
+      })
+    ]);
+    expect(data.coverage.deliveryCompleteness).toBe("present-unverified");
+  });
+
+  it("normalizes Cricbuzz playerData's intlTeam, bat, bowl, DoBFormat and image fields", () => {
+    const $ = load("<main><h1>Emma de Broughe</h1><h2>Biography</h2><p>Player career details.</p></main>");
+    const profile = normalizeCricbuzzPlayerProfile($, "https://www.cricbuzz.com/profiles/51651/emma-de-broughe", {
+      rows: {
+        "1": {
+          playerData: {
+            id: "51651",
+            bat: "Right Handed Bat",
+            bowl: "Right-arm offbreak",
+            name: "Emma de Broughe",
+            fullName: "Emma de Broughe",
+            role: "Batsman",
+            intlTeam: "Australia",
+            teams: "Melbourne Renegades Women, Adelaide Strikers Women",
+            DoB: "September 06, 2000 (26 years)",
+            DoBFormat: "September 06, 2000",
+            image: "http://i.cricketcb.com/stats/img/faceImages/51651.jpg"
+          }
+        }
+      }
+    });
+    expect(profile).toMatchObject({
+      fullName: "Emma de Broughe",
+      country: "Australia",
+      role: "Batsman",
+      battingStyle: "Right Handed Bat",
+      bowlingStyle: "Right-arm offbreak",
+      birthDate: "2000-09-06",
+      teams: ["Melbourne Renegades Women", "Adelaide Strikers Women"]
+    });
+    expect(profile.allFields).toMatchObject({
+      intlTeam: "Australia",
+      bat: "Right Handed Bat",
+      bowl: "Right-arm offbreak",
+      DoBFormat: "September 06, 2000"
+    });
+    expect(profile.biographySections).toEqual([
+      expect.objectContaining({ heading: "Biography", text: "Player career details." })
+    ]);
+    expect(profile.profileImageUrl).toContain("/faceImages/51651.jpg");
+  });
+});
