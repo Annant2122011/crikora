@@ -47,7 +47,7 @@ The historical crawl must take the year links and match/series links from the so
 5. Crawl player, team, series, venue and news links found on those pages and directories.
 6. Crawl supported news/article, video metadata, photo gallery, ranking, statistics, records, schedule, points-table and auction routes.
 7. Persist every successful raw page and normalized entity. Record each URL outcome in the coverage ledger.
-8. Keep the existing durable worker draining the backlog in bounded batches. After the backlog is complete, each refresh cycle checks current/live/upcoming/recent indexes, archives changed page versions, and enqueues newly discovered follow-up URLs.
+8. Keep the existing durable worker draining the backlog in bounded batches. After the backlog is complete, each refresh cycle checks current/live/upcoming/recent indexes, archives changed entity versions, and enqueues every indexed match URL plus newly discovered follow-up URLs for durable deep enrichment. A bounded in-process map is only a staging buffer; the Neon crawl queue is the durable record.
 
 Archive page links are the source of truth for historical coverage. If a linked page is denied, redirected, missing, challenge-protected or not exposed, record the result rather than bypassing it.
 
