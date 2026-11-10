@@ -139,7 +139,7 @@ export class NeonS3ArchiveObjectStore implements ArchiveObjectStore {
     const response = await this.fetcher(target.toString(), {
       method,
       headers,
-      ...(method === "PUT" ? { body: payload } : {})
+      ...(method === "PUT" ? { body: Buffer.from(payload) } : {})
     });
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).slice(0, 800);
