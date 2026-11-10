@@ -70,6 +70,31 @@ export interface ContentQuery {
   limit?: number;
 }
 
+export interface ArchiveCoverage {
+  pageKind: string;
+  status: string;
+  pageCount: number;
+  totalFetches: number;
+  totalVersions: number;
+  lastFetchedAt: string | null;
+}
+
+export interface CrikoraEntitySnapshot {
+  id: string;
+  entityType: string;
+  sourceId: string;
+  sourceUrl: string;
+  payloadHash: string;
+  schemaVersion: number;
+  payload: Record<string, unknown>;
+  observedAt: string;
+}
+
+export interface ArchiveHistoryQuery {
+  limit?: number;
+  before?: string;
+}
+
 export class CrikoraApiError extends Error {
   constructor(
     message: string,
@@ -178,6 +203,27 @@ export class CrikoraApiClient {
   search(query: string, limit = 30, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/search?${params.toString()}`, signal);
+  }
+
+
+  getArchiveCoverage(signal?: AbortSignal): Promise<CrikoraEnvelope<ArchiveCoverage[]>> {
+    return this.request<CrikoraEnvelope<ArchiveCoverage[]>>("/v1/archive/coverage", signal);
+  }
+
+  getEntityHistory(
+    entityType: string,
+    sourceId: string,
+    query: ArchiveHistoryQuery = {},
+    signal?: AbortSignal
+  ): Promise<CrikoraEnvelope<CrikoraEntitySnapshot[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.before) params.set("before", query.before);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraEntitySnapshot[]>>(
+      `/v1/archive/entities/${encodeURIComponent(entityType)}/${encodeURIComponent(sourceId)}/history${suffix}`,
+      signal
+    );
   }
 
   private listByStatus(
