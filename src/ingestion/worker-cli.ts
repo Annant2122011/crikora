@@ -383,9 +383,15 @@ async function main(): Promise<void> {
         await startFullCrawl(config);
         crawl = await readCrawlStatus(config);
       }
-      const crawlStatus = typeof crawl?.status === "string" ? crawl.status : "idle";
+      let crawlStatus = typeof crawl?.status === "string" ? crawl.status : "idle";
+      if (crawlStatus === "paused" && startFullCrawlOnEnable) {
+        log("Resuming the existing durable crawl after applying the current cricket-only URL scope.");
+        await startFullCrawl(config);
+        crawl = await readCrawlStatus(config);
+        crawlStatus = typeof crawl?.status === "string" ? crawl.status : "idle";
+      }
       if (crawlStatus === "paused") {
-        log("Full crawl is paused; check the recorded source error before resuming.");
+        log("Full crawl remains paused; check the recorded run error before resuming.");
         break;
       }
 
