@@ -38,7 +38,7 @@ describe("Cricbuzz player detail extraction", () => {
 
   it("links player statistics tabs back to the parent player identity", () => {
     const entity = parseCricbuzzEntityHtml(
-      "<html><main><h1>Example Player Batting</h1><table><tr><th>Matches</th><td>20</td></tr></table></main></html>",
+      "<html><main><h1>Example Player Batting</h1><table><thead><tr><th>Matches</th></tr></thead><tbody><tr><td>20</td></tr></tbody></table></main></html>",
       "https://www.cricbuzz.com/profiles/999999/example-player/all-matches/batting"
     );
     expect(entity?.entityType).toBe("metadata");
