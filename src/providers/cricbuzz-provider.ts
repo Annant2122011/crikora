@@ -291,7 +291,7 @@ export class CricbuzzProvider implements CricketProvider {
       capturedPages.set(page.url, page);
       this.queueRelatedPageLinks(page.$, page.url);
       for (const link of getLinks(page.$, page.url)) {
-        const match = link.path.match(/^\\/live-cricket-scores\\/(\\d+)(?:\\/|$)/);
+        const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (!match?.[1] || discovered.has(match[1])) continue;
         const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
         const stub = parseMatchIndexStub(item, page, link);
