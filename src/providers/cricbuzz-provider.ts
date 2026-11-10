@@ -408,7 +408,7 @@ export class CricbuzzProvider implements CricketProvider {
     if (!page) return { discoveredUrls: [], skipped: true };
 
     const identity = classifyCricbuzzEntityUrl(page.url);
-    if (identity && (identity.entityType === "match" || identity.entityType === "series") &&
+    if (identity && ["match", "series", "player", "team"].includes(identity.entityType) &&
         isWomensCricketText(getMainText(page.$))) {
       return { discoveredUrls: [], skipped: true };
     }
