@@ -188,15 +188,8 @@ app.get("/", async (request, reply) => {
     <p>For detailed API documentation and usage examples, visit the <a href="https://github.com/Annant2122011/crikora" target="_blank">GitHub repository</a>.</p>
   </div>
 
-  <script>
-    // Vercel Web Analytics
-    (function() {
-      var script = document.createElement('script');
-      script.src = '/_vercel/insights/script.js';
-      script.defer = true;
-      document.head.appendChild(script);
-    })();
-  </script>
+  <!-- Vercel Web Analytics -->
+  <script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>`;
   }
