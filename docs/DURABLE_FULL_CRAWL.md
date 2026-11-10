@@ -12,7 +12,7 @@
 - The durable queue also stores a stable identity key derived from the Cricbuzz entity type and source ID. Alternate slugs for the same match, player, team, series or content item are deduplicated, while match facts, scorecards and squads remain separate page types. Current sitemap URLs take precedence over saved-snapshot aliases.
 - The worker drains the full-crawl queue before returning to normal live/upcoming/recent refreshes.
 - The live refresh process also forwards unprocessed related links into the persistent queue.
-- Scraped payloads stay in the existing cache and expire after 600 seconds. The queue keeps only URL, progress, lease and error metadata.
+- Scraped payloads use classified retention: volatile live scores, live commentary/graphs, player statistics, rankings and other live-analysis pages expire after 600 seconds. Stable fixtures, completed match records, player profiles, teams, series, venues, news, videos and galleries remain available until the same source identity is refreshed. Stable rows are upserted in place; this is not a versioned archive. The queue keeps only URL, progress, lease and error metadata.
 
 ## Database migrations
 
@@ -69,10 +69,9 @@ Do not put any of these secrets in the browser extension, website bundle, reposi
 
 The worker processes a small sequential batch per durable step. The full inventory may take hours, depending on source response time and retry-after responses. It is not a one-request export.
 
-## Retention limitation
+## Classified cache retention
 
-`crikora_cache` remains a rolling 600-second cache. Earlier page payloads expire while a multi-hour crawl is still running. The persistent crawl queue is not an archive: it stores URLs and processing metadata only. A complete historical snapshot or provider comparison requiring all page payloads to coexist needs a separately approved archive/export retention policy. This implementation deliberately does not extend the ten-minute data-retention requirement.
-
+`crikora_cache` is no longer a global 600-second cache. Volatile data (live match scores, live commentary/graphs, player statistics, rankings, match scorecards and other live-analysis pages) expires after 600 seconds and is refreshed on subsequent ingestion cycles. Stable data (upcoming fixtures, completed match records, player profiles, teams, series, venues, news, videos and galleries) has no time-based expiry and remains available until the same source identity is refreshed by a later crawl. A live match can therefore expire while it is live, then be retained after a later refresh identifies it as completed. Stable rows are updated in place using the existing (entity_type, source_id) key; previous versions are not retained. The durable crawl queue is not an archive: it stores URLs and processing metadata only. Payloads that were deleted under the former global TTL cannot be reconstructed from the queue; the crawler must fetch those pages again. A versioned historical snapshot still requires a separately approved archive/export design.
 ## Independent cache cleanup
 
 The repository includes `neon/functions/cache-cleanup`. The function is dependency-free and forwards the authenticated scheduled invocation to the core API's `/api/cleanup` endpoint. Deploy it with environment variables `CRIKORA_API_BASE_URL=https://crikora.vercel.app/api` and `CRIKORA_REFRESH_SECRET` set to the same sensitive value as the core API, then create the Neon Function Trigger with schedule `* * * * *` (once per minute). Neon schedule triggers run outside the Postgres compute and are compatible with scale-to-zero.
