@@ -381,7 +381,7 @@ export class CricbuzzProvider implements CricketProvider {
       entity = parseEntityPage(page.$, page.url, identity.entityType);
     }
 
-    const scorecardRoute = url.pathname.match(/^\\/live-cricket-scorecard\\/(\\d+)\\/([^/]+)\\/?$/);
+    const scorecardRoute = url.pathname.match(/^\/live-cricket-scorecard\/(\d+)\/([^/]+)\/?$/);
     if (scorecardRoute) {
       const matchId = scorecardRoute[1]!;
       const slug = scorecardRoute[2]!;
