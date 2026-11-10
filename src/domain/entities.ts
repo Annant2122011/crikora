@@ -1,5 +1,6 @@
 export const ENTITY_TYPES = ["match", "player", "team", "series", "venue", "competition", "ranking", "metadata"] as const;
 export type EntityType = typeof ENTITY_TYPES[number];
+export type RetentionClass = "ephemeral" | "persistent";
 
 export interface CrikoraEntity {
   entityType: EntityType;
@@ -10,7 +11,8 @@ export interface CrikoraEntity {
 }
 
 export interface StoredEntity extends CrikoraEntity {
-  expiresAt: string;
+  expiresAt: string | null;
+  retentionClass: RetentionClass;
 }
 
 export interface EntityRepository {
@@ -22,5 +24,43 @@ export interface EntityRepository {
   close(): Promise<void>;
 }
 
-/** Every source record has a strict ten-minute lifetime. */
-export const DATA_TTL_MS = 10 * 60 * 1000;
+/**
+ * Volatile match and live-analysis data is a ten-minute cache. Stable cricket
+ * records remain available until the same source identity is refreshed.
+ */
+export const DATA_TTL_SECONDS = 600;
+export const DATA_TTL_MS = DATA_TTL_SECONDS * 1000;
+
+export const RETENTION_POLICY = {
+  ephemeralSeconds: DATA_TTL_SECONDS,
+  persistent: "retained-until-refreshed"
+} as const;
+
+const EPHEMERAL_METADATA_KINDS = new Set([
+  "player-stats",
+  "ranking-or-statistics",
+  "match-scorecard",
+  "commentary",
+  "live-stream-page",
+  "live-graphs",
+  "over-by-over",
+  "player-match-performance",
+  "match-forecast",
+  "wicket-zone"
+]);
+
+export function getEntityRetentionClass(
+  entity: Pick<CrikoraEntity, "entityType" | "payload">
+): RetentionClass {
+  if (entity.entityType === "match") {
+    return entity.payload.status === "live" ? "ephemeral" : "persistent";
+  }
+  if (entity.entityType === "ranking") return "ephemeral";
+  if (entity.entityType === "metadata") {
+    const pageKind = entity.payload.pageKind;
+    if (typeof pageKind === "string" && EPHEMERAL_METADATA_KINDS.has(pageKind)) {
+      return "ephemeral";
+    }
+  }
+  return "persistent";
+}
