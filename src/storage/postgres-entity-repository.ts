@@ -86,7 +86,8 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      for (const entity of entities) {
+      const orderedEntities = [...entities].sort((left, right) => `${left.entityType}:${left.sourceId}`.localeCompare(`${right.entityType}:${right.sourceId}`));
+      for (const entity of orderedEntities) {
         const fetchedAt = new Date(entity.fetchedAt);
         if (Number.isNaN(fetchedAt.getTime())) throw new Error("Entity fetchedAt must be a valid ISO timestamp.");
         const retentionClass = getEntityRetentionClass(entity);
@@ -191,7 +192,8 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     let duplicates = 0;
     try {
       await client.query("BEGIN");
-      for (const page of pages) {
+      const orderedPages = [...pages].sort((left, right) => left.url.localeCompare(right.url));
+      for (const page of orderedPages) {
         if (!validSourcePageUrl(page.url)) throw new Error("Archive refused a source page outside the exact Cricbuzz HTTPS host.");
         const fetchedAt = toIso(page.fetchedAt);
         const raw = Buffer.from(page.html, "utf8");
