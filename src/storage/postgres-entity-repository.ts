@@ -334,15 +334,23 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       throw new Error("The archived page metadata has no retrievable body location.");
     }
 
+    const raw = gunzipSync(Buffer.from(compressed));
+    const contentHash = createHash("sha256").update(raw).digest("hex");
+    if (contentHash !== row.content_sha256.trim()) {
+      throw new Error("Archived source page failed SHA-256 integrity verification.");
+    }
+    if (raw.byteLength !== Number(row.body_bytes)) {
+      throw new Error("Archived source page failed original byte-length verification.");
+    }
     return {
       sourceUrl: row.source_url,
       pageKind: row.page_kind,
       ...(row.entity_type ? { entityType: row.entity_type } : {}),
       ...(row.source_id ? { sourceId: row.source_id } : {}),
       contentType: row.content_type,
-      contentHash: row.content_sha256.trim(),
+      contentHash,
       fetchedAt: new Date(row.fetched_at).toISOString(),
-      html: gunzipSync(Buffer.from(compressed)).toString("utf8")
+      html: raw.toString("utf8")
     };
   }
 
