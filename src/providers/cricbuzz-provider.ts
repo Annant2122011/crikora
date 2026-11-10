@@ -271,9 +271,10 @@ export class CricbuzzProvider implements CricketProvider {
       } catch (error) {
         if (signal?.aborted) throw signal.reason ?? error;
         const status = readSourceStatus(error);
-        if (status === 401 || status === 403 || (status !== undefined && status >= 300 && status < 400) ||
+        if (status === undefined || status === 401 || status === 403 ||
+            (status !== undefined && status >= 300 && status < 400) ||
             (status !== undefined && status >= 400 && status < 500 && status !== 429)) {
-          console.warn("Crikora skipped an unavailable sitemap document and will continue with other cricket sitemaps", {
+          console.warn("Crikora skipped an unavailable sitemap document and will continue with other cricket sitemaps or the saved inventory", {
             url: canonicalSitemapUrl,
             status,
             message: error instanceof Error ? error.message : String(error)
