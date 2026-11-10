@@ -976,6 +976,17 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
     (match?.[2] && entityType === "team" ? match[2] : match?.[1] ?? `${entityType}:${stableHash(path)}`);
   const data = extractPageData($, url);
   const contentKind = rule?.kind ?? entityType;
+  const relatedIdentity = (() => {
+    if (contentKind === "player-stats" && match?.[1]) return { type: "player", id: match[1] };
+    if (contentKind === "team-subpage" && match?.[2]) return { type: "team", id: match[2] };
+    if (contentKind === "series-subpage" && match?.[1]) return { type: "series", id: match[1] };
+    if (["match-facts", "match-squads", "match-scorecard", "commentary", "live-stream-page",
+      "match-highlights", "live-graphs", "over-by-over", "match-forecast"].includes(contentKind) && match?.[1]) {
+      return { type: "match", id: match[1] };
+    }
+    if (contentKind === "player-match-performance" && match?.[2]) return { type: "player", id: match[2] };
+    return undefined;
+  })();
   const payload: Record<string, unknown> = {
     ...data,
     entityType,
@@ -983,6 +994,10 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
     name: data.title ?? data.heading ?? new URL(url).pathname.split("/").filter(Boolean).at(-1),
     profile: entityType === "player" ? extractPlayerDetails($) : undefined,
     statistics: data.tables,
+    ...(relatedIdentity ? {
+      relatedEntityType: relatedIdentity.type,
+      relatedSourceId: relatedIdentity.id
+    } : {}),
     associations: getLinks($, url).filter(link => /profiles|cricket-team|cricket-series/.test(link.path))
   };
   return { entityType, sourceId, sourceUrl: url, payload, fetchedAt: new Date().toISOString() };
