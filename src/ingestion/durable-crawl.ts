@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { EntityRepository } from "../domain/entities.js";
 import { isArchiveRepository } from "../storage/archive-repository.js";
-import { dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, type CricbuzzProvider } from "../providers/cricbuzz-provider.js";
+import { dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, getCricbuzzDiscoverySeedUrls, type CricbuzzProvider } from "../providers/cricbuzz-provider.js";
 
 type RunStatus = "queued" | "running" | "completed" | "paused";
 type QueueStatus = "pending" | "processing" | "completed" | "failed" | "skipped";
@@ -116,7 +116,12 @@ export class DurableCrawlService {
   }
 
   async startFullCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
-    const urls = dedupeCricbuzzPageUrls(seedUrls.filter(url => this.provider.isAllowedCrawlUrl(url)));
+    // Explicitly seed the route-family indexes even when a sitemap omits them.
+    // The archive index is the root of the source-published historical year tree.
+    const urls = dedupeCricbuzzPageUrls(
+      [...seedUrls, ...getCricbuzzDiscoverySeedUrls()]
+        .filter(url => this.provider.isAllowedCrawlUrl(url))
+    );
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     if (!urls.length) throw new Error("The sitemap inventory contains no URLs accepted by the Cricbuzz page allowlist.");
     await this.recordCoverageTargets(urls);
