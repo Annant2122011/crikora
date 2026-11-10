@@ -14,6 +14,7 @@ describe("Cricbuzz sitemap discovery", () => {
         <url><loc>https://www.cricbuzz.com/cricket-match-facts/177291/womens-victoria-t20i</loc></url>
         <url><loc>https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches</loc></url>
         <url><loc>https://www.cricbuzz.com/premium-subscription/user/account-info</loc></url>
+        <url><loc>https://www.cricbuzz.com/info/advertise</loc></url>
         <url><loc>https://evil.example/profiles/1/not-cricbuzz</loc></url>
       </urlset>`;
     const result = parseCricbuzzSitemapXml(xml);
@@ -24,8 +25,7 @@ describe("Cricbuzz sitemap discovery", () => {
     expect(result.pageUrls).toEqual([
       "https://www.cricbuzz.com/profiles/10012/smriti-mandhana",
       "https://www.cricbuzz.com/cricket-match-facts/177291/womens-victoria-t20i",
-      "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches",
-      "https://www.cricbuzz.com/premium-subscription/user/account-info"
+      "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches"
     ]);
   });
 
@@ -40,19 +40,24 @@ describe("Cricbuzz sitemap discovery", () => {
   });
 
 
-  it("accepts every exact-host public page path included by the current sitemap index", () => {
-    const urls = [
+  it("accepts cricket routes but excludes unrelated sitemap-listed site pages", () => {
+    const cricketUrls = [
+      "https://www.cricbuzz.com/live-cricket-scores/161256/nz-vs-ind",
+      "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026",
+      "https://www.cricbuzz.com/cricket-news/140765/sample-story"
+    ];
+    for (const url of cricketUrls) expect(isAllowedCricbuzzPageUrl(url)).toBe(true);
+
+    const unrelatedUrls = [
       "https://www.cricbuzz.com/",
       "https://www.cricbuzz.com/info/contact",
       "https://www.cricbuzz.com/info/advertise",
       "https://www.cricbuzz.com/careers",
       "https://www.cricbuzz.com/premium-subscription/user/account-info",
-      "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026"
+      "https://www.cricbuzz.com/api/private",
+      "https://evil.example/cricket-news/140001/story"
     ];
-    for (const url of urls) expect(isAllowedCricbuzzPageUrl(url)).toBe(true);
-
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/api/private")).toBe(false);
-    expect(isAllowedCricbuzzPageUrl("https://evil.example/cricket-news/140001/story")).toBe(false);
+    for (const url of unrelatedUrls) expect(isAllowedCricbuzzPageUrl(url)).toBe(false);
   });
 
   it("does not crash on an invalid numeric XML character reference", () => {
