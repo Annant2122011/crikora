@@ -2,6 +2,7 @@ import { load, type CheerioAPI } from "cheerio";
 import type { CrikoraEntity, EntityType } from "../domain/entities.js";
 import type { EventType, Match, MatchEvent, MatchStatus, ProviderSnapshot, SourcePageCapture } from "../domain/types.js";
 import { decodeCricbuzzFlightScripts } from "./cricbuzz-rsc.js";
+import { normalizeCricbuzzPlayerProfile, parseCricbuzzMatchData } from "./cricbuzz-structured.js";
 import type { CricketProvider } from "./provider.js";
 
 type MatchBucket = "live" | "upcoming" | "completed";
@@ -34,16 +35,6 @@ export interface CricbuzzSitemapDiscoveryResult {
   pageUrls: string[];
 }
 
-function isWomensCricketPath(path: string): boolean {
-  return path.toLowerCase().split("/").some(segment =>
-    segment.includes("women") || segment.includes("wpl")
-  );
-}
-
-function isWomensCricketText(value: string): boolean {
-  return /(?:^|[^a-z])(?:women(?:'s)?|wpl)(?:$|[^a-z])/i.test(value);
-}
-
 const ORIGIN = "https://www.cricbuzz.com";
 const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores", bucket: "live" },
@@ -64,6 +55,9 @@ const SECTION_INDEXES = [
   "/cricket-schedule/series/all",
   "/cricket-schedule/upcoming-series/international",
   "/cricket-stats/icc-rankings/men/batting",
+  "/cricket-stats/icc-rankings/men/bowling",
+  "/cricket-stats/icc-rankings/women/batting",
+  "/cricket-stats/icc-rankings/women/bowling",
   "/cricket-stats/points-table/test/icc-world-test-championship",
   "/cricket-series/auctions",
   "/cricket-scorecard-archives"
@@ -144,8 +138,6 @@ export class CricbuzzProvider implements CricketProvider {
         if (match?.[1] && !discovered.has(match[1])) {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
           const stub = parseMatchIndexStub(item, page, link);
-          const indexText = String((stub.stats as Record<string, unknown>).indexCardText ?? "");
-          if (isWomensCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
           discovered.set(match[1], item);
           indexRecords.set(match[1], stub);
         }
@@ -223,8 +215,8 @@ export class CricbuzzProvider implements CricketProvider {
         ? await this.tryFetchPage(new URL(navigation.commentary, ORIGIN), "commentary", signal)
         : undefined;
 
-      const match = parseMatch(discoveredMatch, base, info, scorecard, squads);
-      const matchEvents = commentary ? parseEvents(commentary.$, match) : parseEvents(base.$, match);
+      const match = parseMatch(discoveredMatch, base, info, scorecard, squads, commentary);
+      const matchEvents = toMatchEvents(match.matchData, match);
       match.events = matchEvents;
       const existingIndex = matches.findIndex(existing => existing.sourceMatchId === match.sourceMatchId);
       if (existingIndex >= 0) matches[existingIndex] = match;
@@ -297,8 +289,6 @@ export class CricbuzzProvider implements CricketProvider {
         if (!match?.[1] || discovered.has(match[1])) continue;
         const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
         const stub = parseMatchIndexStub(item, page, link);
-        const indexText = String((stub.stats as Record<string, unknown>).indexCardText ?? "");
-        if (isWomensCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
         discovered.set(item.id, item);
         matches.push(stub);
         addEntity(
@@ -408,10 +398,6 @@ export class CricbuzzProvider implements CricketProvider {
     if (!page) return { discoveredUrls: [], skipped: true };
 
     const identity = classifyCricbuzzEntityUrl(page.url);
-    if (identity && ["match", "series", "player", "team"].includes(identity.entityType) &&
-        isWomensCricketText(getMainText(page.$))) {
-      return { discoveredUrls: [], skipped: true };
-    }
     let entity: CrikoraEntity | undefined;
     let pages: PageRecord[] = [page];
     if (identity?.entityType === "match") {
@@ -434,7 +420,7 @@ export class CricbuzzProvider implements CricketProvider {
       const squadsPage = squadsUrl ? await this.tryFetchPage(new URL(squadsUrl), "durable:squads", signal) : undefined;
       const commentary = commentaryUrl ? await this.tryFetchPage(new URL(commentaryUrl), "durable:commentary", signal) : undefined;
       pages = [page, info, scorecard, squadsPage, commentary].filter((item): item is PageRecord => Boolean(item));
-      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage);
+      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage, commentary);
       match.infoUrl = info?.url;
       match.scorecardUrl = scorecard?.url;
       match.squadsUrl = squadsPage?.url;
@@ -831,9 +817,6 @@ function assertAllowedPageUrl(url: URL): void {
     throw new Error("Refusing to request a non-Cricbuzz or non-HTTPS page.");
   }
   const path = url.pathname.replace(/\/+$/, "") || "/";
-  if (isWomensCricketPath(path)) {
-    throw new Error("Women's cricket pages are outside Crikora's men's-only product scope.");
-  }
   const isKnownCricketIndex = INDEXES.some(index => index.path === path) || SECTION_INDEXES.includes(path);
   const isKnownCricketDataRoute = Boolean(classifyCricbuzzEntityUrl(url.toString()));
   if (!isKnownCricketIndex && !isKnownCricketDataRoute) {
@@ -919,7 +902,95 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
   };
 }
 
-function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRecord, scorecard?: PageRecord, squadsPage?: PageRecord): Match {
+function flightData($?: PageDoc): unknown {
+  if (!$) return undefined;
+  const scripts: string[] = [];
+  $("script").each((_index, element) => {
+    const script = $(element).html() ?? "";
+    if (script.includes("self.__next_f.push")) scripts.push(script);
+  });
+  const decoded = decodeCricbuzzFlightScripts(scripts);
+  return decoded ? { rowCount: decoded.rowCount, rows: decoded.rows, keyedData: decoded.keyedData } : undefined;
+}
+function toLegacyInnings(matchId: string, inningsData: ReturnType<typeof parseCricbuzzMatchData>["innings"]): Match["innings"] {
+  return inningsData.map(item => {
+    const teamName = item.teamName || "Unknown";
+    return {
+      id: `${matchId}:innings:${item.inningsNumber}`, teamId: slug(teamName), teamName,
+      runs: item.runs ?? 0, wickets: item.wickets ?? 0, overs: item.overs ?? "",
+      batters: item.batters.map((batter, position) => ({
+        id: batter.playerSourceId ?? slug(batter.playerName) + ":" + position,
+        name: batter.playerName, runs: batter.runs, balls: batter.balls,
+        fours: batter.fours, sixes: batter.sixes, out: !batter.notOut
+      })),
+      bowlers: item.bowlers.map((bowler, position) => ({
+        id: bowler.playerSourceId ?? slug(bowler.playerName) + ":" + position,
+        name: bowler.playerName, overs: bowler.overs, runs: bowler.runs, wickets: bowler.wickets
+      }))
+    };
+  });
+}
+function toMatchEvents(matchData: Match["matchData"] | undefined, match: Match): MatchEvent[] {
+  if (!matchData) return [];
+  const output = new Map<string, MatchEvent>();
+  const now = new Date().toISOString();
+  const inningsByNumber = new Map<number, { id: string; teamName: string }>();
+  for (let index = 0; index < matchData.innings.length; index++) {
+    const item = matchData.innings[index] as { inningsNumber?: number; teamName?: string };
+    const number = item.inningsNumber ?? index + 1;
+    inningsByNumber.set(number, { id: `${match.id}:innings:${number}`, teamName: item.teamName ?? "" });
+  }
+  const typeFor = (value: string | undefined, runs?: number, wicket = false): EventType => {
+    const text = (value ?? "").toLowerCase();
+    if (wicket || /wicket|dismiss|out|bowled|caught|lbw|run.?out|stumped/.test(text)) return "wicket";
+    if (/six/.test(text) || runs === 6) return "six";
+    if (/four|boundary/.test(text) || runs === 4) return "four";
+    if (/century|100 runs/.test(text)) return "century";
+    if (/fifty|50 runs/.test(text)) return "fifty";
+    if (/five.?wicket|5.?wicket/.test(text)) return "five_wicket_haul";
+    return "other";
+  };
+  for (const raw of matchData.deliveries) {
+    const item = raw as Record<string, unknown>;
+    const id = String(item.sourceEventId ?? "");
+    if (!id) continue;
+    const inningsNumber = Number(item.inningsNumber ?? 1);
+    const innings = inningsByNumber.get(inningsNumber);
+    const summary = String(item.commentary ?? item.description ?? "");
+    const runs = Number(item.totalRuns ?? 0);
+    const wicket = Boolean(item.isWicket);
+    output.set(id, {
+      id, sourceEventId: id, matchId: match.id,
+      inningsId: innings?.id ?? `${match.id}:innings:${inningsNumber}`,
+      type: typeFor(String(item.eventType ?? ""), runs, wicket), teamName: innings?.teamName ?? "",
+      ...(item.batter ? { playerName: String(item.batter) } : {}),
+      summary: summary || (wicket ? "Wicket" : `${runs} run(s)`),
+      ...(item.overNumber !== undefined ? { over: `${item.overNumber}${item.ballNumber !== undefined ? "." + item.ballNumber : ""}` } : {}),
+      occurredAt: now, runs, ...(wicket ? { wickets: 1 } : {})
+    });
+  }
+  for (const raw of matchData.commentary) {
+    const item = raw as Record<string, unknown>;
+    const id = String(item.sourceEventId ?? "");
+    if (!id || output.has(id)) continue;
+    const inningsNumber = Number(item.inningsNumber ?? 1);
+    const innings = inningsByNumber.get(inningsNumber);
+    const summary = String(item.commentary ?? item.description ?? "");
+    output.set(id, {
+      id, sourceEventId: id, matchId: match.id,
+      inningsId: innings?.id ?? `${match.id}:innings:${inningsNumber}`,
+      type: typeFor(String(item.eventType ?? "")), teamName: innings?.teamName ?? "",
+      ...(item.batter ? { playerName: String(item.batter) } : {}), summary,
+      ...(item.overNumber !== undefined ? { over: `${item.overNumber}${item.ballNumber !== undefined ? "." + item.ballNumber : ""}` } : {}),
+      occurredAt: now
+    });
+  }
+  return [...output.values()].sort((left, right) => (left.over ?? "").localeCompare(right.over ?? "", undefined, { numeric: true }));
+}
+function parseMatch(
+  discovered: DiscoveredMatch, base: PageRecord, info?: PageRecord, scorecard?: PageRecord,
+  squadsPage?: PageRecord, commentaryPage?: PageRecord
+): Match {
   const $ = base.$;
   const title = clean($("h1").first().text() || $("title").text()).replace(/\s+-\s+(?:Commentary|Live|Scorecard).*$/i, "");
   const pair = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
@@ -929,7 +1000,10 @@ function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRe
   const homeTeam = clean(pair?.[1] ?? "") || "Unknown";
   const awayTeam = clean(pair?.[2] ?? "") || "Unknown";
   const now = new Date().toISOString();
-  const innings = parseScorecard(scorecard?.$, discovered.id, homeTeam, awayTeam);
+  const matchData = parseCricbuzzMatchData(discovered.id, scorecard?.$, commentaryPage?.$, {
+    scorecard: flightData(scorecard?.$), commentary: flightData(commentaryPage?.$)
+  });
+  const innings = toLegacyInnings(discovered.id, matchData.innings);
   const competition = title.split(",").slice(1).join(",").trim().replace(/\s+-\s+.*$/, "") || "Cricket";
   const seriesLink = getLinks($, base.url).find(link => link.path.startsWith("/cricket-series/"));
   const venueLink = getLinks(info?.$ ?? $, info?.url ?? base.url).find(link => /\/venues\/\d+/.test(link.path));
@@ -938,106 +1012,24 @@ function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRe
   const toss = labeledValue(infoText || body, "Toss");
   const result = body.match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
   const status: MatchStatus = result || discovered.bucket === "completed" ? "completed" : discovered.bucket;
-  const format = classifyMatchFormat(title);
-  const images = extractImages($);
   return {
     id: `cricbuzz:${discovered.id}`, source: "cricbuzz", sourceMatchId: discovered.id,
-    competition, homeTeam, awayTeam, status, format, startTime: parseDateTime(dateTimeText) ?? "",
+    competition, homeTeam, awayTeam, status, format: classifyMatchFormat(title),
+    startTime: parseDateTime(dateTimeText) ?? "",
     venue: venueLink?.text || venueText || undefined, description: title, innings, updatedAt: now,
     sourceUrl: base.url, infoUrl: info?.url, scorecardUrl: scorecard?.url,
-    squadsUrl: getLinks(base.$, base.url).find(l => l.path.startsWith("/cricket-match-squads/"))?.url,
-    commentaryUrl: getLinks(base.$, base.url).find(l => l.path.startsWith("/live-cricket-full-commentary/"))?.url,
-    toss: toss || undefined, result,
-    stats: { liveSummary: body.slice(0, 5000), scorecardText: scoreText.slice(0, 12000), infoText: infoText.slice(0, 12000), seriesUrl: seriesLink?.url, dateTimeText, seriesName: competition },
-    images,
+    squadsUrl: getLinks(base.$, base.url).find(link => link.path.startsWith("/cricket-match-squads/"))?.url,
+    commentaryUrl: commentaryPage?.url, toss: toss || undefined, result,
+    stats: {
+      liveSummary: body.slice(0, 5000), scorecardText: scoreText.slice(0, 12000),
+      infoText: infoText.slice(0, 12000), seriesUrl: seriesLink?.url, dateTimeText, seriesName: competition,
+      parser: { schemaVersion: matchData.schemaVersion, innings: matchData.innings.length, deliveries: matchData.deliveries.length, commentary: matchData.commentary.length }
+    },
+    matchData, images: extractImages($),
     officials: info ? extractLabels(info.$) : undefined,
     squads: squadsPage ? extractSquadData(squadsPage.$, squadsPage.url) : undefined,
     events: []
   };
-}
-
-function parseScorecard($: PageDoc | undefined, matchId: string, home: string, away: string): Match["innings"] {
-  if (!$) return [];
-  const innings: Match["innings"] = [];
-  const containers = $("div.cb-col-100.cb-scrd-hdr-rw, div.cb-col.cb-col-100.cb-scrd-hdr-rw, div.cb-col-100.cb-scrd-itms, div.cb-col.cb-col-100.cb-scrd-itms, table tr").toArray();
-  let current: Match["innings"][number] | undefined;
-  let index = 0;
-  let mode: "batting" | "bowling" = "batting";
-  for (const node of containers) {
-    const row = $(node);
-    const value = clean(row.text());
-    const cols = row.is("tr")
-      ? row.find("th,td").toArray().map(el => clean($(el).text()))
-      : row.children().toArray().map(el => clean($(el).text()));
-    if (/^Batter\b/i.test(value)) { mode = "batting"; continue; }
-    if (/^Bowler\b/i.test(value)) { mode = "bowling"; continue; }
-    const header = value.match(/^([A-Z0-9]{2,10})\s+(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*(Ov|Overs?|Balls?)/i);
-    if (header) {
-      index += 1;
-      const teamName = index === 1 ? home : index === 2 ? away : header[1]!;
-      current = {
-        id: `${matchId}:innings:${index}`, teamId: slug(teamName), teamName,
-        runs: num(header[2]), wickets: num(header[3]), overs: header[4]!, batters: [], bowlers: []
-      };
-      innings.push(current);
-      mode = "batting";
-      continue;
-    }
-    if (!current || cols.length < 4) continue;
-    const first = cols[0] ?? "";
-    if (/^Total$/i.test(first)) {
-      const total = value.match(/(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*(?:Ov|Overs?)/i);
-      if (total) { current.runs = num(total[1]); current.wickets = num(total[2]); current.overs = total[3]!; }
-      continue;
-    }
-    if (/^(Extras|Fall of Wickets|Powerplays|Partnerships|Yet to Bat)$/i.test(first)) continue;
-    if (mode === "bowling" && /^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "")) {
-      current.bowlers.push({
-        id: slug(first), name: first, overs: cols[1]!,
-        runs: num(cols[3]), wickets: num(cols[4])
-      });
-    } else if (mode === "batting") {
-      const hasDismissal = /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "");
-      const simpleRow = /^\d+$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "");
-      if (hasDismissal) {
-        current.batters.push({
-          id: slug(first), name: first, runs: num(cols[2]), balls: num(cols[3]),
-          fours: num(cols[4]), sixes: num(cols[5]), out: !/not out|batting/i.test(value)
-        });
-      } else if (simpleRow) {
-        current.batters.push({
-          id: slug(first), name: first, runs: num(cols[1]), balls: num(cols[2]),
-          fours: num(cols[3]), sixes: num(cols[4]), out: !/not out|batting/i.test(value)
-        });
-      }
-    }
-  }
-  return innings;
-}
-
-function parseEvents($: PageDoc, match: Match): MatchEvent[] {
-  const candidates = $("div,li,p").toArray().map(el => clean($(el).text()))
-    .filter(text => text.length >= 20 && text.length <= 800 && /\bto\b/i.test(text) &&
-      /\b(FOUR|SIX|out|wicket|no run|no ball|wide)\b/i.test(text));
-  const unique = [...new Set(candidates)];
-  const events: MatchEvent[] = [];
-  for (const text of unique) {
-    let type: EventType | undefined;
-    if (/\b(out|wicket|bowled|lbw|caught|run out|stumped|hit wicket)\b/i.test(text)) type = "wicket";
-    else if (/\bSIX\b/i.test(text)) type = "six";
-    else if (/\bFOUR\b/i.test(text)) type = "four";
-    if (!type) continue;
-    const delivery = text.match(/\b(\d{1,2}\.\d|\d{1,3})\b/)?.[1];
-    const sourceEventId = `${match.id}:${type}:${stableHash(text)}`;
-    events.push({
-      id: sourceEventId, sourceEventId, matchId: match.id,
-      inningsId: match.innings.at(-1)?.id ?? `${match.id}:innings:1`,
-      type, teamName: match.innings.at(-1)?.teamName ?? "",
-      playerName: text.match(/^(.+?)\s+to\s+/i)?.[1]?.trim(),
-      summary: text.slice(0, 300), over: delivery, occurredAt: new Date().toISOString()
-    });
-  }
-  return events.slice(0, 250);
 }
 
 function parseEntityPage($: PageDoc, url: string, expected?: EntityType): CrikoraEntity | undefined {
@@ -1067,7 +1059,7 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
     entityType,
     pageKind: contentKind,
     name: data.title ?? data.heading ?? new URL(url).pathname.split("/").filter(Boolean).at(-1),
-    profile: entityType === "player" ? extractPlayerDetails($) : undefined,
+    profile: entityType === "player" ? normalizeCricbuzzPlayerProfile($, url, data.serverComponents) : undefined,
     statistics: data.tables,
     ...(relatedIdentity ? {
       relatedEntityType: relatedIdentity.type,
@@ -1116,7 +1108,7 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     sections: extractSections($),
     structuredData: extractStructuredData($),
     serverComponents: serverComponents
-      ? { rowCount: serverComponents.rowCount, keyedData: serverComponents.keyedData }
+      ? { rowCount: serverComponents.rowCount, rows: serverComponents.rows, keyedData: serverComponents.keyedData }
       : undefined,
     controls: extractControls($),
     text: mainText.slice(0, 30000)
@@ -1311,32 +1303,6 @@ function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> 
   };
 }
 
-function extractPlayerDetails($: PageDoc): Record<string, unknown> {
-  const labels = extractLabels($);
-  const text = getMainText($);
-  const personal: Record<string, string> = { ...labels };
-  // Keep common fields easy for consumers while preserving every additional source-labelled field.
-  const common = ["Born", "Birth Place", "Role", "Batting Style", "Bowling Style", "Height"];
-  for (const label of common) {
-    if (!personal[label]) {
-      const value = labeledValue(text, label);
-      if (value) personal[label] = value;
-    }
-  }
-  const teamsValue = labels["Teams"] ?? labeledValue(text, "Teams");
-  const summary = $("h2,h3").filter((_i, el) => /summary/i.test($(el).text())).first().next().text();
-  const biographySections = extractSections($).filter(section =>
-    /summary|biography|early life|career|personal life|records|achievements|profile/i.test(section.heading)
-  );
-  return {
-    allFields: labels,
-    personal,
-    teams: teamsValue ? teamsValue.split(/,\\s*/) : [],
-    summary: clean(summary),
-    biographySections,
-    statisticsTables: extractTables($)
-  };
-}
 function collectRelatedLinks($: PageDoc, baseUrl: string): {
   profiles: LinkRecord[]; teams: LinkRecord[]; series: LinkRecord[]; venues: LinkRecord[]; content: LinkRecord[];
 } {
@@ -1476,7 +1442,6 @@ export function classifyCricbuzzEntityUrl(url: string): { entityType: EntityType
   try { parsedUrl = new URL(url); } catch { return undefined; }
   if (parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "www.cricbuzz.com") return undefined;
   const path = parsedUrl.pathname.replace(/\/+$/, "") || "/";
-  if (isWomensCricketPath(path)) return undefined;
   const rule = PATH_RULES.find(item => item.pattern.test(path));
   if (!rule) return undefined;
   const match = rule.pattern.exec(path);

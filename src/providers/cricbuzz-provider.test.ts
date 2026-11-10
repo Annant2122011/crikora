@@ -59,14 +59,15 @@ describe("Cricbuzz player detail extraction", () => {
 });
 
 describe("Cricbuzz discovery seeds", () => {
-  it("always seeds the historical archive and every supported men's cricket directory", () => {
+  it("always seeds the historical archive and both men's and women's cricket directories", () => {
     const seeds = getCricbuzzDiscoverySeedUrls();
     expect(seeds).toContain("https://www.cricbuzz.com/cricket-scorecard-archives");
     expect(seeds).toContain("https://www.cricbuzz.com/profiles");
     expect(seeds).toContain("https://www.cricbuzz.com/cricket-team");
     expect(seeds).toContain("https://www.cricbuzz.com/cricket-news");
     expect(seeds.every(isAllowedCricbuzzPageUrl)).toBe(true);
-    expect(seeds.some(url => url.includes("/icc-rankings/women/"))).toBe(false);
+    expect(seeds).toContain("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting");
+    expect(seeds).toContain("https://www.cricbuzz.com/cricket-stats/icc-rankings/men/batting");
   });
 });
 
@@ -148,11 +149,14 @@ describe("Cricbuzz source URL classification", () => {
     expect(seriesStats?.sourceId).not.toBe(seriesSquads?.sourceId);
   });
 
-  it("excludes women's-only ranking, match and series routes", () => {
-    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeUndefined();
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(false);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/live-cricket-scores/555/example-women-vs-women")).toBe(false);
-    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-series/555/womens-league")).toBe(false);
+  it("includes men's and women's match, series, player and ranking routes", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting"))
+      .toMatchObject({ entityType: "metadata", sourceId: expect.stringContaining("ranking-or-statistics:") });
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/live-cricket-scores/555/example-women-vs-women")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-series/555/womens-league")).toBe(true);
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/777/women-player"))
+      .toEqual({ entityType: "player", sourceId: "777" });
   });
 
   it("classifies the 1877 historical archive year page", () => {

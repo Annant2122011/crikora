@@ -28,6 +28,20 @@ export interface Match {
   stats?: Record<string, unknown>;
   images?: Array<{ url: string; alt?: string }>;
   events?: MatchEvent[];
+  /** Structured innings, deliveries, extras, partnerships and commentary. */
+  matchData?: {
+    schemaVersion: number;
+    innings: unknown[];
+    deliveries: unknown[];
+    commentary: unknown[];
+    coverage?: {
+      scorecard: boolean;
+      deliveries: boolean;
+      commentary: boolean;
+      deliveryCompleteness: "present-unverified" | "not-exposed";
+      sources: string[];
+    };
+  };
 }
 export interface MatchEvent {
   id: string; matchId: string; inningsId: string; type: EventType;

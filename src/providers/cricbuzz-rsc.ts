@@ -13,7 +13,11 @@ const ROW_ID = /^[0-9a-f]+$/i;
 const INTERESTING_KEYS = [
   "playerData", "matchInfo", "matchHeader", "miniscore", "commentaryPageData",
   "seriesInfoData", "matchesData", "pointsTableData", "teamInfo", "venueDetails",
-  "graphsData", "initialStats", "playerNews", "storyList", "squads", "team1", "team2"
+  "graphsData", "initialStats", "playerNews", "storyList", "squads", "team1", "team2",
+  "playerInfo", "playerProfile", "profileData", "bioData", "scorecardData", "scorecard",
+  "innings", "batTeamDetails", "bowlTeamDetails", "partnerships", "partnershipsData",
+  "wicketsData", "extrasData", "commentaryData", "commentaryList", "ballByBall",
+  "deliveries", "overSummary", "batTeamScore", "bowlTeamScore", "batsmenData", "bowlersData"
 ];
 
 function resolveReferences(

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { createArchiveObjectStoreFromEnv, type ArchiveObjectStore } from "./neon-s3-archive-object-store.js";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import type { SourcePageCapture } from "../domain/types.js";
 import type { ArchivedSourcePage, ArchiveCoverageRow, ArchiveRepository, EntityHistoryRecord } from "./archive-repository.js";
 import {
@@ -81,6 +81,23 @@ function toIso(value: Date | string): string {
   return date.toISOString();
 }
 
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function arrayOfRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+function nullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function jsonValue(value: unknown): string {
+  return JSON.stringify(value ?? {});
+}
+
 /** PostgreSQL JSON store with per-entity volatile or persistent retention. */
 export class PostgresEntityRepository implements EntityRepository, ArchiveRepository {
   private readonly pool: Pool;
@@ -155,12 +172,201 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
           ]
         );
       }
+      for (const entity of orderedEntities) {
+        await this.persistTypedProjection(client, entity, new Date(entity.fetchedAt).toISOString());
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+
+  /**
+   * Keep the current typed read projections in sync with the current JSON entity
+   * in the same transaction. Historical versions remain in append-only snapshots.
+   */
+  private async persistTypedProjection(client: PoolClient, entity: CrikoraEntity, observedAt: string): Promise<void> {
+    if (entity.entityType === "player") {
+      const profile = entity.payload.profile;
+      if (!isRecord(profile) || Number(profile.schemaVersion) !== 1) return;
+      const sourceId = entity.sourceId;
+      await client.query(
+        `INSERT INTO public.crikora_player_profiles
+          (source_id, source_url, full_name, country, role, batting_style, bowling_style,
+           birth_date, birth_place, height_cm, biography, profile_image_url, teams, profile_data,
+           first_observed_at, last_observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9,$10,$11,$12,$13,$14::jsonb,$15::timestamptz,$15::timestamptz)
+         ON CONFLICT (source_id) DO UPDATE SET
+           source_url=EXCLUDED.source_url, full_name=EXCLUDED.full_name, country=EXCLUDED.country,
+           role=EXCLUDED.role, batting_style=EXCLUDED.batting_style, bowling_style=EXCLUDED.bowling_style,
+           birth_date=EXCLUDED.birth_date, birth_place=EXCLUDED.birth_place, height_cm=EXCLUDED.height_cm,
+           biography=EXCLUDED.biography, profile_image_url=EXCLUDED.profile_image_url,
+           teams=EXCLUDED.teams, profile_data=EXCLUDED.profile_data, last_observed_at=EXCLUDED.last_observed_at`,
+        [
+          sourceId, entity.sourceUrl, nullableString(profile.fullName), nullableString(profile.country),
+          nullableString(profile.role), nullableString(profile.battingStyle), nullableString(profile.bowlingStyle),
+          nullableString(profile.birthDate), nullableString(profile.birthPlace), nullableNumber(profile.heightCm),
+          nullableString(profile.biography), nullableString(profile.profileImageUrl),
+          Array.isArray(profile.teams) ? profile.teams.filter((value): value is string => typeof value === "string") : [],
+          jsonValue(profile), observedAt
+        ]
+      );
+      await client.query("DELETE FROM public.crikora_player_profile_attributes WHERE source_id=$1", [sourceId]);
+      await client.query("DELETE FROM public.crikora_player_statistics WHERE source_id=$1", [sourceId]);
+      const attributes = arrayOfRecords(profile.attributes);
+      for (let index = 0; index < attributes.length; index++) {
+        const attribute = attributes[index]!;
+        const value = attribute.value;
+        const type = ["text","numeric","date","boolean","json"].includes(String(attribute.valueType))
+          ? String(attribute.valueType) : "text";
+        const textValue = type === "text" ? String(value ?? "") : null;
+        const numericValue = type === "numeric" ? nullableNumber(typeof value === "number" ? value : Number(value)) : null;
+        const dateValue = type === "date" ? nullableString(value) : null;
+        const booleanValue = type === "boolean" ? Boolean(value) : null;
+        const jsonAttribute = type === "json" ? jsonValue(value) : null;
+        await client.query(
+          `INSERT INTO public.crikora_player_profile_attributes
+            (source_id,field_path,source_label,section,value_type,value_text,value_numeric,value_date,value_boolean,value_json,ordinal,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9,$10::jsonb,$11,$12::timestamptz)`,
+          [
+            sourceId, String(attribute.fieldPath ?? "field_" + index), String(attribute.sourceLabel ?? attribute.fieldPath ?? "Field"),
+            nullableString(attribute.section), type, textValue, numericValue, dateValue, booleanValue, jsonAttribute, index, observedAt
+          ]
+        );
+      }
+      for (const statistic of arrayOfRecords(profile.statistics)) {
+        await client.query(
+          `INSERT INTO public.crikora_player_statistics
+            (source_id,table_index,row_index,section,row_label,metric_label,metric_key,value_text,value_numeric,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::timestamptz)`,
+          [
+            sourceId, Number(statistic.tableIndex ?? 0), Number(statistic.rowIndex ?? 0),
+            nullableString(statistic.section), nullableString(statistic.rowLabel),
+            String(statistic.metricLabel ?? "Value"), String(statistic.metricKey ?? "value"),
+            String(statistic.valueText ?? ""), nullableNumber(statistic.valueNumeric), observedAt
+          ]
+        );
+      }
+      return;
+    }
+
+    if (entity.entityType !== "match" || !isRecord(entity.payload.matchData)) return;
+    const data = entity.payload.matchData;
+    const innings = arrayOfRecords(data.innings);
+    const deliveries = arrayOfRecords(data.deliveries);
+    const commentary = arrayOfRecords(data.commentary);
+    if (!innings.length && !deliveries.length && !commentary.length) return;
+
+    const matchId = entity.sourceId;
+    for (const table of [
+      "crikora_match_commentary", "crikora_match_deliveries", "crikora_match_fall_of_wickets",
+      "crikora_match_partnerships", "crikora_match_bowling", "crikora_match_batting", "crikora_match_innings"
+    ]) {
+      await client.query(`DELETE FROM public.${table} WHERE match_source_id=$1`, [matchId]);
+    }
+    for (const inning of innings) {
+      const number = Number(inning.inningsNumber ?? 1);
+      const extras = isRecord(inning.extras) ? inning.extras : {};
+      await client.query(
+        `INSERT INTO public.crikora_match_innings
+          (match_source_id,innings_number,team_name,runs,wickets,overs,extras_total,byes,leg_byes,wides,no_balls,penalty,raw_data,observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::timestamptz)`,
+        [
+          matchId, number, nullableString(inning.teamName), nullableNumber(inning.runs), nullableNumber(inning.wickets),
+          nullableString(inning.overs), Number(extras.total ?? 0), Number(extras.byes ?? 0),
+          Number(extras.legByes ?? 0), Number(extras.wides ?? 0), Number(extras.noBalls ?? 0),
+          Number(extras.penalty ?? 0), jsonValue(inning), observedAt
+        ]
+      );
+      const batters = arrayOfRecords(inning.batters);
+      for (let index = 0; index < batters.length; index++) {
+        const batter = batters[index]!;
+        await client.query(
+          `INSERT INTO public.crikora_match_batting
+            (match_source_id,innings_number,player_source_id,player_name,dismissal,runs,balls,fours,sixes,strike_rate,not_out,batting_position,raw_data,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::timestamptz)`,
+          [
+            matchId, number, nullableString(batter.playerSourceId), String(batter.playerName ?? "Unknown"),
+            nullableString(batter.dismissal), Number(batter.runs ?? 0), Number(batter.balls ?? 0),
+            Number(batter.fours ?? 0), Number(batter.sixes ?? 0), nullableNumber(batter.strikeRate),
+            Boolean(batter.notOut), index + 1, jsonValue(batter), observedAt
+          ]
+        );
+      }
+      const bowlers = arrayOfRecords(inning.bowlers);
+      for (let index = 0; index < bowlers.length; index++) {
+        const bowler = bowlers[index]!;
+        await client.query(
+          `INSERT INTO public.crikora_match_bowling
+            (match_source_id,innings_number,player_source_id,player_name,overs,maidens,runs,wickets,no_balls,wides,economy,bowling_position,raw_data,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::timestamptz)`,
+          [
+            matchId, number, nullableString(bowler.playerSourceId), String(bowler.playerName ?? "Unknown"),
+            String(bowler.overs ?? "0"), Number(bowler.maidens ?? 0), Number(bowler.runs ?? 0),
+            Number(bowler.wickets ?? 0), Number(bowler.noBalls ?? 0), Number(bowler.wides ?? 0),
+            nullableNumber(bowler.economy), index + 1, jsonValue(bowler), observedAt
+          ]
+        );
+      }
+      for (const partnership of arrayOfRecords(inning.partnerships)) {
+        await client.query(
+          `INSERT INTO public.crikora_match_partnerships
+            (match_source_id,innings_number,partnership_number,batter_one,batter_two,runs,balls,description,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz)`,
+          [
+            matchId, number, Number(partnership.partnershipNumber ?? 1), nullableString(partnership.batterOne),
+            nullableString(partnership.batterTwo), Number(partnership.runs ?? 0),
+            nullableNumber(partnership.balls), nullableString(partnership.description), observedAt
+          ]
+        );
+      }
+      for (const wicket of arrayOfRecords(inning.fallOfWickets)) {
+        await client.query(
+          `INSERT INTO public.crikora_match_fall_of_wickets
+            (match_source_id,innings_number,wicket_number,score,batter_name,over,description,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz)`,
+          [
+            matchId, number, Number(wicket.wicketNumber ?? 1), nullableNumber(wicket.score),
+            nullableString(wicket.batterName), nullableString(wicket.over), String(wicket.description ?? ""), observedAt
+          ]
+        );
+      }
+    }
+
+    for (const delivery of deliveries) {
+      await client.query(
+        `INSERT INTO public.crikora_match_deliveries
+          (match_source_id,source_event_id,innings_number,over_number,ball_number,batter,non_striker,bowler,
+           bat_runs,extra_runs,total_runs,extra_type,is_wicket,dismissal_type,dismissed_player,fielder,description,commentary,event_type,raw_data,observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::timestamptz)`,
+        [
+          matchId, String(delivery.sourceEventId ?? "event_" + JSON.stringify(delivery)),
+          Number(delivery.inningsNumber ?? 1), nullableNumber(delivery.overNumber), nullableNumber(delivery.ballNumber),
+          nullableString(delivery.batter), nullableString(delivery.nonStriker), nullableString(delivery.bowler),
+          Number(delivery.batRuns ?? 0), Number(delivery.extraRuns ?? 0), Number(delivery.totalRuns ?? 0),
+          nullableString(delivery.extraType), Boolean(delivery.isWicket), nullableString(delivery.dismissalType),
+          nullableString(delivery.dismissedPlayer), nullableString(delivery.fielder), nullableString(delivery.description),
+          nullableString(delivery.commentary), nullableString(delivery.eventType), jsonValue(delivery.rawData ?? delivery), observedAt
+        ]
+      );
+    }
+    for (const item of commentary) {
+      await client.query(
+        `INSERT INTO public.crikora_match_commentary
+          (match_source_id,source_event_id,innings_number,over_number,ball_number,event_type,batter,bowler,description,commentary,raw_data,observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::timestamptz)`,
+        [
+          matchId, String(item.sourceEventId ?? "comment_" + JSON.stringify(item)),
+          Number(item.inningsNumber ?? 1), nullableNumber(item.overNumber), nullableNumber(item.ballNumber),
+          nullableString(item.eventType), nullableString(item.batter), nullableString(item.bowler),
+          nullableString(item.description), String(item.commentary ?? ""),
+          jsonValue(item.rawData ?? item), observedAt
+        ]
+      );
     }
   }
 
