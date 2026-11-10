@@ -12,6 +12,17 @@ export interface EntityHistoryRecord {
   observedAt: string;
 }
 
+export interface ArchivedSourcePage {
+  sourceUrl: string;
+  pageKind: string;
+  entityType?: EntityType;
+  sourceId?: string;
+  contentType: string;
+  contentHash: string;
+  fetchedAt: string;
+  html: string;
+}
+
 export interface ArchiveCoverageRow {
   pageKind: string;
   status: string;
@@ -25,6 +36,7 @@ export interface ArchiveCoverageRow {
 
 export interface ArchiveRepository {
   recordSourcePages(pages: SourcePageCapture[], crawlRunId?: string): Promise<{ inserted: number; duplicates: number; deferred: number }>;
+  getSourcePageSnapshot(sourceUrl: string, contentHash?: string): Promise<ArchivedSourcePage | undefined>;
   listEntityHistory(entityType: EntityType, sourceId: string, limit?: number, before?: string): Promise<EntityHistoryRecord[]>;
   listArchivedEntities(entityType: EntityType, limit?: number, before?: string): Promise<EntityHistoryRecord[]>;
   listRelatedEntityPages(entityType: EntityType, sourceId: string, limit?: number): Promise<EntityHistoryRecord[]>;
