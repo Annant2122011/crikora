@@ -232,7 +232,7 @@ async function updateSettings(request: ApiRequest, response: ApiResponse): Promi
   }
   if (body.enabled === true && process.env.CRIKORA_COLLECTION_ENABLED !== "true") {
     sendJson(response, 403, {
-      error: "The Cricbuzz collector is not marked as authorized in the server environment."
+      error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch."
     });
     return;
   }
@@ -273,7 +273,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
     return;
   }
   if (process.env.CRIKORA_COLLECTION_ENABLED !== "true") {
-    sendJson(response, 403, { error: "Cricbuzz automation is not enabled in the server environment." });
+    sendJson(response, 403, { error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
     return;
   }
 
@@ -345,29 +345,28 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
         : undefined;
     const retrySeconds = sourceStatus === 429
       ? Math.max(1, Math.min(3600, Math.ceil((Number.isFinite(retryAfterMs) ? retryAfterMs! : 60_000) / 1000)))
-      : sourceStatus && sourceStatus >= 500
+      : sourceStatus !== undefined && sourceStatus >= 300
         ? 30
-        : undefined;
-    const disableCollector = sourceStatus === 401 || sourceStatus === 403 ||
-      (sourceStatus !== undefined && sourceStatus >= 300 && sourceStatus < 400);
+        : 30;
+    // A single source-page denial must never switch off the whole collector.
+    // Normal page-level 4xx responses are isolated by CricbuzzProvider; this
+    // branch is a final containment path for unexpected provider failures.
     await pool.query(
       `UPDATE public.crikora_crawler_settings
-          SET enabled = CASE WHEN $2::boolean THEN false ELSE enabled END,
-              lease_until = CASE WHEN $3::integer IS NULL THEN NULL
-                                 ELSE now() + make_interval(secs => $3) END,
+          SET lease_until = now() + make_interval(secs => $2),
               last_error = $1,
               updated_at = now()
         WHERE id = 1`,
-      [message, disableCollector, retrySeconds ?? null]
+      [message, retrySeconds]
     );
-    if (retrySeconds) response.setHeader("retry-after", String(retrySeconds));
+    response.setHeader("retry-after", String(retrySeconds));
     sendJson(response, sourceStatus === 429 ? 429 : 502, {
       ok: false,
-      error: "Cricbuzz collection failed.",
+      error: "Crikora refresh cycle failed; the collector remains enabled.",
       details: message,
       sourceStatus: sourceStatus ?? null,
-      retryAfterSeconds: retrySeconds ?? null,
-      collectorDisabled: disableCollector
+      retryAfterSeconds: retrySeconds,
+      collectorDisabled: false
     });
   }
 }
@@ -377,7 +376,7 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
   if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
   if (process.env.CRIKORA_COLLECTION_ENABLED !== "true") {
-    return sendJson(response, 403, { error: "Cricbuzz collection is not enabled in the server environment." });
+    return sendJson(response, 403, { error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
   }
 
   // Keep the saved inventory as a backstop, then merge the current public sitemap URLs.
