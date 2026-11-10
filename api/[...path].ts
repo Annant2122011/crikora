@@ -543,6 +543,20 @@ async function archiveCoverage(response: ApiResponse): Promise<void> {
   sendJson(response, 200, { data, meta: { retention: "permanent", appendOnly: true } });
 }
 
+async function archiveEntities(type: EntityType, url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
+  const before = url.searchParams.get("before") ?? undefined;
+  if (limit === undefined || (before && !/^\\d+$/.test(before) && Number.isNaN(Date.parse(before)))) {
+    sendJson(response, 400, { error: "Invalid archive entity pagination." });
+    return;
+  }
+  const data = await getRepository().listArchivedEntities(type, limit, before);
+  sendJson(response, 200, {
+    data,
+    meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true }
+  });
+}
+
 async function archiveEntityHistory(
   type: EntityType,
   sourceId: string,
@@ -558,7 +572,7 @@ async function archiveEntityHistory(
   const data = await getRepository().listEntityHistory(type, sourceId, limit, before);
   sendJson(response, 200, {
     data,
-    meta: { count: data.length, retention: "permanent", appendOnly: true }
+    meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true }
   });
 }
 
@@ -618,6 +632,14 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   }
   if (parts[1] === "archive" && parts[2] === "coverage" && parts.length === 3 && method === "GET") {
     return archiveCoverage(response);
+  }
+  if (parts[1] === "archive" && parts[2] === "entities" && parts.length === 4 && method === "GET") {
+    const type = validEntityType(parts[3]);
+    if (!type) {
+      sendJson(response, 400, { error: "Unsupported archive entity type." });
+      return;
+    }
+    return archiveEntities(type, url, response);
   }
   if (parts[1] === "archive" && parts[2] === "entities" && parts.length === 6 && parts[5] === "history" && method === "GET") {
     const type = validEntityType(parts[3]);
