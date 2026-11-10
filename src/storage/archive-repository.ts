@@ -25,6 +25,7 @@ export interface ArchiveRepository {
   recordSourcePages(pages: SourcePageCapture[], crawlRunId?: string): Promise<{ inserted: number; duplicates: number; deferred: number }>;
   listEntityHistory(entityType: EntityType, sourceId: string, limit?: number, before?: string): Promise<EntityHistoryRecord[]>;
   listArchivedEntities(entityType: EntityType, limit?: number, before?: string): Promise<EntityHistoryRecord[]>;
+  listRelatedEntityPages(entityType: EntityType, sourceId: string, limit?: number): Promise<EntityHistoryRecord[]>;
   getArchiveCoverage(): Promise<ArchiveCoverageRow[]>;
 }
 
@@ -34,5 +35,6 @@ export function isArchiveRepository(value: unknown): value is ArchiveRepository 
   return typeof candidate.recordSourcePages === "function" &&
     typeof candidate.listEntityHistory === "function" &&
     typeof candidate.listArchivedEntities === "function" &&
+    typeof candidate.listRelatedEntityPages === "function" &&
     typeof candidate.getArchiveCoverage === "function";
 }
