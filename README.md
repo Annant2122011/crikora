@@ -122,7 +122,7 @@ A separate Neon project named `crikora` was created for cricket data. The existi
 
 1. Apply migrations `001_crikora_cache.sql` through `004_crikora_durable_crawl.sql` to the Crikora production database.
 2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
-3. Keep `CRICBUZZ_AUTOMATION_AUTHORIZED=false` until the deployed API and worker have passed their health checks and the source request policy is confirmed. Enable collection only when operationally ready.
+3. Keep `CRIKORA_COLLECTION_ENABLED=false` until the deployed API and worker have passed their health checks and the source request policy is confirmed. Enable collection only when operationally ready.
 4. Set `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` as Vercel server-only secrets. Set `CORS_ORIGINS` to exact deployed origins when browser calls are introduced.
 
 The production API requires `DATABASE_URL` and uses Neon PostgreSQL as its only production store. The demo source-mode switch has been removed.
