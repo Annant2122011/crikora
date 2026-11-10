@@ -5,7 +5,7 @@ describe("Cricbuzz React Server Component decoder", () => {
   it("decodes JSON rows and UTF-8 byte-length text rows", () => {
     const flight = [
       '1:{"playerData":{"name":"Example Batter","role":"Batter"}}',
-      "2:T2,é!",
+      "2:T3,é!",
       ""
     ].join("\n");
     const script = `self.__next_f.push([1,${JSON.stringify(flight)}]);`;
