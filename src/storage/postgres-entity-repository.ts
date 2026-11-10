@@ -52,7 +52,7 @@ function stableValue(value: unknown): unknown {
 
 const RAW_PAGE_MIN_INTERVAL_MS = 60 * 60 * 1000;
 const HIGH_CHURN_PAGE_KINDS = new Set([
-  "match", "match-facts", "match-scorecard", "match-squads", "commentary",
+  "match", "cricket-match", "match-facts", "match-scorecard", "match-squads", "commentary",
   "live-stream-page", "live-graphs", "over-by-over", "match-highlights",
   "match-forecast", "wicket-zone", "player-match-performance",
   "ranking-or-statistics", "player-stats"
@@ -393,6 +393,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       total_fetches: string | number;
       raw_page_versions: string | number;
       entity_versions: string | number;
+      raw_page_bytes: string | number;
       last_fetched_at: Date | string | null;
     }>(
       `SELECT coverage.page_kind, coverage.status,
@@ -400,6 +401,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
               COALESCE(sum(coverage.fetch_count), 0) AS total_fetches,
               COALESCE(sum(coverage.version_count), 0) AS raw_page_versions,
               COALESCE(sum(entity_versions.count), 0) AS entity_versions,
+              COALESCE(sum(page_storage.raw_page_bytes), 0) AS raw_page_bytes,
               max(coverage.last_fetched_at) AS last_fetched_at
        FROM public.crikora_archive_coverage AS coverage
        LEFT JOIN LATERAL (
@@ -407,6 +409,11 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
          FROM public.crikora_entity_snapshots AS snapshot
          WHERE snapshot.source_url = coverage.source_url
        ) AS entity_versions ON true
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(sum(body_bytes), 0) AS raw_page_bytes
+         FROM public.crikora_source_page_snapshots AS page
+         WHERE page.source_url = coverage.source_url
+       ) AS page_storage ON true
        GROUP BY coverage.page_kind, coverage.status
        ORDER BY coverage.page_kind, coverage.status`
     );
@@ -417,6 +424,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       totalFetches: Number(row.total_fetches),
       rawPageVersions: Number(row.raw_page_versions),
       entityVersions: Number(row.entity_versions),
+      rawPageBytes: Number(row.raw_page_bytes),
       lastFetchedAt: row.last_fetched_at ? new Date(row.last_fetched_at).toISOString() : null
     }));
   }
