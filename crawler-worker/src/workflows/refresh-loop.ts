@@ -100,7 +100,7 @@ async function crawlStep(apiBaseUrl: string): Promise<CrawlOutcome> {
 
 async function refreshStep(apiBaseUrl: string): Promise<RefreshOutcome> {
   "use step";
-  const response = await fetch(new URL("refresh", ensureTrailingSlash(apiBaseUrl)), {
+  const response = await fetch(new URL("refresh/index", ensureTrailingSlash(apiBaseUrl)), {
     method: "POST",
     headers: {
       authorization: `Bearer ${requiredEnv("CRIKORA_REFRESH_SECRET")}`,
