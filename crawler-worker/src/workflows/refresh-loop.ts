@@ -50,6 +50,7 @@ async function readSettingsStep(apiBaseUrl: string): Promise<CrawlerSettings> {
 interface CrawlOutcome {
   active: boolean;
   stop?: boolean;
+  sourceThrottled?: boolean;
   retryAfterSeconds?: number;
   message?: string;
 }
@@ -78,12 +79,18 @@ async function crawlStep(apiBaseUrl: string): Promise<CrawlOutcome> {
     const headerRetry = Number(response.headers.get("retry-after"));
     return {
       active: true,
+      sourceThrottled: true,
       retryAfterSeconds: validDelay(body.retryAfterSeconds) ?? validDelay(headerRetry) ?? 30,
       message: body.error
     };
   }
   if (!response.ok) {
-    return { active: true, retryAfterSeconds: 30, message: body.error ?? `Crawl step returned HTTP ${response.status}.` };
+    return {
+      active: true,
+      sourceThrottled: response.status >= 500,
+      retryAfterSeconds: 30,
+      message: body.error ?? `Crawl step returned HTTP ${response.status}.`
+    };
   }
   if (body.status === "paused") {
     return { stop: true, active: false, message: body.error ?? "The full crawl paused after a source denial." };
@@ -199,25 +206,23 @@ export async function crikoraRefreshLoop(
         return { status: "lease-lost" };
       }
 
+      const cycleStartedAt = Date.now();
       const crawl = await crawlStep(apiBaseUrl);
       if (crawl.stop) {
         return { status: "stopped", message: crawl.message };
       }
-      if (crawl.active) {
-        const waitMilliseconds = Math.max(
-          1_000,
-          Math.min(7_200_000, (crawl.retryAfterSeconds ?? 1) * 1000)
-        );
-        const renewed = await renewWorkerLeaseStep(leaseToken, Math.ceil(waitMilliseconds / 1000) + 120);
-        if (!renewed) return { status: "lease-lost" };
-        await sleep(`${waitMilliseconds}ms`);
-        continue;
-      }
 
-      const cycleStartedAt = Date.now();
-      const outcome = await refreshStep(apiBaseUrl);
-      if (outcome.stop) {
-        return { status: "stopped", message: outcome.message };
+      let outcome: RefreshOutcome = { stop: false };
+      if (!crawl.sourceThrottled) {
+        // A historical page batch must never starve the live feed. Refresh
+        // current matches after each batch while the durable archive runs.
+        // Renew first because crawl + refresh can outlast the old 120s lease.
+        const renewedBeforeRefresh = await renewWorkerLeaseStep(leaseToken, 180);
+        if (!renewedBeforeRefresh) return { status: "lease-lost" };
+        outcome = await refreshStep(apiBaseUrl);
+        if (outcome.stop) {
+          return { status: "stopped", message: outcome.message };
+        }
       }
 
       const latestSettings = await readSettingsStep(apiBaseUrl);
@@ -227,11 +232,14 @@ export async function crikoraRefreshLoop(
 
       const configuredDelayMs =
         latestSettings.refreshIntervalSeconds * 1000 - (Date.now() - cycleStartedAt);
+      const retryDelaySeconds = crawl.sourceThrottled
+        ? crawl.retryAfterSeconds ?? 30
+        : outcome.retryAfterSeconds;
       const waitMilliseconds = Math.max(
         1_000,
-        Math.min(7_200_000, outcome.retryAfterSeconds === undefined
+        Math.min(7_200_000, retryDelaySeconds === undefined
           ? configuredDelayMs
-          : outcome.retryAfterSeconds * 1000)
+          : retryDelaySeconds * 1000)
       );
       const leaseSeconds = Math.ceil(waitMilliseconds / 1000) + 120;
       const renewed = await renewWorkerLeaseStep(leaseToken, leaseSeconds);
