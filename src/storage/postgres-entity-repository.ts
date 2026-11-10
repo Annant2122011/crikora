@@ -391,23 +391,32 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       status: string;
       page_count: string | number;
       total_fetches: string | number;
-      total_versions: string | number;
+      raw_page_versions: string | number;
+      entity_versions: string | number;
       last_fetched_at: Date | string | null;
     }>(
-      `SELECT page_kind, status, count(*) AS page_count,
-              COALESCE(sum(fetch_count), 0) AS total_fetches,
-              COALESCE(sum(version_count), 0) AS total_versions,
-              max(last_fetched_at) AS last_fetched_at
-       FROM public.crikora_archive_coverage
-       GROUP BY page_kind, status
-       ORDER BY page_kind, status`
+      `SELECT coverage.page_kind, coverage.status,
+              count(*) AS page_count,
+              COALESCE(sum(coverage.fetch_count), 0) AS total_fetches,
+              COALESCE(sum(coverage.version_count), 0) AS raw_page_versions,
+              COALESCE(sum(entity_versions.count), 0) AS entity_versions,
+              max(coverage.last_fetched_at) AS last_fetched_at
+       FROM public.crikora_archive_coverage AS coverage
+       LEFT JOIN LATERAL (
+         SELECT count(*) AS count
+         FROM public.crikora_entity_snapshots AS snapshot
+         WHERE snapshot.source_url = coverage.source_url
+       ) AS entity_versions ON true
+       GROUP BY coverage.page_kind, coverage.status
+       ORDER BY coverage.page_kind, coverage.status`
     );
     return result.rows.map(row => ({
       pageKind: row.page_kind,
       status: row.status,
       pageCount: Number(row.page_count),
       totalFetches: Number(row.total_fetches),
-      totalVersions: Number(row.total_versions),
+      rawPageVersions: Number(row.raw_page_versions),
+      entityVersions: Number(row.entity_versions),
       lastFetchedAt: row.last_fetched_at ? new Date(row.last_fetched_at).toISOString() : null
     }));
   }
