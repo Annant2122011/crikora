@@ -66,7 +66,7 @@ function validSourcePageUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return url.protocol === "https:" && url.hostname === "www.cricbuzz.com" &&
-      !url.username && !url.password && !url.search && !url.hash;
+      !url.username && !url.password && !url.hash;
   } catch {
     return false;
   }
