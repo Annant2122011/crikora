@@ -34,11 +34,11 @@ export interface CricbuzzSitemapDiscoveryResult {
   pageUrls: string[];
 }
 
-function isWomen'sCricketPath(path: string): boolean {
+function isWomensCricketPath(path: string): boolean {
   return /(?:^|[\\/_-])(?:women|womens|wpl)(?:$|[\\/_-])/i.test(path);
 }
 
-function isWomen'sCricketText(value: string): boolean {
+function isWomensCricketText(value: string): boolean {
   return /\\b(?:women(?:'s)?|wpl)\\b/i.test(value);
 }
 
@@ -143,7 +143,7 @@ export class CricbuzzProvider implements CricketProvider {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
           const stub = parseMatchIndexStub(item, page, link);
           const indexText = String((stub.stats as Record<string, unknown>).indexCardText ?? "");
-          if (isWomen'sCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
+          if (isWomensCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
           discovered.set(match[1], item);
           indexRecords.set(match[1], stub);
         }
@@ -295,7 +295,7 @@ export class CricbuzzProvider implements CricketProvider {
         const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
         const stub = parseMatchIndexStub(item, page, link);
         const indexText = String((stub.stats as Record<string, unknown>).indexCardText ?? "");
-        if (isWomen'sCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
+        if (isWomensCricketText(`${stub.description ?? ""} ${indexText}`)) continue;
         discovered.set(item.id, item);
         matches.push(stub);
         addEntity(
@@ -394,7 +394,7 @@ export class CricbuzzProvider implements CricketProvider {
 
     const identity = classifyCricbuzzEntityUrl(page.url);
     if (identity && (identity.entityType === "match" || identity.entityType === "series") &&
-        isWomen'sCricketText(getMainText(page.$))) {
+        isWomensCricketText(getMainText(page.$))) {
       return { discoveredUrls: [], skipped: true };
     }
     let entity: CrikoraEntity | undefined;
