@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, classifyMatchFormat, labeledValue, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
+import { classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls, isAllowedCricbuzzPageUrl, labeledValue, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
 
 describe("Crikora cricket scope and format classification", () => {
   it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
@@ -41,6 +41,18 @@ describe("Cricbuzz player detail extraction", () => {
     expect(labeledValue(text, "Born")).toBe("22 May 1987");
     expect(labeledValue(text, "Birth Place")).toBe("Durban");
     expect(labeledValue(text, "Teams")).toBe("South Africa, Titans");
+  });
+});
+
+describe("Cricbuzz discovery seeds", () => {
+  it("always seeds the historical archive and every supported men's cricket directory", () => {
+    const seeds = getCricbuzzDiscoverySeedUrls();
+    expect(seeds).toContain("https://www.cricbuzz.com/cricket-scorecard-archives");
+    expect(seeds).toContain("https://www.cricbuzz.com/profiles");
+    expect(seeds).toContain("https://www.cricbuzz.com/cricket-team");
+    expect(seeds).toContain("https://www.cricbuzz.com/cricket-news");
+    expect(seeds.every(isAllowedCricbuzzPageUrl)).toBe(true);
+    expect(seeds.some(url => /icc-rankings\\/women/i.test(url))).toBe(false);
   });
 });
 
