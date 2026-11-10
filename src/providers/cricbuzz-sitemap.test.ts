@@ -83,11 +83,12 @@ describe("Cricbuzz sitemap discovery", () => {
     ]);
     expect(result.pageUrls).toEqual([
       "https://www.cricbuzz.com/profiles/10012/smriti-mandhana",
+      "https://www.cricbuzz.com/cricket-match-facts/177291/womens-victoria-t20i",
       "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches"
     ]);
     expect(isAllowedCricbuzzPageUrl(
       "https://www.cricbuzz.com/cricket-match-facts/177291/womens-victoria-t20i"
-    )).toBe(false);
+    )).toBe(true);
   });
 
   it("decodes XML entities before validating and normalizing page URLs", () => {

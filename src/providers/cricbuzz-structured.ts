@@ -273,8 +273,6 @@ function addInnings(map: Map<number, NormalizedInnings>, inningsNumber: number, 
 function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInnings>): void {
   let currentInnings = 1;
   let currentMode: "batting" | "bowling" = "batting";
-  let partnershipIndex = 0;
-  let wicketIndex = 0;
   const rows = $("div.cb-scrd-hdr-rw,div.cb-col-100.cb-scrd-hdr-rw,div.cb-scrd-sub-hdr-rw,div.cb-col-100.cb-scrd-sub-hdr-rw,div.cb-scrd-itms,div.cb-col-100.cb-scrd-itms,div.cb-scrd-rw,div.cb-col-100.cb-scrd-rw").toArray();
 
   for (const element of rows) {
@@ -324,10 +322,9 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
     if (/^fall of wickets\b/i.test(text)) {
       const matches = [...text.matchAll(/(\d+)\s*[-/]\s*(\d+)\s*\(([^)]*)\)/g)];
       for (const match of matches) {
-        wicketIndex++;
         const detail = clean(match[3] ?? "");
         innings.fallOfWickets.push({
-          wicketNumber: wicketIndex,
+          wicketNumber: innings.fallOfWickets.length + 1,
           score: Number(match[1]),
           batterName: detail.split(",")[0]?.trim(),
           over: detail.match(/(\d+(?:\.\d+)?)/)?.[1],
@@ -337,10 +334,9 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
       continue;
     }
     if (/^partnership\b/i.test(text) || classes.includes("partnership")) {
-      partnershipIndex++;
       const value = text.match(/partnership\s*[:]?\s*(\d+)\s*(?:\((\d+)\s*balls?\))?/i);
       innings.partnerships.push({
-        partnershipNumber: partnershipIndex,
+        partnershipNumber: innings.partnerships.length + 1,
         runs: Number(value?.[1] ?? text.match(/\b(\d+)\b/)?.[1] ?? 0),
         balls: value?.[2] ? Number(value[2]) : undefined,
         description: text
@@ -473,7 +469,7 @@ function flattenProfileAttributes(value: unknown, path: string, section: string 
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) valueType = "date";
   attributes.push({
     fieldPath: path,
-    sourceLabel: path.split(".").at(-1)?.replace(/([a-z])([A-Z])/g, "$1 $2") ?? path,
+    sourceLabel: path.split(".").at(-1) ?? path,
     ...(section ? { section } : {}),
     value,
     valueType
@@ -639,6 +635,9 @@ function normalizeStructuredDelivery(record: DataRecord, matchId: string): Norma
   if (!commentary && !batter && !bowler && over === undefined) return undefined;
   const inningsNumber = parseInningsNumber(record);
   const explicitId = stringField(record, ["sourceEventId", "eventId", "commentaryId", "deliveryId", "id", "key"]);
+  const hasDeliveryIdentity = ball !== undefined || Boolean(explicitId) ||
+    (over !== undefined && Boolean(batter && bowler));
+  if (!hasDeliveryIdentity) return undefined;
   const signature = [matchId, inningsNumber, over ?? "", ball ?? "", batter ?? "", bowler ?? "", commentary ?? "", JSON.stringify(record)].join("|");
   return {
     sourceEventId: explicitId || matchId + ":" + inningsNumber + ":" + (over ?? "x") + "." + (ball ?? "x") + ":" + stableHash(signature),
@@ -741,7 +740,7 @@ function parseStructuredInnings(root: unknown, inningsMap: Map<number, Normalize
     const teamName = stringField(record, ["batTeamName", "teamName", "battingTeam"]) ??
       stringField(batting ?? {}, ["batTeamName", "teamName", "name"]);
     const inning = addInnings(inningsMap, number, teamName);
-    const runs = numberField(record, ["inningsRuns", "totalRuns", "runs", "score"]) ??
+    const runs = numberField(record, ["inningsRuns", "totalRuns", "inningsTotal", "totalScore"]) ??
       numberField(score ?? {}, ["runs", "score", "totalRuns"]) ??
       numberField(batting ?? {}, ["runs", "score", "totalRuns"]);
     const wickets = numberField(record, ["inningsWickets", "wickets"]) ??
@@ -878,17 +877,8 @@ export function parseCricbuzzMatchData(
       if (delivery) deliveries.set(delivery.sourceEventId, delivery);
       const comment = normalizeCommentary(record, matchId);
       if (comment) commentary.set(comment.sourceEventId, comment);
-      const inningsNumber = parseInningsNumber(record);
-      const team = stringField(record, ["batTeamName", "teamName", "battingTeam"]);
-      const inning = addInnings(inningsMap, inningsNumber, team);
-      const totalRuns = numberField(record, ["inningsRuns", "totalRuns", "score"]);
-      const wickets = numberField(record, ["inningsWickets", "wickets"]);
-      const overs = stringField(record, ["overs", "oversBowled", "oversCompleted"]);
-      if (totalRuns !== undefined) inning.runs = totalRuns;
-      if (wickets !== undefined) inning.wickets = wickets;
-      if (overs) inning.overs = overs;
-      const extras = extrasFromRecord(record);
-      if (extras.total || extras.byes || extras.legByes || extras.wides || extras.noBalls || extras.penalty) inning.extras = extras;
+      // Innings summary fields are normalized separately above. A delivery's
+      // totalRuns/wickets/extras must never overwrite the innings aggregate.
     }
   }
   if (commentaryPage) {

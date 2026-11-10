@@ -31,7 +31,7 @@ describe("typed Crikora player profile extraction", () => {
     expect(profile.biography).toContain("Long-form player biography");
     expect(profile.attributes).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceLabel: "Born", valueType: "date" }),
-      expect.objectContaining({ sourceLabel: "battingStyle", value: "Right hand bat" })
+      expect.objectContaining({ fieldPath: "battingStyle", value: "Right hand bat" })
     ]));
     expect(profile.statistics).toEqual(expect.arrayContaining([
       expect.objectContaining({ metricKey: "matches", valueNumeric: 20 }),
