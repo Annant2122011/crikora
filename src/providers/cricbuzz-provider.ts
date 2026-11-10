@@ -1224,17 +1224,29 @@ function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> 
 function extractPlayerDetails($: PageDoc): Record<string, unknown> {
   const labels = extractLabels($);
   const text = getMainText($);
-  const personal: Record<string, string> = {};
-  const known = ["Born", "Birth Place", "Role", "Batting Style", "Bowling Style", "Height"];
-  for (const label of known) {
-    const value = labeledValue(text, label);
-    if (value) personal[label] = value;
+  const personal: Record<string, string> = { ...labels };
+  // Keep common fields easy for consumers while preserving every additional source-labelled field.
+  const common = ["Born", "Birth Place", "Role", "Batting Style", "Bowling Style", "Height"];
+  for (const label of common) {
+    if (!personal[label]) {
+      const value = labeledValue(text, label);
+      if (value) personal[label] = value;
+    }
   }
-  const teams = labeledValue(text, "Teams");
+  const teamsValue = labels["Teams"] ?? labeledValue(text, "Teams");
   const summary = $("h2,h3").filter((_i, el) => /summary/i.test($(el).text())).first().next().text();
-  return { ...personal, labels, teams: teams ? teams.split(/,\s*/) : [], summary: clean(summary) };
+  const biographySections = extractSections($).filter(section =>
+    /summary|biography|early life|career|personal life|records|achievements|profile/i.test(section.heading)
+  );
+  return {
+    allFields: labels,
+    personal,
+    teams: teamsValue ? teamsValue.split(/,\\s*/) : [],
+    summary: clean(summary),
+    biographySections,
+    statisticsTables: extractTables($)
+  };
 }
-
 function collectRelatedLinks($: PageDoc, baseUrl: string): {
   profiles: LinkRecord[]; teams: LinkRecord[]; series: LinkRecord[]; venues: LinkRecord[]; content: LinkRecord[];
 } {
@@ -1281,9 +1293,9 @@ function getMainText($: PageDoc): string {
   const candidate = $("main").text() || $("#page-wrapper").text() || $(".container").first().text() || $("body").text();
   return clean(candidate);
 }
-function labeledValue(text: string, label: string): string {
+export function labeledValue(text: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(`(?:^|\s)${escaped}\s+([^\\n]{1,250}?)(?=\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\s|$)`, "i");
+  const regex = new RegExp("(?:^|\\\\s)" + escaped + "\\\\s+([^\\\\n]{1,250}?)(?=\\\\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\\\\s|$)", "i");
   return clean(text.match(regex)?.[1] ?? "");
 }
 function parseDateTime(value: string): string | null {
