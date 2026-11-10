@@ -56,7 +56,9 @@ const HIGH_CHURN_PAGE_KINDS = new Set([
   "match", "cricket-match", "match-facts", "match-scorecard", "match-squads", "commentary",
   "live-stream-page", "live-graphs", "over-by-over", "match-highlights",
   "match-forecast", "wicket-zone", "player-match-performance",
-  "ranking-or-statistics", "player-stats"
+  "ranking-or-statistics", "player-stats",
+  "news-index", "news-category", "video-index", "video-collection", "gallery-index",
+  "player-directory", "team-directory", "schedule", "scorecard-archives"
 ]);
 
 export function hashEntityPayload(payload: Record<string, unknown>): string {
