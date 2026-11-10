@@ -9,11 +9,12 @@ CREATE TABLE IF NOT EXISTS public.crikora_entity_snapshots (
   schema_version integer NOT NULL DEFAULT 1 CHECK (schema_version > 0),
   payload jsonb NOT NULL,
   observed_at timestamptz NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (entity_type, source_id, payload_hash)
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_history_idx
   ON public.crikora_entity_snapshots (entity_type, source_id, observed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_hash_idx
+  ON public.crikora_entity_snapshots (entity_type, source_id, payload_hash);
 CREATE INDEX IF NOT EXISTS crikora_entity_snapshots_observed_idx
   ON public.crikora_entity_snapshots (observed_at DESC);
 
@@ -28,11 +29,12 @@ CREATE TABLE IF NOT EXISTS public.crikora_source_page_snapshots (
   body_gzip bytea NOT NULL,
   body_bytes integer NOT NULL CHECK (body_bytes >= 0),
   fetched_at timestamptz NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (source_url, content_sha256)
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_url_idx
   ON public.crikora_source_page_snapshots (source_url, fetched_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_hash_idx
+  ON public.crikora_source_page_snapshots (source_url, content_sha256);
 CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_kind_idx
   ON public.crikora_source_page_snapshots (page_kind, fetched_at DESC);
 CREATE INDEX IF NOT EXISTS crikora_source_page_snapshots_fetched_idx
