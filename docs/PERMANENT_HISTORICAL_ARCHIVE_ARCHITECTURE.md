@@ -71,6 +71,7 @@ A full historical archive may take hours or days depending on page count, upstre
 
 - `GET /v1/archive/coverage`: counts of discovered/captured/skipped/failed URLs by route family, plus total raw-page and entity-version counts.
 - `GET /v1/archive/entities/:entityType/:sourceId/history`: permanent normalized history for one entity.
+- `GET /v1/entities/:entityType/:sourceId/details`: latest entity record plus its linked statistics/profile subpages, resolved through `relatedEntityType` and `relatedSourceId`.
 - Raw HTML is never returned by a public route. A future authenticated export/restore interface must be separately designed.
 - Existing API routes continue to serve the latest entity from `crikora_cache`.
 
