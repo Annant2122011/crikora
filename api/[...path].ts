@@ -523,6 +523,60 @@ async function listEntities(type: EntityType, url: URL, response: ApiResponse): 
   });
 }
 
+async function comparePlayers(url: URL, response: ApiResponse): Promise<void> {
+  const rawIds = (url.searchParams.get("ids") ?? "").split(",").map(value => value.trim()).filter(Boolean);
+  const ids = [...new Set(rawIds)];
+  if (ids.length < 2 || ids.length > 4 || ids.some(id => !/^\\d{1,12}$/.test(id))) {
+    return sendJson(response, 400, { error: "Provide 2 to 4 comma-separated numeric Cricbuzz player IDs." });
+  }
+
+  const rows = await Promise.all(ids.map(id => getRepository().get("player", id)));
+  const missing = ids.filter((_id, index) => !rows[index]);
+  if (missing.length) {
+    return sendJson(response, 404, {
+      error: "One or more player profiles have not been collected yet.",
+      missingPlayerIds: missing
+    });
+  }
+
+  const players = rows.map((row, index) => {
+    const entity = row!;
+    const profile = entity.payload.profile && typeof entity.payload.profile === "object"
+      ? entity.payload.profile as Record<string, unknown>
+      : {};
+    const fields = profile.allFields && typeof profile.allFields === "object"
+      ? profile.allFields as Record<string, unknown>
+      : {};
+    const common = [
+      "fullName", "country", "role", "battingStyle", "bowlingStyle",
+      "birthDate", "birthPlace", "heightCm", "teams"
+    ];
+    for (const key of common) {
+      if (profile[key] !== undefined && fields[key] === undefined) fields[key] = profile[key];
+    }
+    return {
+      player: present(entity),
+      playerId: ids[index],
+      displayName: String(profile.fullName ?? entity.payload.title ?? entity.payload.name ?? ids[index]),
+      comparisonFields: fields,
+      careerStatistics: profile.statistics ?? entity.payload.statistics ?? []
+    };
+  });
+
+  const fieldNames = [...new Set(players.flatMap(player => Object.keys(player.comparisonFields)))].sort((a,b) => a.localeCompare(b));
+  const comparison = fieldNames.map(label => ({
+    label,
+    values: Object.fromEntries(players.map(player => [
+      player.playerId,
+      player.comparisonFields[label] ?? null
+    ]))
+  }));
+  sendJson(response, 200, {
+    data: { players, comparison },
+    meta: { count: players.length, source: "cricbuzz", comparisonMode: "source-labelled-profile-fields" }
+  });
+}
+
 async function getEntity(type: EntityType, sourceId: string, response: ApiResponse): Promise<void> {
   const row = await getRepository().get(type, sourceId);
   if (!row) {
@@ -966,6 +1020,9 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   }
   if (parts[1] === "content" && parts.length === 2 && method === "GET") {
     return listContent(url, response);
+  }
+  if (parts[1] === "players" && parts[2] === "compare" && parts.length === 3 && method === "GET") {
+    return comparePlayers(url, response);
   }
   if (parts[1] === "news" && parts.length === 2 && method === "GET") return listNews(url, response);
   if (parts[1] === "news" && parts.length === 3 && method === "GET") return getNews(parts[2]!, response);
