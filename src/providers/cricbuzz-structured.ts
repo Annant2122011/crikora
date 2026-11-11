@@ -289,10 +289,15 @@ function parseOverBall(record: DataRecord): { over?: number; ball?: number } {
   if (notation) return { over: Number(notation[1]), ball: Number(notation[2]) };
   const explicitOver = asNumber(rawOver);
   const explicitBall = asNumber(rawBall);
-  if (explicitOver !== undefined || explicitBall !== undefined) {
-    return { ...(explicitOver !== undefined ? { over: explicitOver } : {}), ...(explicitBall !== undefined ? { ball: explicitBall } : {}) };
-  }
   const ballNbr = numberField(record, ["ballNbr", "ballNumberInInnings", "deliveryNumberInInnings"]);
+  if (explicitOver !== undefined || explicitBall !== undefined) {
+    const derivedBall = ballNbr !== undefined && ballNbr > 0 ? ((ballNbr - 1) % 6) + 1 : undefined;
+    return {
+      ...(explicitOver !== undefined ? { over: explicitOver } : ballNbr !== undefined && ballNbr > 0
+        ? { over: Math.floor((ballNbr - 1) / 6) } : {}),
+      ...(explicitBall !== undefined ? { ball: explicitBall } : derivedBall !== undefined ? { ball: derivedBall } : {})
+    };
+  }
   if (ballNbr !== undefined && ballNbr > 0) {
     return { over: Math.floor((ballNbr - 1) / 6), ball: ((ballNbr - 1) % 6) + 1 };
   }
@@ -755,7 +760,7 @@ export function normalizeCricbuzzPlayerProfile(
   const rscRoots: unknown[] = [];
   walkRecords(structuredRoots, record => {
     for (const [key, value] of Object.entries(record)) {
-      if (/^(playerData|playerInfo|playerProfile|profileData|bioData)$/i.test(key)) rscRoots.push(value);
+      if (/^(?:player|profile).*(?:data|info|profile|bio|detail|stat|response|overview)|^(?:bioData|personalInfo|careerStats)$/i.test(key)) rscRoots.push(value);
     }
     const type = asString(scalar(record, ["@type", "type"])) ?? "";
     if (/person|athlete|cricketer|sports?person/i.test(type)) rscRoots.push(record);
@@ -767,11 +772,20 @@ export function normalizeCricbuzzPlayerProfile(
   });
   const allRecords = [...rscRecords, ...labels];
   const values = (aliases: string[]) => profileValue(allRecords, aliases);
-  const sections = $("h1,h2,h3,h4").toArray().map(heading => {
+  const htmlSections = $("h1,h2,h3,h4").toArray().map(heading => {
     const node = $(heading);
     return { heading: clean(node.text()), text: clean(node.nextUntil("h1,h2,h3,h4").text()) };
   }).filter(section => section.heading && section.text);
-  const biography = sections.filter(section => /bio|about|career|summary|early life|profile/i.test(section.heading))
+  const structuredSections = rscRecords.map(record => ({
+    heading: stringField(record, ["heading", "sectionTitle", "sectionName", "title", "label"]),
+    text: displayValue(scalar(record, ["paragraph", "description", "content", "body", "text", "bio", "value"]))
+  })).filter((section): section is { heading: string; text: string } =>
+    Boolean(section.heading && section.text && /bio|about|career|summary|early life|profile|personal|background|achievement/i.test(section.heading))
+  );
+  const sections = [...new Map([...htmlSections, ...structuredSections].map(section =>
+    [section.heading.toLowerCase() + ":" + section.text, section]
+  )).values()];
+  const biography = sections.filter(section => /bio|about|career|summary|early life|profile|personal|background/i.test(section.heading))
     .map(section => section.text).join("\n\n") ||
     values(["biography", "bio", "description", "playerDescription", "summary", "about", "profileDescription"]);
   const image = $("meta[property='og:image']").attr("content") ||
