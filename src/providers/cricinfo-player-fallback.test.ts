@@ -92,6 +92,46 @@ describe("ESPNcricinfo player fallback extractor", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
+  it("also resolves men's profiles from the men's country-team index", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const rawUrl = input instanceof Request ? input.url : String(input);
+      const url = new URL(rawUrl);
+      if (url.pathname === "/v1/pages/team") {
+        return jsonResponse({
+          content: {
+            featuredTeamsGroups: {
+              groups: [{
+                title: "POPULAR MEN'S INTERNATIONAL TEAMS",
+                teams: [{ objectId: 1, longName: "India" }]
+              }]
+            }
+          }
+        });
+      }
+      if (url.pathname === "/v1/pages/player/search") {
+        return jsonResponse({
+          total: 1,
+          results: [{ objectId: 253802, slug: "ajinkya-rahane", longName: "Ajinkya Rahane", gender: "MALE" }]
+        });
+      }
+      if (url.pathname === "/v1/pages/player/home") {
+        return jsonResponse({
+          player: { objectId: 253802, slug: "ajinkya-rahane", longName: "Ajinkya Rahane", gender: "MALE", imageUrl: "/db/PICTURES/CMS/1/1.jpg" }
+        });
+      }
+      throw new Error(`Unexpected ESPNcricinfo request: ${url.toString()}`);
+    });
+    const fallback = new CricinfoPlayerFallback({ fetcher, minRequestIntervalMs: 0 });
+    const result = await fallback.lookup({
+      fullName: "Ajinkya Rahane",
+      country: "India",
+      gender: "Male"
+    });
+
+    expect(result?.playerId).toBe("253802");
+    expect(result?.imageUrl).toContain("/db/PICTURES/CMS/1/1.jpg");
+  });
+
   it("does not query Cricinfo when the Crikora profile has no country to disambiguate the player", async () => {
     const fetcher = vi.fn();
     const fallback = new CricinfoPlayerFallback({
