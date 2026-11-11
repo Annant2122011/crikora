@@ -70,6 +70,48 @@ export interface ContentQuery {
   limit?: number;
 }
 
+export interface CrikoraNewsArticle {
+  id: string;
+  sourceUrl: string;
+  canonicalUrl: string;
+  title: string;
+  summary?: string;
+  bodyText: string;
+  author?: string;
+  category?: string;
+  publishedAt?: string;
+  modifiedAt?: string;
+  primaryImageUrl?: string;
+  tags: string[];
+  observedAt: string;
+}
+
+export interface CrikoraScheduleFixture {
+  id: string;
+  matchSourceId: string;
+  sourcePageUrl: string;
+  matchUrl: string;
+  matchTitle: string;
+  homeTeam?: string;
+  awayTeam?: string;
+  competition: string;
+  format: string;
+  startTime?: string;
+  venue?: string;
+  sourceText: string;
+  observedAt: string;
+}
+
+export interface NewsQuery {
+  limit?: number;
+  before?: string;
+}
+
+export interface ScheduleQuery {
+  limit?: number;
+  from?: string;
+}
+
 export interface ArchiveCoverage {
   pageKind: string;
   status: string;
@@ -207,6 +249,29 @@ export class CrikoraApiClient {
     if (query.limit !== undefined) params.set("limit", String(query.limit));
     const suffix = params.size ? `?${params.toString()}` : "";
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/content${suffix}`, signal);
+  }
+
+  listNews(query: NewsQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraNewsArticle[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.before) params.set("before", query.before);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraNewsArticle[]>>(`/v1/news${suffix}`, signal);
+  }
+
+  getNews(articleId: string, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraNewsArticle>> {
+    return this.request<CrikoraEnvelope<CrikoraNewsArticle>>(
+      `/v1/news/${encodeURIComponent(articleId.replace(/^news:/, ""))}`,
+      signal
+    );
+  }
+
+  listSchedule(query: ScheduleQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraScheduleFixture[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.from) params.set("from", query.from);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraScheduleFixture[]>>(`/v1/schedule${suffix}`, signal);
   }
 
   search(query: string, limit = 30, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
