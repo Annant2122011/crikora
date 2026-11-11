@@ -11,12 +11,14 @@ export interface CricbuzzFlightPayload {
 const CHUNK = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/gs;
 const ROW_ID = /^[0-9a-f]+$/i;
 const INTERESTING_KEYS = [
-  "playerData", "matchInfo", "matchHeader", "miniscore", "commentaryPageData",
+  "playerData", "playerInfo", "playerProfile", "profileData", "bioData", "playerDetails",
+  "playerStats", "careerStats", "battingStats", "bowlingStats", "personalInfo", "playerBiography",
+  "matchInfo", "matchHeader", "miniscore", "commentaryPageData",
   "seriesInfoData", "matchesData", "pointsTableData", "teamInfo", "venueDetails",
   "graphsData", "initialStats", "playerNews", "storyList", "squads", "team1", "team2",
-  "playerInfo", "playerProfile", "profileData", "bioData", "scorecardApiData", "scoreCard", "scorecardData", "scorecard",
+  "scorecardApiData", "scoreCard", "scorecardData", "scorecard",
   "innings", "batTeamDetails", "bowlTeamDetails", "partnerships", "partnershipsData",
-  "wicketsData", "extrasData", "commentaryData", "commentaryList", "ballByBall",
+  "wicketsData", "wicketInfo", "extrasData", "commentaryData", "commentaryList", "ballByBall",
   "deliveries", "overSummary", "batTeamScore", "bowlTeamScore", "batsmenData", "bowlersData",
   "matchPreviewFullComm", "matchDetails", "matchScoreDetails", "inningsScoreList", "commentarySnippetList", "overSummaryList"
 ];
