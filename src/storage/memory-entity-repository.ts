@@ -28,10 +28,12 @@ export class MemoryEntityRepository implements EntityRepository {
     return row ? structuredClone(row) : undefined;
   }
 
-  async list(entityType: EntityType, limit = 100): Promise<StoredEntity[]> {
+  async list(entityType: EntityType, limit = 100, offset = 0): Promise<StoredEntity[]> {
     this.prune(Date.now());
+    const safeOffset = Math.max(0, Math.min(1_000_000, Math.trunc(offset)));
     return [...this.rows.values()].filter(row => row.entityType === entityType)
-      .sort((a,b) => b.fetchedAt.localeCompare(a.fetchedAt)).slice(0, Math.max(1, Math.min(500, limit)))
+      .sort((a,b) => b.fetchedAt.localeCompare(a.fetchedAt))
+      .slice(safeOffset, safeOffset + Math.max(1, Math.min(500, limit)))
       .map(row => structuredClone(row));
   }
 
