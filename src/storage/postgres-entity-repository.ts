@@ -248,13 +248,14 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       for (const statistic of arrayOfRecords(profile.statistics)) {
         await client.query(
           `INSERT INTO public.crikora_player_statistics
-            (source_id,table_index,row_index,section,row_label,metric_label,metric_key,value_text,value_numeric,observed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::timestamptz)`,
+            (source_id,table_index,row_index,section,row_label,metric_label,metric_key,source_path,value_text,value_numeric,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::timestamptz)`,
           [
             sourceId, Number(statistic.tableIndex ?? 0), Number(statistic.rowIndex ?? 0),
             nullableString(statistic.section), nullableString(statistic.rowLabel),
             String(statistic.metricLabel ?? "Value"), String(statistic.metricKey ?? "value"),
-            String(statistic.valueText ?? ""), nullableNumber(statistic.valueNumeric), observedAt
+            nullableString(statistic.sourcePath), String(statistic.valueText ?? ""),
+            nullableNumber(statistic.valueNumeric), observedAt
           ]
         );
       }
@@ -322,11 +323,15 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       for (const partnership of arrayOfRecords(inning.partnerships)) {
         await client.query(
           `INSERT INTO public.crikora_match_partnerships
-            (match_source_id,innings_number,partnership_number,batter_one,batter_two,runs,balls,description,observed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz)`,
+            (match_source_id,innings_number,partnership_number,batter_one,batter_one_source_id,batter_one_runs,batter_one_balls,
+           batter_two,batter_two_source_id,batter_two_runs,batter_two_balls,runs,balls,description,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::timestamptz)`,
           [
             matchId, number, Number(partnership.partnershipNumber ?? 1), nullableString(partnership.batterOne),
-            nullableString(partnership.batterTwo), Number(partnership.runs ?? 0),
+            nullableString(partnership.batterOneSourceId), nullableNumber(partnership.batterOneRuns),
+            nullableNumber(partnership.batterOneBalls), nullableString(partnership.batterTwo),
+            nullableString(partnership.batterTwoSourceId), nullableNumber(partnership.batterTwoRuns),
+            nullableNumber(partnership.batterTwoBalls), Number(partnership.runs ?? 0),
             nullableNumber(partnership.balls), nullableString(partnership.description), observedAt
           ]
         );
@@ -334,11 +339,12 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       for (const wicket of arrayOfRecords(inning.fallOfWickets)) {
         await client.query(
           `INSERT INTO public.crikora_match_fall_of_wickets
-            (match_source_id,innings_number,wicket_number,score,batter_name,over,description,observed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz)`,
+            (match_source_id,innings_number,wicket_number,score,batter_name,player_source_id,over,description,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz)`,
           [
             matchId, number, Number(wicket.wicketNumber ?? 1), nullableNumber(wicket.score),
-            nullableString(wicket.batterName), nullableString(wicket.over), String(wicket.description ?? ""), observedAt
+            nullableString(wicket.batterName), nullableString(wicket.playerSourceId),
+            nullableString(wicket.over), String(wicket.description ?? ""), observedAt
           ]
         );
       }
@@ -347,14 +353,18 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     for (const delivery of deliveries) {
       await client.query(
         `INSERT INTO public.crikora_match_deliveries
-          (match_source_id,source_event_id,innings_number,over_number,ball_number,batter,non_striker,bowler,
+          (match_source_id,source_event_id,innings_number,over_number,ball_number,
+           batter,batter_source_id,non_striker,non_striker_source_id,bowler,bowler_source_id,
            bat_runs,extra_runs,total_runs,extra_type,byes,leg_byes,wides,no_balls,penalty,
-           is_wicket,dismissal_type,dismissed_player,fielder,description,commentary,event_type,raw_data,observed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25::timestamptz)`,
+           is_wicket,dismissal_type,dismissed_player,dismissed_player_source_id,fielder,fielder_source_id,
+           description,commentary,event_type,raw_data,observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31::timestamptz)`,
         [
           matchId, String(delivery.sourceEventId ?? "event_" + JSON.stringify(delivery)),
           Number(delivery.inningsNumber ?? 1), nullableNumber(delivery.overNumber), nullableNumber(delivery.ballNumber),
-          nullableString(delivery.batter), nullableString(delivery.nonStriker), nullableString(delivery.bowler),
+          nullableString(delivery.batter), nullableString(delivery.batterSourceId),
+          nullableString(delivery.nonStriker), nullableString(delivery.nonStrikerSourceId),
+          nullableString(delivery.bowler), nullableString(delivery.bowlerSourceId),
           Number(delivery.batRuns ?? 0), Number(delivery.extraRuns ?? 0), Number(delivery.totalRuns ?? 0),
           nullableString(delivery.extraType),
           Number(isRecord(delivery.extras) ? delivery.extras.byes ?? 0 : 0),
@@ -363,8 +373,10 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
           Number(isRecord(delivery.extras) ? delivery.extras.noBalls ?? 0 : 0),
           Number(isRecord(delivery.extras) ? delivery.extras.penalty ?? 0 : 0),
           Boolean(delivery.isWicket), nullableString(delivery.dismissalType),
-          nullableString(delivery.dismissedPlayer), nullableString(delivery.fielder), nullableString(delivery.description),
-          nullableString(delivery.commentary), nullableString(delivery.eventType), jsonValue(delivery.rawData ?? delivery), observedAt
+          nullableString(delivery.dismissedPlayer), nullableString(delivery.dismissedPlayerSourceId),
+          nullableString(delivery.fielder), nullableString(delivery.fielderSourceId),
+          nullableString(delivery.description), nullableString(delivery.commentary),
+          nullableString(delivery.eventType), jsonValue(delivery.rawData ?? delivery), observedAt
         ]
       );
     }
