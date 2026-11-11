@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls, isAllowedCricbuzzPageUrl, labeledValue, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
+import {
+  classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
+  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl,
+  labeledValue, parseCricbuzzEntityHtml, shouldFollowTargetedPageLink
+} from "./cricbuzz-provider.js";
 
 describe("Crikora cricket scope and format classification", () => {
   it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
@@ -58,16 +62,59 @@ describe("Cricbuzz player detail extraction", () => {
   });
 });
 
-describe("Cricbuzz discovery seeds", () => {
-  it("always seeds the historical archive and both men's and women's cricket directories", () => {
+describe("Cricbuzz targeted discovery seeds", () => {
+  it("seeds only match, schedule and news indexes, not unrelated directories or historical archive routes", () => {
     const seeds = getCricbuzzDiscoverySeedUrls();
-    expect(seeds).toContain("https://www.cricbuzz.com/cricket-scorecard-archives");
-    expect(seeds).toContain("https://www.cricbuzz.com/profiles");
-    expect(seeds).toContain("https://www.cricbuzz.com/cricket-team");
-    expect(seeds).toContain("https://www.cricbuzz.com/cricket-news");
-    expect(seeds.every(isAllowedCricbuzzPageUrl)).toBe(true);
-    expect(seeds).toContain("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting");
-    expect(seeds).toContain("https://www.cricbuzz.com/cricket-stats/icc-rankings/men/batting");
+    expect(seeds).toEqual(expect.arrayContaining([
+      "https://www.cricbuzz.com/cricket-match/live-scores",
+      "https://www.cricbuzz.com/cricket-match/live-scores/upcoming-matches",
+      "https://www.cricbuzz.com/cricket-match/live-scores/recent-matches",
+      "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
+      "https://www.cricbuzz.com/cricket-schedule/series/all",
+      "https://www.cricbuzz.com/cricket-news",
+      "https://www.cricbuzz.com/cricket-news/latest-news"
+    ]));
+    expect(seeds.some(value => /profiles|cricket-team|scorecard-archives|cricket-videos|cricket-stats/.test(value))).toBe(false);
+    expect(seeds.every(isTargetedCricbuzzCollectionUrl)).toBe(true);
+  });
+
+  it("accepts both men's and women's data, while rejecting unused page families", () => {
+    const allowed = [
+      "https://www.cricbuzz.com/live-cricket-scores/555/example-women-vs-women",
+      "https://www.cricbuzz.com/cricket-series/555/womens-league",
+      "https://www.cricbuzz.com/profiles/777/women-player",
+      "https://www.cricbuzz.com/profiles/777/women-player/batting",
+      "https://www.cricbuzz.com/cricket-news/140765/example-story",
+      "https://www.cricbuzz.com/cricket-schedule/series/all"
+    ];
+    for (const value of allowed) expect(isTargetedCricbuzzCollectionUrl(value)).toBe(true);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-scorecard-archives/1877")).toBe(false);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-videos/217038/example")).toBe(false);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(false);
+  });
+});
+
+describe("targeted link following", () => {
+  const matchIndex = "https://www.cricbuzz.com/cricket-match/live-scores";
+  const matchPage = "https://www.cricbuzz.com/live-cricket-scores/176500/teams-match";
+  const squadsPage = "https://www.cricbuzz.com/cricket-match-squads/176500/teams-match";
+  const player = "https://www.cricbuzz.com/profiles/777/sample-player";
+  const batting = "https://www.cricbuzz.com/profiles/777/sample-player/all-matches/batting";
+  const otherPlayer = "https://www.cricbuzz.com/profiles/778/another-player";
+  const newsIndex = "https://www.cricbuzz.com/cricket-news";
+  const newsA = "https://www.cricbuzz.com/cricket-news/140765/story-a";
+  const newsB = "https://www.cricbuzz.com/cricket-news/140766/story-b";
+  const schedule = "https://www.cricbuzz.com/cricket-schedule/series/all";
+
+  it("follows match indexes, match participants, player statistics, schedules and news indexes without page-family fanout", () => {
+    expect(shouldFollowTargetedPageLink(matchIndex, matchPage)).toBe(true);
+    expect(shouldFollowTargetedPageLink(matchPage, squadsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(squadsPage, player)).toBe(true);
+    expect(shouldFollowTargetedPageLink(player, batting)).toBe(true);
+    expect(shouldFollowTargetedPageLink(player, otherPlayer)).toBe(false);
+    expect(shouldFollowTargetedPageLink(newsIndex, newsA)).toBe(true);
+    expect(shouldFollowTargetedPageLink(newsA, newsB)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, matchPage)).toBe(true);
   });
 });
 
@@ -244,5 +291,60 @@ describe("Cricbuzz HTML entity extraction", () => {
     expect(entity?.payload.associations).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "/cricket-team/england/1" })
     ]));
+  });
+});
+describe("targeted news and schedule normalization", () => {
+  it("extracts complete news article metadata and body text", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><head>
+        <meta property="og:title" content="A cricket report">
+        <meta name="description" content="The short summary">
+        <meta property="article:published_time" content="2026-11-05T09:00:00+05:30">
+        <meta name="author" content="Cricbuzz Staff">
+        <meta property="og:image" content="https://static.cricbuzz.com/news.jpg">
+      </head><body><main><article><h1>A cricket report</h1>
+        <div class="cb-nws-dtl-itms"><p>The first full article paragraph with meaningful detail.</p>
+          <p>The second full article paragraph continues the report.</p></div>
+      </article></main></body></html>`,
+      "https://www.cricbuzz.com/cricket-news/140765/a-cricket-report"
+    );
+    expect(entity?.payload).toMatchObject({
+      pageKind: "news",
+      newsArticle: {
+        sourceId: "news:140765",
+        title: "A cricket report",
+        summary: "The short summary",
+        author: "Cricbuzz Staff",
+        publishedAt: "2026-11-05T03:30:00.000Z",
+        primaryImageUrl: "https://static.cricbuzz.com/news.jpg",
+        bodyText: expect.stringContaining("The second full article paragraph")
+      }
+    });
+  });
+
+  it("extracts scheduled fixtures and links them to match source IDs", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><main><h1>Upcoming International Schedule</h1>
+        <table><thead><tr><th>Date</th><th>Match</th><th>Venue</th></tr></thead><tbody>
+          <tr><td>07 Nov 2026, 7:00 PM</td>
+            <td><a href="/live-cricket-scores/176501/ind-vs-aus-1st-odi">India vs Australia, 1st ODI</a></td>
+            <td>Wankhede Stadium</td></tr>
+        </tbody></table>
+      </main></html>`,
+      "https://www.cricbuzz.com/cricket-schedule/series/all"
+    );
+    expect(entity?.payload).toMatchObject({
+      pageKind: "schedule",
+      scheduleFixtures: [expect.objectContaining({
+        sourceId: "176501",
+        matchUrl: "https://www.cricbuzz.com/live-cricket-scores/176501/ind-vs-aus-1st-odi",
+        matchTitle: "India vs Australia, 1st ODI",
+        homeTeam: "India",
+        awayTeam: "Australia",
+        format: "ODI",
+        startTime: "2026-11-07T13:30:00.000Z",
+        venue: "Wankhede Stadium"
+      })]
+    });
   });
 });
