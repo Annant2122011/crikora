@@ -6,6 +6,7 @@ import { z } from "zod";
 import { CricbuzzProvider } from "./providers/cricbuzz-provider.js";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityRepository, type StoredEntity } from "./domain/entities.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
+import { createArchiveObjectStoreFromEnv } from "./storage/neon-s3-archive-object-store.js";
 import { Poller } from "./ingestion/poller.js";
 import { isArchiveRepository } from "./storage/archive-repository.js";
 
@@ -17,6 +18,11 @@ const env = z.object({
   POLL_INTERVAL_SECONDS: z.enum(["10", "15", "20", "30"]).default("10"),
   CRIKORA_COLLECTION_ENABLED: z.enum(["true", "false"]).default("false"),
   DATABASE_URL: z.string().min(1),
+  AWS_ENDPOINT_URL_S3: z.string().optional(),
+  AWS_REGION: z.string().optional(),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  CRIKORA_ARCHIVE_BUCKET: z.string().optional(),
   CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).default(0),
   CRICBUZZ_MAX_MATCHES_PER_POLL: z.coerce.number().int().min(1).max(50).default(2),
   CRICBUZZ_MAX_PROFILES_PER_POLL: z.coerce.number().int().min(0).max(100).default(2),
@@ -32,7 +38,10 @@ const env = z.object({
 
 async function startServer(): Promise<void> {
 const app = Fastify({ logger: { level: env.LOG_LEVEL }, requestIdHeader: "x-request-id" });
-const repository: EntityRepository = new PostgresEntityRepository(env.DATABASE_URL);
+// Read the five Neon Object Storage variables from the same process environment
+// loaded by dotenv/config or injected by the production host. Never expose them in API responses.
+const archiveObjectStore = createArchiveObjectStoreFromEnv(process.env);
+const repository: EntityRepository = new PostgresEntityRepository(env.DATABASE_URL, archiveObjectStore);
 await (repository as PostgresEntityRepository).ping();
 
 const provider = new CricbuzzProvider({
@@ -66,6 +75,7 @@ app.get("/", async () => ({
   service: "crikora-api",
   source: provider.id,
   storage: "postgres",
+  archiveObjectStorage: archiveObjectStore ? "configured" : "local-bytea-fallback",
   retentionPolicy: RETENTION_POLICY,
   collectionEnabled: env.CRIKORA_COLLECTION_ENABLED === "true",
   health: "/health",
@@ -104,6 +114,7 @@ app.get("/health", async (_request, reply) => {
       service: "crikora-api",
       source: provider.id,
       storage: "postgres",
+      archiveObjectStorage: archiveObjectStore ? "configured" : "local-bytea-fallback",
       retentionPolicy: RETENTION_POLICY,
       collectionEnabled: env.CRIKORA_COLLECTION_ENABLED === "true",
       refreshIntervalSeconds: Number(env.POLL_INTERVAL_SECONDS)
