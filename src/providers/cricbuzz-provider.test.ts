@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CricbuzzProvider, classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
+  CricbuzzProvider, classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls, isTargetedCricbuzzSeedUrl,
   isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl, isTargetedCricbuzzSeedUrl,
   labeledValue, parseCricbuzzEntityHtml, shouldFollowTargetedPageLink
 } from "./cricbuzz-provider.js";
