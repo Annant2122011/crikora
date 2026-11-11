@@ -2,6 +2,34 @@ import { describe, expect, it } from "vitest";
 import { load } from "cheerio";
 import { normalizeCricbuzzPlayerProfile, parseCricbuzzMatchData } from "./cricbuzz-structured.js";
 
+describe("player identity selection", () => {
+  it("does not use a generic format name when a player identity is available", () => {
+    const $ = load(`
+      <html><main><h1>T20</h1>
+        <table><tr><th>Country</th><td>India</td></tr></table>
+      </main></html>`);
+    const profile = normalizeCricbuzzPlayerProfile(
+      $,
+      "https://www.cricbuzz.com/profiles/11813/ruturaj-gaikwad",
+      {
+        profileData: { name: "T20", section: "format" },
+        playerData: [{ playerId: 11813, name: "Ruturaj Gaikwad", battingStyle: "Right-hand bat" }]
+      }
+    );
+    expect(profile.fullName).toBe("Ruturaj Gaikwad");
+  });
+
+  it("falls back to the player profile slug when headings contain only a format label", () => {
+    const $ = load("<html><main><h1>ODI</h1></main></html>");
+    const profile = normalizeCricbuzzPlayerProfile(
+      $,
+      "https://www.cricbuzz.com/profiles/11813/ruturaj-gaikwad",
+      { profileData: { name: "T20", section: "format" } }
+    );
+    expect(profile.fullName).toBe("Ruturaj Gaikwad");
+  });
+});
+
 describe("typed Crikora player profile extraction", () => {
   it("normalizes labelled fields, typed profile attributes, biography and statistical tables", () => {
     const $ = load(`
