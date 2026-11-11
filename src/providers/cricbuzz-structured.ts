@@ -1017,8 +1017,8 @@ function normalizeCommentary(record: DataRecord, matchId: string): NormalizedCom
   const { over, ball } = parseOverBall(record);
   const inningsNumber = parseInningsNumber(record);
   const id = stringField(record, ["sourceEventId", "eventId", "commentaryId", "id", "key"]);
-  const timestamp = scalar(record, ["timestamp", "timeStamp", "commentaryTimestamp"]);
-  const signature = [matchId, inningsNumber, over ?? "", ball ?? "", timestamp ?? "", commentary].join("|");
+  const sourceTimestamp = scalar(record, ["timestamp", "timeStamp", "commentaryTimestamp", "sourceTimestamp"]);
+  const signature = [matchId, inningsNumber, over ?? "", ball ?? "", sourceTimestamp ?? "", commentary].join("|");
   const eventType = stringField(record, ["eventType", "event", "type", "kind"]);
   const batter = stringField(record, ["batter", "batsman", "striker"]) ??
     nestedString(record, ["batsmanStriker"], ["batName", "batsmanName", "playerName", "name"]);
@@ -1032,7 +1032,6 @@ function normalizeCommentary(record: DataRecord, matchId: string): NormalizedCom
     nestedPlayerId(record, ["batsmanNonStriker", "nonStrikerDetails"], ["batId", "batsmanId", "playerId", "id"]);
   const bowlerSourceId = structuredPlayerId(record, ["bowlerId", "bowlId", "bowlerPlayerId"]) ??
     nestedPlayerId(record, ["bowlerStriker"], ["bowlId", "bowlerId", "playerId", "id"]);
-  const timestamp = scalar(record, ["timestamp", "timeStamp", "commentaryTimestamp", "sourceTimestamp"]);
   return {
     sourceEventId: id || matchId + ":commentary:" + stableHash(signature),
     inningsNumber,
@@ -1045,7 +1044,7 @@ function normalizeCommentary(record: DataRecord, matchId: string): NormalizedCom
     ...(nonStrikerSourceId ? { nonStrikerSourceId } : {}),
     ...(bowler ? { bowler } : {}),
     ...(bowlerSourceId ? { bowlerSourceId } : {}),
-    ...(timestamp !== undefined ? { sourceTimestamp: asString(timestamp) } : {}),
+    ...(sourceTimestamp !== undefined ? { sourceTimestamp: asString(sourceTimestamp) } : {}),
     ...(descriptionText(record) ? { description: descriptionText(record) } : {}),
     commentary,
     rawData: record
