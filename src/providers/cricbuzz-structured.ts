@@ -36,7 +36,13 @@ export interface NormalizedExtras {
 export interface NormalizedPartnership {
   partnershipNumber: number;
   batterOne?: string;
+  batterOneSourceId?: string;
+  batterOneRuns?: number;
+  batterOneBalls?: number;
   batterTwo?: string;
+  batterTwoSourceId?: string;
+  batterTwoRuns?: number;
+  batterTwoBalls?: number;
   runs: number;
   balls?: number;
   description?: string;
@@ -46,6 +52,7 @@ export interface NormalizedFallOfWicket {
   wicketNumber: number;
   score?: number;
   batterName?: string;
+  playerSourceId?: string;
   over?: string;
   description: string;
 }
@@ -69,8 +76,11 @@ export interface NormalizedDelivery {
   overNumber?: number;
   ballNumber?: number;
   batter?: string;
+  batterSourceId?: string;
   nonStriker?: string;
+  nonStrikerSourceId?: string;
   bowler?: string;
+  bowlerSourceId?: string;
   batRuns: number;
   extraRuns: number;
   totalRuns: number;
@@ -79,7 +89,9 @@ export interface NormalizedDelivery {
   isWicket: boolean;
   dismissalType?: string;
   dismissedPlayer?: string;
+  dismissedPlayerSourceId?: string;
   fielder?: string;
+  fielderSourceId?: string;
   description?: string;
   commentary?: string;
   eventType?: string;
@@ -128,6 +140,7 @@ export interface NormalizedPlayerStatistic {
   rowLabel?: string;
   metricLabel: string;
   metricKey: string;
+  sourcePath?: string;
   valueText: string;
   valueNumeric?: number;
 }
@@ -185,6 +198,70 @@ const numberField = (record: DataRecord, aliases: string[]): number | undefined 
   const value = scalar(record, aliases);
   return asNumber(value);
 };
+function displayValue(value: unknown, depth = 0): string | undefined {
+  if (depth > 8 || value === null || value === undefined) return undefined;
+  if (typeof value === "string") return clean(value) || undefined;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    const values = value.map(item => displayValue(item, depth + 1)).filter((item): item is string => Boolean(item));
+    return values.length ? values.join(", ") : undefined;
+  }
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const preferred = scalar(record, ["name", "fullName", "teamName", "shortName", "title", "text", "description", "bio", "value", "url"]);
+  if (preferred !== undefined && preferred !== value) {
+    const rendered = displayValue(preferred, depth + 1);
+    if (rendered) return rendered;
+  }
+  const values = Object.values(record).map(item => displayValue(item, depth + 1)).filter((item): item is string => Boolean(item));
+  return values.length ? values.join(", ") : undefined;
+}
+const STATISTIC_KEYS = new Set([
+  "matches","match","mat","innings","inning","inns","notouts","notout","runs","balls","balls","fours","sixes",
+  "average","avg","strikerate","sr","wickets","wkts","economy","econ","maidens","overs","catches","stumpings",
+  "runouts","fifties","hundreds","ducks","bestbowling","bestinnings","bestmatch","dotballs","conceded","boundaries",
+  "strikeRate","noBalls","wides"
+].map(keyOf));
+function collectStructuredPlayerStatistics(root: unknown): NormalizedPlayerStatistic[] {
+  const output: NormalizedPlayerStatistic[] = [];
+  const seen = new Set<object>();
+  const visit = (value: unknown, path: string, section: string | undefined, depth: number): void => {
+    if (depth > 24 || !value || typeof value !== "object" || seen.has(value as object)) return;
+    seen.add(value as object);
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => visit(child, path + "[" + index + "]", section, depth + 1));
+      return;
+    }
+    const record = value as DataRecord;
+    const declaredSection = displayValue(scalar(record, ["format", "formatName", "matchType", "category", "title"]));
+    const currentSection = declaredSection || section;
+    const metrics = Object.entries(record).filter(([key, item]) =>
+      STATISTIC_KEYS.has(keyOf(key)) && (typeof item === "string" || typeof item === "number") && displayValue(item) !== undefined
+    );
+    if (metrics.length >= 2) {
+      const tableIndex = 1000 + Number.parseInt(stableHash(path || JSON.stringify(record)), 36) % 1_000_000;
+      const rowLabel = currentSection || displayValue(scalar(record, ["name", "label"])) || undefined;
+      for (const [key, item] of metrics) {
+        const valueText = displayValue(item) ?? "";
+        const numeric = asNumber(item);
+        output.push({
+          tableIndex, rowIndex: 0,
+          ...(currentSection ? { section: currentSection } : {}),
+          ...(rowLabel ? { rowLabel } : {}),
+          metricLabel: key, metricKey: keyOf(key), sourcePath: path ? path + "." + key : key,
+          valueText, ...(numeric !== undefined ? { valueNumeric: numeric } : {})
+        });
+      }
+    }
+    for (const [key, child] of Object.entries(record)) {
+      const nextSection = /^(test|odi|t20|t20i|first.?class|list.?a|ipl|hundred|the.?hundred|t10|womens?|women|mens?|men)$/i.test(key)
+        ? key : currentSection;
+      visit(child, path ? path + "." + key : key, nextSection, depth + 1);
+    }
+  };
+  visit(root, "rsc", undefined, 0);
+  return output;
+}
 const stableHash = (value: string): string => {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index++) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
@@ -501,32 +578,50 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
 }
 
 function flattenProfileAttributes(value: unknown, path: string, section: string | undefined, attributes: NormalizedPlayerAttribute[], depth = 0): void {
-  if (depth > 12 || value === null || value === undefined) return;
+  if (depth > 16 || value === null || value === undefined) return;
+  const sourceLabel = path.split(".").at(-1)?.replace(/\[\d+\]$/, "") ?? path;
+  const add = (attributeValue: NormalizedPlayerAttribute["value"], valueType: NormalizedPlayerAttribute["valueType"]) => {
+    if (!path) return;
+    attributes.push({ fieldPath: path, sourceLabel, ...(section ? { section } : {}), value: attributeValue, valueType });
+  };
   const record = asRecord(value);
   if (record) {
+    // Store the complete nested value as JSON as well as its searchable leaves.
+    add(record, "json");
     for (const [key, child] of Object.entries(record)) {
       const nextPath = path ? path + "." + key : key;
-      const nextSection = /bio|about|career|personal|summary|profile/i.test(key) ? key : section;
+      const nextSection = /bio|about|career|personal|summary|profile|batting|bowling/i.test(key) ? key : section;
       flattenProfileAttributes(child, nextPath, nextSection, attributes, depth + 1);
     }
     return;
   }
   if (Array.isArray(value)) {
+    add(value, "json");
     value.forEach((child, index) => flattenProfileAttributes(child, path + "[" + index + "]", section, attributes, depth + 1));
     return;
   }
   if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return;
-  const stringValue = String(value).trim();
+  const stringValue = typeof value === "string" ? clean(value) : String(value);
   if (!stringValue) return;
-  let valueType: NormalizedPlayerAttribute["valueType"] = typeof value === "boolean" ? "boolean" : typeof value === "number" ? "numeric" : "text";
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) valueType = "date";
-  attributes.push({
-    fieldPath: path,
-    sourceLabel: path.split(".").at(-1) ?? path,
-    ...(section ? { section } : {}),
-    value,
-    valueType
-  });
+  let normalizedValue: string | number | boolean = value;
+  let valueType: NormalizedPlayerAttribute["valueType"] =
+    typeof value === "boolean" ? "boolean" : typeof value === "number" ? "numeric" : "text";
+  if (typeof value === "string") {
+    if (/^(true|false)$/i.test(stringValue)) {
+      normalizedValue = /^true$/i.test(stringValue);
+      valueType = "boolean";
+    } else if (/\d{4}-\d{2}-\d{2}/.test(stringValue)) {
+      normalizedValue = stringValue.match(/\d{4}-\d{2}-\d{2}/)![0];
+      valueType = "date";
+    } else if (/(?:date|dob|birth|born|debut)/i.test(sourceLabel)) {
+      const parsedDate = parseBirthDate(stringValue);
+      if (parsedDate) { normalizedValue = parsedDate; valueType = "date"; }
+    } else if (/^-?\d[\d,]*(?:\.\d+)?$/.test(stringValue)) {
+      const numeric = Number(stringValue.replace(/,/g, ""));
+      if (Number.isFinite(numeric)) { normalizedValue = numeric; valueType = "numeric"; }
+    }
+  }
+  add(normalizedValue, valueType);
 }
 
 function profileValue(source: DataRecord[], aliases: string[]): string | undefined {
@@ -534,10 +629,10 @@ function profileValue(source: DataRecord[], aliases: string[]): string | undefin
   for (const record of source) {
     const sourceLabel = asString(scalar(record, ["label", "fieldLabel", "displayLabel"]));
     if (sourceLabel && wanted.has(keyOf(sourceLabel))) {
-      const labelled = asString(scalar(record, ["value", "text", "displayValue"]));
+      const labelled = displayValue(scalar(record, ["value", "text", "displayValue"]));
       if (labelled) return labelled;
     }
-    const value = stringField(record, aliases);
+    const value = displayValue(scalar(record, aliases));
     if (value) return value;
   }
   return undefined;
@@ -576,14 +671,26 @@ export function normalizeCricbuzzPlayerProfile(
     const node = $(element);
     addLabel(clean(node.attr("data-label") ?? ""), clean(node.text()), node.attr("data-section"));
   });
+  const structuredRoots: unknown[] = [];
+  if (serverComponents !== undefined) structuredRoots.push(serverComponents);
+  $("script[type='application/ld+json']").each((_i, element) => {
+    const content = $(element).contents().text();
+    if (!content) return;
+    try { structuredRoots.push(JSON.parse(content)); } catch { /* source evidence is retained even when JSON-LD is malformed */ }
+  });
   const rscRoots: unknown[] = [];
-  walkRecords(serverComponents, record => {
+  walkRecords(structuredRoots, record => {
     for (const [key, value] of Object.entries(record)) {
       if (/^(playerData|playerInfo|playerProfile|profileData|bioData)$/i.test(key)) rscRoots.push(value);
     }
+    const type = asString(scalar(record, ["@type", "type"])) ?? "";
+    if (/person|athlete|cricketer|sports?person/i.test(type)) rscRoots.push(record);
   });
   const rscRecords: DataRecord[] = [];
-  for (const root of rscRoots) walkRecords(root, record => rscRecords.push(record));
+  const seenRsc = new Set<object>();
+  for (const root of rscRoots) walkRecords(root, record => {
+    if (!seenRsc.has(record)) { seenRsc.add(record); rscRecords.push(record); }
+  });
   const allRecords = [...rscRecords, ...labels];
   const values = (aliases: string[]) => profileValue(allRecords, aliases);
   const sections = $("h1,h2,h3,h4").toArray().map(heading => {
@@ -592,12 +699,12 @@ export function normalizeCricbuzzPlayerProfile(
   }).filter(section => section.heading && section.text);
   const biography = sections.filter(section => /bio|about|career|summary|early life|profile/i.test(section.heading))
     .map(section => section.text).join("\n\n") ||
-    values(["biography", "bio", "description", "playerDescription", "summary"]);
+    values(["biography", "bio", "description", "playerDescription", "summary", "about", "profileDescription"]);
   const image = $("meta[property='og:image']").attr("content") ||
     $("img[alt]").filter((_i, element) => /player|profile/i.test($(element).attr("alt") ?? "")).first().attr("src") ||
     $("img[alt]").first().attr("src") ||
     values(["image", "profileImage", "profileImageUrl", "faceImage"]);
-  const teamValue = values(["teams", "team", "currentTeams", "domesticTeams"]);
+  const teamValue = values(["teams", "team", "currentTeams", "domesticTeams", "teamNames"]);
   const teams = teamValue ? teamValue.split(/[,;|]/).map(clean).filter(Boolean) : [];
   const attributes: NormalizedPlayerAttribute[] = [];
   for (const record of allRecords) {
@@ -628,11 +735,11 @@ export function normalizeCricbuzzPlayerProfile(
   }
   // Include every scalar React payload field under its original source key as well as HTML labels.
   for (const attribute of attributes) {
-    if (attribute.sourceLabel && (typeof attribute.value === "string" || typeof attribute.value === "number" || typeof attribute.value === "boolean")) {
-      allFields[attribute.sourceLabel] ??= String(attribute.value);
-    }
+    const serialized = typeof attribute.value === "object" ? JSON.stringify(attribute.value) : String(attribute.value);
+    if (attribute.fieldPath) allFields[attribute.fieldPath] ??= serialized;
+    if (attribute.sourceLabel) allFields[attribute.sourceLabel] ??= serialized;
   }
-  const uniqueAttributes = [...new Map(attributes.map(attribute => [attribute.fieldPath + ":" + String(attribute.value), attribute])).values()];
+  const uniqueAttributes = [...new Map(attributes.map(attribute => [attribute.fieldPath + ":" + JSON.stringify(attribute.value), attribute])).values()];
   const statistics: NormalizedPlayerStatistic[] = [];
   $("table").each((tableIndex, table) => {
     const rows = $(table).find("tr").toArray().map(row => $(row).find("th,td").toArray().map(cell => clean($(cell).text())));
@@ -653,9 +760,13 @@ export function normalizeCricbuzzPlayerProfile(
       });
     });
   });
+  const structuredStatistics = collectStructuredPlayerStatistics(structuredRoots);
+  const uniqueStatistics = [...new Map([...statistics, ...structuredStatistics].map(item =>
+    [item.sourcePath ? item.sourcePath + ":" + item.metricKey : item.tableIndex + ":" + item.rowIndex + ":" + item.metricKey, item]
+  )).values()];
   const birthPlace = values(["birthPlace", "birthplace", "placeOfBirth", "bornIn", "birthLocation"]);
   const height = values(["height", "heightCm"]);
-  const heightNumber = height ? Number(height.match(/\d+(?:\.\d+)?/)?.[0]) : undefined;
+  const heightNumber = parseHeightCm(height);
   return {
     schemaVersion: 1,
     fullName: values(["fullName", "name", "playerName"]) || clean($("h1").first().text()) || undefined,
@@ -672,8 +783,21 @@ export function normalizeCricbuzzPlayerProfile(
     teams,
     allFields,
     attributes: uniqueAttributes,
-    statistics
+    statistics: uniqueStatistics
   };
+}
+
+function parseHeightCm(value?: string): number | undefined {
+  if (!value) return undefined;
+  const normalized = value.toLowerCase().replace(/,/g, ".").trim();
+  const centimetres = normalized.match(/(\d+(?:\.\d+)?)\s*(?:cm|centimet(?:er|re)s?)/i);
+  if (centimetres) return Number(centimetres[1]);
+  const metres = normalized.match(/(\d+(?:\.\d+)?)\s*(?:m|met(?:er|re)s?)(?:\s|$)/i);
+  if (metres && Number(metres[1]) < 3) return Number(metres[1]) * 100;
+  const feet = normalized.match(/(\d+)\s*(?:ft|feet|foot|')\s*(?:(\d+(?:\.\d+)?)\s*(?:in|inches|")?)?/i);
+  if (feet) return Number(feet[1]) * 30.48 + Number(feet[2] ?? 0) * 2.54;
+  const plain = asNumber(normalized);
+  return plain !== undefined && plain >= 50 && plain <= 300 ? plain : undefined;
 }
 
 function collectStructuredRecords(root: unknown, predicate: (record: DataRecord) => boolean): DataRecord[] {
