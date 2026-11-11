@@ -286,9 +286,10 @@ export class DurableCrawlService {
 
     let added = 0;
     if (urls.length) {
+      const pageKinds = urls.map(pageKind);
       const inserted = await this.pool.query(
-        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'live-index' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-        [run.id, urls, identityKeys, "discovered"]
+        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, item.page_kind, 'live-index' FROM unnest($2::text[], $3::text[], $4::text[]) AS item(canonical_url, identity_key, page_kind) ON CONFLICT DO NOTHING",
+        [run.id, urls, identityKeys, pageKinds]
       );
       added = inserted.rowCount ?? 0;
     }
