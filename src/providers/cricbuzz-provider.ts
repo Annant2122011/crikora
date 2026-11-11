@@ -744,6 +744,9 @@ export class CricbuzzProvider implements CricketProvider {
     if (!this.cricinfoFallback || entity.entityType !== "player") return;
     const profile = entity.payload.profile as NormalizedPlayerProfile | undefined;
     if (!profile || isUsablePlayerImage(profile.profileImageUrl)) return;
+    // Never persist a known site-wide placeholder even when ESPNcricinfo
+    // cannot identify an unambiguous player record.
+    profile.profileImageUrl = undefined;
 
     const labelledValue = (pattern: RegExp): string | undefined =>
       Object.entries(profile.allFields ?? {}).find(([label]) => pattern.test(label.trim()))?.[1];
