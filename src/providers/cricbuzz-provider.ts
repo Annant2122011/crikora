@@ -46,6 +46,7 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
 // cursor works across Vercel cold starts without depending on process memory.
 const SECTION_INDEXES = [
   "/cricket-schedule/upcoming-series/all",
+  "/cricket-schedule/upcoming-series/international",
   "/cricket-schedule/series/all",
   "/cricket-news",
   "/cricket-news/latest-news"
