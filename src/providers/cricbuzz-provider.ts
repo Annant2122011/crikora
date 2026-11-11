@@ -414,7 +414,19 @@ export class CricbuzzProvider implements CricketProvider {
     const articleUrls = new Set<string>();
     for (const path of sitemapPaths) {
       const sitemapUrl = new URL(path, ORIGIN);
-      const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+      let xml: string;
+      try {
+        xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+      } catch (error) {
+        const status = error && typeof error === "object" && "sourceStatus" in error
+          ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+          : undefined;
+        // An archive/editorial sitemap can legitimately be absent on a source
+        // deployment. Continue with remaining feeds only for a permanent 404/410.
+        // Denials and throttles remain terminal so the collector respects them.
+        if (status === 404 || status === 410) continue;
+        throw error;
+      }
       for (const value of parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls) {
         try {
           if (isNewsArticlePath(new URL(value).pathname)) articleUrls.add(value);
