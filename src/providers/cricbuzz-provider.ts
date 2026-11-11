@@ -60,7 +60,7 @@ export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) return false;
-    const path = url.pathname.replace(/\\/+$/, "") || "/";
+    const path = url.pathname.replace(/\/+$/, "") || "/";
     if (INDEXES.some(index => index.path === path) || SECTION_INDEXES.includes(path)) return true;
     const rule = PATH_RULES.find(item => item.pattern.test(path));
     if (!rule) return false;
@@ -71,17 +71,17 @@ export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
 }
 
 function isNewsArticlePath(path: string): boolean {
-  return /^\\/cricket-news\\/\\d+\\//i.test(path);
+  return /^\/cricket-news\/\d+\//i.test(path);
 }
 
 function playerProfilePath(path: string): { id: string; isStats: boolean } | undefined {
-  const match = path.match(/^\\/profiles\\/(\\d+)\\/[^/]+(.*)$/i);
+  const match = path.match(/^\/profiles\/(\d+)\/[^/]+(.*)$/i);
   if (!match) return undefined;
   return { id: match[1]!, isStats: Boolean(match[2]) };
 }
 
 function hasMatchPageIdentity(path: string): boolean {
-  return /^\\/(?:live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary)\\/\\d+\\//i.test(path);
+  return /^\/(?:live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary)\/\d+\//i.test(path);
 }
 
 function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boolean {
