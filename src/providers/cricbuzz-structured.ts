@@ -53,6 +53,9 @@ export interface NormalizedFallOfWicket {
   score?: number;
   batterName?: string;
   playerSourceId?: string;
+  dismissalType?: string;
+  fielder?: string;
+  fielderSourceId?: string;
   over?: string;
   description: string;
 }
@@ -105,7 +108,12 @@ export interface NormalizedCommentary {
   ballNumber?: number;
   eventType?: string;
   batter?: string;
+  batterSourceId?: string;
+  nonStriker?: string;
+  nonStrikerSourceId?: string;
   bowler?: string;
+  bowlerSourceId?: string;
+  sourceTimestamp?: string;
   description?: string;
   commentary: string;
   rawData: Record<string, unknown>;
@@ -942,7 +950,7 @@ function normalizeStructuredDelivery(record: DataRecord, matchId: string): Norma
     (over !== undefined && Boolean(batter && bowler));
   if (!hasDeliveryIdentity || inningsNumber <= 0) return undefined;
   const signature = [matchId, inningsNumber, over ?? "", ball ?? "", batter ?? "", bowler ?? "", commentary ?? "", JSON.stringify(record)].join("|");
-  const batterSourceId = structuredPlayerId(record, ["batterId", "batId", "batsmanId", "strikerId", "playerId"]) ??
+  const batterSourceId = structuredPlayerId(record, ["batterId", "batId", "batsmanId", "strikerId"]) ??
     nestedPlayerId(record, ["batsmanStriker"], ["batId", "batsmanId", "playerId", "id"]);
   const nonStrikerSourceId = structuredPlayerId(record, ["nonStrikerId", "nonStrikerPlayerId"]) ??
     nestedPlayerId(record, ["batsmanNonStriker", "nonStrikerDetails"], ["batId", "batsmanId", "playerId", "id"]);
@@ -1006,8 +1014,17 @@ function normalizeCommentary(record: DataRecord, matchId: string): NormalizedCom
   const eventType = stringField(record, ["eventType", "event", "type", "kind"]);
   const batter = stringField(record, ["batter", "batsman", "striker"]) ??
     nestedString(record, ["batsmanStriker"], ["batName", "batsmanName", "playerName", "name"]);
+  const nonStriker = stringField(record, ["nonStriker", "nonStrikerName", "batsmanNonStriker"]) ??
+    nestedString(record, ["batsmanNonStriker", "nonStrikerDetails"], ["batName", "batsmanName", "playerName", "name"]);
   const bowler = stringField(record, ["bowler", "bowlerName"]) ??
     nestedString(record, ["bowlerStriker"], ["bowlName", "bowlerName", "playerName", "name"]);
+  const batterSourceId = structuredPlayerId(record, ["batterId", "batId", "batsmanId", "strikerId"]) ??
+    nestedPlayerId(record, ["batsmanStriker"], ["batId", "batsmanId", "playerId", "id"]);
+  const nonStrikerSourceId = structuredPlayerId(record, ["nonStrikerId", "nonStrikerPlayerId"]) ??
+    nestedPlayerId(record, ["batsmanNonStriker", "nonStrikerDetails"], ["batId", "batsmanId", "playerId", "id"]);
+  const bowlerSourceId = structuredPlayerId(record, ["bowlerId", "bowlId", "bowlerPlayerId"]) ??
+    nestedPlayerId(record, ["bowlerStriker"], ["bowlId", "bowlerId", "playerId", "id"]);
+  const timestamp = scalar(record, ["timestamp", "timeStamp", "commentaryTimestamp", "sourceTimestamp"]);
   return {
     sourceEventId: id || matchId + ":commentary:" + stableHash(signature),
     inningsNumber,
@@ -1015,7 +1032,12 @@ function normalizeCommentary(record: DataRecord, matchId: string): NormalizedCom
     ...(ball !== undefined ? { ballNumber: ball } : {}),
     ...(eventType ? { eventType } : {}),
     ...(batter ? { batter } : {}),
+    ...(batterSourceId ? { batterSourceId } : {}),
+    ...(nonStriker ? { nonStriker } : {}),
+    ...(nonStrikerSourceId ? { nonStrikerSourceId } : {}),
     ...(bowler ? { bowler } : {}),
+    ...(bowlerSourceId ? { bowlerSourceId } : {}),
+    ...(timestamp !== undefined ? { sourceTimestamp: asString(timestamp) } : {}),
     ...(descriptionText(record) ? { description: descriptionText(record) } : {}),
     commentary,
     rawData: record
@@ -1098,7 +1120,8 @@ function parseHtmlCommentary($: CheerioAPI, matchId: string): { deliveries: Norm
       fielderId: node.attr("data-fielder-id"),
       dismissalType: node.attr("data-dismissal-type") ?? node.attr("data-wicket-type"),
       description: node.attr("data-description"),
-      commentary: text
+      commentary: text,
+      timestamp: node.attr("data-timestamp") ?? node.attr("data-time")
     };
     const item = normalizeCommentary(record, matchId);
     if (item) commentary.push(item);
@@ -1253,12 +1276,21 @@ function parseStructuredInnings(root: unknown, inningsMap: Map<number, Normalize
       const over = stringField(wicket, ["wktOver", "over", "overNumber"]);
       const description = stringField(wicket, ["description", "outDesc", "text"]) ??
         [batterName, scoreValue !== undefined ? "at " + scoreValue : "", over ? "over " + over : ""].filter(Boolean).join(" ");
+      const fielder = stringField(wicket, ["fielder", "fielderName", "catcher"]) ??
+        nestedString(wicket, ["fielderDetails", "fieldersInvolved"], ["name", "playerName", "fieldingName"]);
       const row: NormalizedFallOfWicket = {
         wicketNumber,
         ...(scoreValue !== undefined ? { score: scoreValue } : {}),
         ...(batterName ? { batterName } : {}),
-        ...(structuredPlayerId(wicket, ["batId", "batterId", "playerId", "id"]) ? {
-          playerSourceId: structuredPlayerId(wicket, ["batId", "batterId", "playerId", "id"])
+        ...(structuredPlayerId(wicket, ["batId", "batterId", "playerOutId"]) ? {
+          playerSourceId: structuredPlayerId(wicket, ["batId", "batterId", "playerOutId"])
+        } : {}),
+        ...(stringField(wicket, ["wicketType", "dismissalType", "howOut"]) ? {
+          dismissalType: stringField(wicket, ["wicketType", "dismissalType", "howOut"])
+        } : {}),
+        ...(fielder ? { fielder } : {}),
+        ...(nestedPlayerId(wicket, ["fielderDetails", "fieldersInvolved"], ["id", "playerId", "fielderId"]) ? {
+          fielderSourceId: nestedPlayerId(wicket, ["fielderDetails", "fieldersInvolved"], ["id", "playerId", "fielderId"])
         } : {}),
         ...(over ? { over } : {}),
         description
@@ -1300,14 +1332,14 @@ export function parseCricbuzzMatchData(
     inning.batters = [...new Map(inning.batters.map(row => [
       row.playerSourceId ? "id:" + row.playerSourceId : "name:" + row.playerName.toLowerCase(),
       row
-    ])).values()];
+    ] as const)).values()];
     inning.bowlers = [...new Map(inning.bowlers.map(row => [
       row.playerSourceId ? "id:" + row.playerSourceId : "name:" + row.playerName.toLowerCase(),
       row
-    ])).values()];
-    inning.partnerships = [...new Map(inning.partnerships.map(row => [row.partnershipNumber, row])).values()]
+    ] as const)).values()];
+    inning.partnerships = [...new Map(inning.partnerships.map(row => [row.partnershipNumber, row] as const)).values()]
       .sort((a, b) => a.partnershipNumber - b.partnershipNumber);
-    inning.fallOfWickets = [...new Map(inning.fallOfWickets.map(row => [row.wicketNumber, row])).values()]
+    inning.fallOfWickets = [...new Map(inning.fallOfWickets.map(row => [row.wicketNumber, row] as const)).values()]
       .sort((a, b) => a.wicketNumber - b.wicketNumber);
   }
   const deliveryRows = [...deliveries.values()].sort((a, b) =>
