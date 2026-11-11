@@ -120,13 +120,12 @@ function authMatches(authorization: string | undefined, expected: string | undef
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function savedProfileAndNewsInventory(): string[] {
+function savedTargetedCricketInventory(): string[] {
   const inventoryPath = join(process.cwd(), "docs", "cricbuzz-sitemap-inventory.json");
   const parsed = JSON.parse(readFileSync(inventoryPath, "utf8")) as { urls?: Array<string | { url?: string }> };
   if (!Array.isArray(parsed.urls)) throw new Error("The saved Cricbuzz inventory has no URL list.");
   return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
-    .filter(value => /^https:\/\/www\.cricbuzz\.com\/(?:profiles\/\d+\/|cricket-news\/\d+\/)/i.test(value))
     .filter(value => provider.isAllowedCrawlUrl(value)))];
 }
 
@@ -389,11 +388,13 @@ app.post("/v1/crawl/start", async (request, reply) => {
   if (env.CRIKORA_COLLECTION_ENABLED !== "true") {
     return reply.code(403).send({ error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
   }
-  const savedUrls = savedProfileAndNewsInventory();
-  const savedNewsUrls = savedUrls.filter(value => value.includes("/cricket-news/"));
-  const savedPlayerUrls = savedUrls.filter(value => value.includes("/profiles/"));
+  const savedTargetedUrls = savedTargetedCricketInventory();
+  const savedNewsUrls = savedTargetedUrls.filter(value => value.includes("/cricket-news/"));
+  const savedPlayerUrls = savedTargetedUrls.filter(value => value.includes("/profiles/"));
   let newsUrls: string[] = [];
   let playerUrls: string[] = [];
+  let sitemapPageUrls: string[] = [];
+  let sitemapDocumentCount = 0;
   const discoveryErrors: string[] = [];
   for (const [label, discover] of [
     ["news", () => provider.discoverNewsSitemapUrls(AbortSignal.timeout(25_000))],
@@ -411,10 +412,23 @@ app.post("/v1/crawl/start", async (request, reply) => {
       discoveryErrors.push(label + " sitemap unavailable (HTTP " + status + "); using saved targeted inventory.");
     }
   }
+  try {
+    const discovery = await provider.discoverSitemapUrls(AbortSignal.timeout(25_000));
+    sitemapPageUrls = discovery.pageUrls.filter(value => provider.isAllowedCrawlUrl(value));
+    sitemapDocumentCount = discovery.sitemapUrls.length;
+  } catch (error) {
+    const status = error && typeof error === "object" && "sourceStatus" in error
+      ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+      : undefined;
+    if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
+    discoveryErrors.push("Cricbuzz sitemap index unavailable (HTTP " + status + "); using saved inventory and focused sitemaps.");
+  }
   const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
   const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
   const crawlUrls = dedupeCricbuzzPageUrls([
     ...provider.getTargetedCollectionSeedUrls(),
+    ...sitemapPageUrls,
+    ...savedTargetedUrls,
     ...selectedNewsUrls,
     ...selectedPlayerUrls
   ]);
@@ -430,7 +444,9 @@ app.post("/v1/crawl/start", async (request, reply) => {
       scheduleIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-schedule/.test(value)).length,
       newsArticleSeedCount: selectedNewsUrls.length,
       playerProfileSeedCount: selectedPlayerUrls.length,
-      savedProfileAndNewsUrlCount: savedUrls.length,
+      savedTargetedUrlCount: savedTargetedUrls.length,
+      sitemapDocumentCount,
+      sitemapPageUrlCount: sitemapPageUrls.length,
       discoveryErrors,
       crawlUrlCount: crawlUrls.length
     }
