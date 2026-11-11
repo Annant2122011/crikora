@@ -465,14 +465,16 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     return result.rows[0] ? hydrate(result.rows[0]) : undefined;
   }
 
-  async list(entityType: EntityType, limit = 100): Promise<StoredEntity[]> {
+  async list(entityType: EntityType, limit = 100, offset = 0): Promise<StoredEntity[]> {
     const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
+    const safeOffset = Math.max(0, Math.min(1_000_000, Math.trunc(offset)));
     const result = await this.pool.query<CacheRow>(
       `SELECT entity_type, source_id, source_url, payload, fetched_at, expires_at, retention_class
        FROM public.crikora_cache
        WHERE entity_type = $1 AND (expires_at IS NULL OR expires_at > now())
-       ORDER BY fetched_at DESC LIMIT $2`,
-      [entityType, safeLimit]
+       ORDER BY fetched_at DESC, source_id ASC
+       LIMIT $2 OFFSET $3`,
+      [entityType, safeLimit, safeOffset]
     );
     return result.rows.map(hydrate);
   }
