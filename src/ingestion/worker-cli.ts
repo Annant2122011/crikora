@@ -65,7 +65,7 @@ function requiredEnv(name: string): string {
 }
 
 function readConfig(): Config {
-  const leaseSeconds = Number(process.env.CRIKORA_WORKER_LEASE_SECONDS ?? 180);
+  const leaseSeconds = Number(process.env.CRIKORA_WORKER_LEASE_SECONDS ?? 300);
   const idlePollSeconds = Number(process.env.CRIKORA_WORKER_IDLE_POLL_SECONDS ?? 10);
   const stepTimeoutMs = Number(process.env.CRIKORA_WORKER_STEP_TIMEOUT_MS ?? 180_000);
   if (!Number.isInteger(stepTimeoutMs) || stepTimeoutMs < 60_000 || stepTimeoutMs > 300_000) {
@@ -73,6 +73,9 @@ function readConfig(): Config {
   }
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 60 || leaseSeconds > 7_200) {
     throw new RangeError("CRIKORA_WORKER_LEASE_SECONDS must be between 60 and 7200.");
+  }
+  if (leaseSeconds * 1000 < stepTimeoutMs + 30_000) {
+    throw new RangeError("CRIKORA_WORKER_LEASE_SECONDS must exceed the worker step timeout by at least 30 seconds.");
   }
   if (!Number.isInteger(idlePollSeconds) || idlePollSeconds < 5 || idlePollSeconds > 60) {
     throw new RangeError("CRIKORA_WORKER_IDLE_POLL_SECONDS must be between 5 and 60.");
