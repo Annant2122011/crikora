@@ -70,7 +70,9 @@ describe("durable match extraction", () => {
       sourcePages: [baseUrl, ...companionUrls]
     });
     expect(requested).toEqual([baseUrl, ...companionUrls]);
-    expect(result.discoveredUrls).toEqual(expect.arrayContaining(companionUrls));
+    // Companion pages are already fetched, parsed and archived above. Do not
+    // queue them again as separate follow-ups for the same match.
+    expect(result.discoveredUrls).not.toEqual(expect.arrayContaining(companionUrls));
   });
 
   it("uses same-ID companion routes when the overview omits tab links", async () => {
