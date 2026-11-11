@@ -96,17 +96,17 @@ function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boo
     const targetMatch = hasMatchPageIdentity(targetPath);
     const sourcePlayer = playerProfilePath(sourcePath);
     const targetPlayer = playerProfilePath(targetPath);
-    const sourceSchedule = /^\\/(?:cricket-schedule|cricket-series)(?:\\/|$)/i.test(sourcePath);
-    const sourceNewsIndex = /^\\/cricket-news(?:\\/|$)/i.test(sourcePath) && !sourceNewsArticle;
+    const sourceSchedule = /^\/(?:cricket-schedule|cricket-series)(?:\/|$)/i.test(sourcePath);
+    const sourceNewsIndex = /^\/cricket-news(?:\/|$)/i.test(sourcePath) && !sourceNewsArticle;
 
     // News indexes discover articles. Articles never recurse into more articles.
-    if (sourceNewsIndex) return targetNewsArticle || /^\\/cricket-news\\/(?:editorial|latest-news)(?:\\/|$)/i.test(targetPath);
+    if (sourceNewsIndex) return targetNewsArticle || /^\/cricket-news\/(?:editorial|latest-news)(?:\/|$)/i.test(targetPath);
     if (sourceNewsArticle) return Boolean(targetPlayer && !targetPlayer.isStats);
 
     // A schedule or series index may discover match fixtures and series detail.
     if (sourceSchedule) return targetMatch || Boolean(targetPlayer) ||
-      /^\\/cricket-series\\/\\d+\\/[^/]+\\/?$/i.test(targetPath) ||
-      /^\\/cricket-schedule\\//i.test(targetPath);
+      /^\/cricket-series\/\d+\/[^/]+\/?$/i.test(targetPath) ||
+      /^\/cricket-schedule\//i.test(targetPath);
 
     // Match pages can discover the participants' profiles, not every related
     // match carousel or unrelated directory route.
@@ -974,8 +974,8 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     try { return new URL(href, page.url).pathname === link.path; } catch { return false; }
   }).first();
   const context = clean(anchor.parent().parent().parent().text() || anchor.parent().parent().text() || link.text);
-  const cardDate = context.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\\s*\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]{3,9}\\s+\\d{4}(?:[,\\s]+\\d{1,2}:\\d{2}\\s*(?:AM|PM))?/i)?.[0] ??
-    context.match(/[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{4}(?:[,\\s]+\\d{1,2}:\\d{2}\\s*(?:AM|PM))?/i)?.[0];
+  const cardDate = context.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\s*\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0] ??
+    context.match(/[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0];
   const titleCandidate = context.match(/([^|]{2,100}?\s+vs\s+[^|]{2,100}?)(?:\s{2,}|$)/i)?.[1];
   const title = clean(titleCandidate || link.text || context.slice(0, 180));
   const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
@@ -1456,15 +1456,15 @@ export function labeledValue(text: string, label: string): string {
 function parseDateTime(value: string): string | null {
   if (!value.trim()) return null;
   const normalized = value
-    .replace(/\\b(\\d{1,2})(st|nd|rd|th)\\b/gi, "$1")
-    .replace(/\\bIST\\b/gi, "+05:30")
-    .replace(/\\bUTC\\b/gi, "+00:00")
-    .replace(/\\s+/g, " ")
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+    .replace(/\bIST\b/gi, "+05:30")
+    .replace(/\bUTC\b/gi, "+00:00")
+    .replace(/\s+/g, " ")
     .trim();
   const parsed = new Date(normalized);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
 
-  const withoutWeekday = normalized.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\\s+/i, "");
+  const withoutWeekday = normalized.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+/i, "");
   const fallback = new Date(withoutWeekday);
   return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
 }
