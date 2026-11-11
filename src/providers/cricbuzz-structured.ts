@@ -519,8 +519,50 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
     if (!headers.length) return;
     const normalizedHeaders = headers.map(keyOf);
     const tableText = clean(tableNode.text());
-    const inningsNumber = parseInningsNumber({ innings: tableNode.prevAll("h1,h2,h3,h4").first().text() });
+    const declaredInnings = tableNode.closest("[data-innings]").attr("data-innings");
+    const inningsHeading = tableNode.prevAll("h1,h2,h3,h4").first().text();
+    const inningsNumber = parseInningsNumber({ innings: declaredInnings ?? inningsHeading });
     const innings = addInnings(inningsMap, inningsNumber);
+    const getCell = (cells: string[], aliases: string[]): string => {
+      const index = normalizedHeaders.findIndex(header => aliases.includes(header));
+      return index >= 0 ? cells[index] ?? "" : "";
+    };
+    const isExtrasTable = normalizedHeaders.some(header => ["extras","byes","legbyes","wides","noballs","penalty"].includes(header));
+    const isWicketTable = normalizedHeaders.some(header => ["wicket","wicketnumber","wkt","scoreatwicket"].includes(header)) &&
+      normalizedHeaders.some(header => ["batter","batsman","player","dismissedplayer"].includes(header));
+    if (isExtrasTable) {
+      const row = tableNode.find("tr").toArray().map(element => $(element).find("th,td").toArray().map(cell => clean($(cell).text())))
+        .find(cells => cells.length === headers.length && cells.some((cell, index) => index > 0 && /^\d+$/.test(cell)));
+      if (row) {
+        const total = Number(getCell(row, ["extras","totalextras","total"]) || 0);
+        innings.extras = {
+          total,
+          byes: Number(getCell(row, ["byes","b","byeruns"]) || 0),
+          legByes: Number(getCell(row, ["legbyes","lb","legbyeruns"]) || 0),
+          wides: Number(getCell(row, ["wides","wd","wide"]) || 0),
+          noBalls: Number(getCell(row, ["noballs","nb","noball"]) || 0),
+          penalty: Number(getCell(row, ["penalty","penaltyruns","p"]) || 0)
+        };
+        if (!innings.extras.total) {
+          innings.extras.total = innings.extras.byes + innings.extras.legByes + innings.extras.wides + innings.extras.noBalls + innings.extras.penalty;
+        }
+      }
+    }
+    if (isWicketTable) {
+      tableNode.find("tr").each((_i, row) => {
+        const cells = $(row).find("th,td").toArray().map(cell => clean($(cell).text()));
+        if (cells.length !== headers.length || cells.every((cell, index) => cell === headers[index])) return;
+        const wicketNumber = Number(getCell(cells, ["wicket","wicketnumber","wkt","number"]) || innings.fallOfWickets.length + 1);
+        const score = Number(getCell(cells, ["score","scoreatwicket","runs"]) || 0);
+        const batterName = getCell(cells, ["batter","batsman","player","dismissedplayer"]);
+        const over = getCell(cells, ["over","overnumber","overs"]);
+        const description = getCell(cells, ["description","dismissal","howout"]) || cells.join(" | ");
+        innings.fallOfWickets.push({
+          wicketNumber, ...(score > 0 ? { score } : {}),
+          ...(batterName ? { batterName } : {}), ...(over ? { over } : {}), description
+        });
+      });
+    }
     const batterIndex = normalizedHeaders.findIndex(header => /^(batter|batsman|striker)$/.test(header));
     const bowlerIndex = normalizedHeaders.findIndex(header => header === "bowler");
     if (batterIndex >= 0) {
@@ -561,11 +603,17 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
           economy: Number(get(["econ", "economy"]) || 0)
         });
       });
-    } else if (normalizedHeaders.some(header => header.includes("partnership"))) {
+    } else if (normalizedHeaders.some(header => header.includes("partnership")) ||
+      (normalizedHeaders.some(header => ["batter1","batterone","batsman1","player1"].includes(header)) &&
+       normalizedHeaders.some(header => ["batter2","battertwo","batsman2","player2"].includes(header)))) {
       const runsIndex = normalizedHeaders.findIndex(header => /^(?:r|runs|partnership|partnershipruns|totalruns)$/.test(header));
       const ballsIndex = normalizedHeaders.findIndex(header => /^(?:b|balls|totalballs)$/.test(header));
       const batterOneIndex = normalizedHeaders.findIndex(header => /^(?:batter1|batterone|batsman1|player1)$/.test(header));
       const batterTwoIndex = normalizedHeaders.findIndex(header => /^(?:batter2|battertwo|batsman2|player2)$/.test(header));
+      const batterOneRunsIndex = normalizedHeaders.findIndex(header => /^(?:batter1runs|bat1runs|player1runs)$/.test(header));
+      const batterTwoRunsIndex = normalizedHeaders.findIndex(header => /^(?:batter2runs|bat2runs|player2runs)$/.test(header));
+      const batterOneBallsIndex = normalizedHeaders.findIndex(header => /^(?:batter1balls|bat1balls|player1balls)$/.test(header));
+      const batterTwoBallsIndex = normalizedHeaders.findIndex(header => /^(?:batter2balls|bat2balls|player2balls)$/.test(header));
       tableNode.find("tr").each((_i, row) => {
         const cells = $(row).find("th,td").toArray().map(cell => clean($(cell).text()));
         if (cells.length !== headers.length || cells.every((cell, index) => cell === headers[index])) return;
@@ -575,6 +623,10 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
           partnershipNumber: innings.partnerships.length + 1,
           ...(batterOneIndex >= 0 && cells[batterOneIndex] ? { batterOne: cells[batterOneIndex] } : {}),
           ...(batterTwoIndex >= 0 && cells[batterTwoIndex] ? { batterTwo: cells[batterTwoIndex] } : {}),
+          ...(batterOneRunsIndex >= 0 && /^\d+$/.test(cells[batterOneRunsIndex] ?? "") ? { batterOneRuns: Number(cells[batterOneRunsIndex]) } : {}),
+          ...(batterTwoRunsIndex >= 0 && /^\d+$/.test(cells[batterTwoRunsIndex] ?? "") ? { batterTwoRuns: Number(cells[batterTwoRunsIndex]) } : {}),
+          ...(batterOneBallsIndex >= 0 && /^\d+$/.test(cells[batterOneBallsIndex] ?? "") ? { batterOneBalls: Number(cells[batterOneBallsIndex]) } : {}),
+          ...(batterTwoBallsIndex >= 0 && /^\d+$/.test(cells[batterTwoBallsIndex] ?? "") ? { batterTwoBalls: Number(cells[batterTwoBallsIndex]) } : {}),
           runs: Number(runsText),
           ...(ballsIndex >= 0 && /^\d+$/.test(cells[ballsIndex] ?? "") ? { balls: Number(cells[ballsIndex]) } : {}),
           description: cells.join(" | ")
@@ -1215,6 +1267,20 @@ export function parseCricbuzzMatchData(
     for (const item of html.commentary) if (!commentary.has(item.sourceEventId)) commentary.set(item.sourceEventId, item);
   }
   const innings = [...inningsMap.values()].sort((a, b) => a.inningsNumber - b.inningsNumber);
+  for (const inning of innings) {
+    inning.batters = [...new Map(inning.batters.map(row => [
+      row.playerSourceId ? "id:" + row.playerSourceId : "name:" + row.playerName.toLowerCase(),
+      row
+    ])).values()];
+    inning.bowlers = [...new Map(inning.bowlers.map(row => [
+      row.playerSourceId ? "id:" + row.playerSourceId : "name:" + row.playerName.toLowerCase(),
+      row
+    ])).values()];
+    inning.partnerships = [...new Map(inning.partnerships.map(row => [row.partnershipNumber, row])).values()]
+      .sort((a, b) => a.partnershipNumber - b.partnershipNumber);
+    inning.fallOfWickets = [...new Map(inning.fallOfWickets.map(row => [row.wicketNumber, row])).values()]
+      .sort((a, b) => a.wicketNumber - b.wicketNumber);
+  }
   const deliveryRows = [...deliveries.values()].sort((a, b) =>
     a.inningsNumber - b.inningsNumber ||
     (a.overNumber ?? 0) - (b.overNumber ?? 0) ||
