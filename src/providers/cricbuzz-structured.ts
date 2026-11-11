@@ -1025,7 +1025,7 @@ function normalizeStructuredDelivery(record: DataRecord, matchId: string): Norma
 }
 
 function normalizeCommentary(record: DataRecord, matchId: string): NormalizedCommentary | undefined {
-  const commentary = commentaryText(record) ?? descriptionText(record);
+  const commentary = commentaryText(record);
   if (!commentary) return undefined;
   const { over, ball } = parseOverBall(record);
   const inningsNumber = parseInningsNumber(record);
@@ -1080,7 +1080,7 @@ function collectCricbuzzCommentaryRecords(
   const record = root as DataRecord;
   const rawInnings = scalar(record, ["inningsNumber", "inningsNo", "inningNumber", "inningsId", "inningId"]);
   const currentInnings = rawInnings !== undefined ? parseInningsNumber({ inningsId: rawInnings }) : inheritedInnings;
-  if (scalar(record, ["commText", "commentary", "comment", "commentaryText", "text", "description", "eventDescription"]) !== undefined) {
+  if (scalar(record, ["commText", "commentary", "comment", "commentaryText", "text"]) !== undefined) {
     output.push({
       ...record,
       ...(rawInnings === undefined && currentInnings !== undefined ? { inningsId: currentInnings } : {})
