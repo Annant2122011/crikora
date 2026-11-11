@@ -339,11 +339,12 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       for (const wicket of arrayOfRecords(inning.fallOfWickets)) {
         await client.query(
           `INSERT INTO public.crikora_match_fall_of_wickets
-            (match_source_id,innings_number,wicket_number,score,batter_name,player_source_id,over,description,observed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz)`,
+            (match_source_id,innings_number,wicket_number,score,batter_name,player_source_id,dismissal_type,fielder,fielder_source_id,over,description,observed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::timestamptz)`,
           [
             matchId, number, Number(wicket.wicketNumber ?? 1), nullableNumber(wicket.score),
             nullableString(wicket.batterName), nullableString(wicket.playerSourceId),
+            nullableString(wicket.dismissalType), nullableString(wicket.fielder), nullableString(wicket.fielderSourceId),
             nullableString(wicket.over), String(wicket.description ?? ""), observedAt
           ]
         );
@@ -383,12 +384,16 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     for (const item of commentary) {
       await client.query(
         `INSERT INTO public.crikora_match_commentary
-          (match_source_id,source_event_id,innings_number,over_number,ball_number,event_type,batter,bowler,description,commentary,raw_data,observed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::timestamptz)`,
+          (match_source_id,source_event_id,innings_number,over_number,ball_number,event_type,
+           batter,batter_source_id,non_striker,non_striker_source_id,bowler,bowler_source_id,source_timestamp,
+           description,commentary,raw_data,observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17::timestamptz)`,
         [
           matchId, String(item.sourceEventId ?? "comment_" + JSON.stringify(item)),
           Number(item.inningsNumber ?? 1), nullableNumber(item.overNumber), nullableNumber(item.ballNumber),
-          nullableString(item.eventType), nullableString(item.batter), nullableString(item.bowler),
+          nullableString(item.eventType), nullableString(item.batter), nullableString(item.batterSourceId),
+          nullableString(item.nonStriker), nullableString(item.nonStrikerSourceId),
+          nullableString(item.bowler), nullableString(item.bowlerSourceId), nullableString(item.sourceTimestamp),
           nullableString(item.description), String(item.commentary ?? ""),
           jsonValue(item.rawData ?? item), observedAt
         ]
