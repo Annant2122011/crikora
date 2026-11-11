@@ -200,6 +200,8 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     if (entity.entityType === "player") {
       const profile = entity.payload.profile;
       if (!isRecord(profile) || Number(profile.schemaVersion) !== 1) return;
+      const fullName = nullableString(profile.fullName);
+      if (!fullName || /^(?:t20|twenty20|odi|test|first class|list a|format|statistics|stats)$/i.test(fullName.trim())) return;
       const sourceId = entity.sourceId;
       await client.query(
         `INSERT INTO public.crikora_player_profiles
@@ -214,7 +216,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
            biography=EXCLUDED.biography, profile_image_url=EXCLUDED.profile_image_url,
            teams=EXCLUDED.teams, profile_data=EXCLUDED.profile_data, last_observed_at=EXCLUDED.last_observed_at`,
         [
-          sourceId, entity.sourceUrl, nullableString(profile.fullName), nullableString(profile.country),
+          sourceId, entity.sourceUrl, fullName, nullableString(profile.country),
           nullableString(profile.role), nullableString(profile.battingStyle), nullableString(profile.bowlingStyle),
           nullableString(profile.birthDate), nullableString(profile.birthPlace), nullableNumber(profile.heightCm),
           nullableString(profile.biography), nullableString(profile.profileImageUrl),

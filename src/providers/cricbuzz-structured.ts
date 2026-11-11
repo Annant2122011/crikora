@@ -711,6 +711,31 @@ function flattenProfileAttributes(value: unknown, path: string, section: string 
   add(normalizedValue, valueType);
 }
 
+function plausiblePlayerName(value?: string): string | undefined {
+  const candidate = clean(value ?? "").replace(/\s+/g, " ");
+  if (!candidate || candidate.length > 100 || /\d/.test(candidate)) return undefined;
+  const normalized = keyOf(candidate);
+  if (/^(?:t20|twenty20|odi|test|firstclass|lista|format|statistics|stats|playerprofile|cricket|batter|bowler|allrounder|wicketkeeper)$/.test(normalized)) {
+    return undefined;
+  }
+  if (!/[a-z]/i.test(candidate)) return undefined;
+  return candidate;
+}
+
+function playerNameFromProfileUrl(pageUrl: string): string | undefined {
+  try {
+    const segments = new URL(pageUrl).pathname.split("/").filter(Boolean);
+    const playerId = segments[1];
+    const slug = segments[2];
+    if (segments[0] !== "profiles" || !playerId || !/^[0-9]+$/.test(playerId) || !slug) return undefined;
+    return slug.split("-").filter(Boolean).map(part =>
+      part[0]!.toUpperCase() + part.slice(1).toLowerCase()
+    ).join(" ");
+  } catch {
+    return undefined;
+  }
+}
+
 function profileValue(source: DataRecord[], aliases: string[]): string | undefined {
   const wanted = new Set(aliases.map(keyOf));
   for (const record of source) {
@@ -785,6 +810,28 @@ export function normalizeCricbuzzPlayerProfile(
   });
   const allRecords = [...rscRecords, ...labels];
   const values = (aliases: string[]) => profileValue(allRecords, aliases);
+  // Do not take a generic `name` from an unrelated format/competition record.
+  // Only person-like RSC records or records carrying player-specific fields
+  // are eligible to supply a player's name.
+  const playerRecords = rscRecords.filter(record => {
+    const keys = new Set(Object.keys(record).map(keyOf));
+    const type = asString(scalar(record, ["@type", "type"])) ?? "";
+    return /person|athlete|cricketer|sports?person/i.test(type) ||
+      ["playerid", "playeruid", "fullname", "playername", "battingstyle",
+        "bowlingstyle", "playerrole", "dateofbirth", "birthdate"].some(key => keys.has(key));
+  });
+  const structuredPlayerName = plausiblePlayerName(
+    profileValue(playerRecords, ["fullName", "playerName"]) ??
+    profileValue(playerRecords, ["name"])
+  );
+  const personName = plausiblePlayerName(profileValue(
+    rscRecords.filter(record => /person|athlete|cricketer|sports?person/i.test(
+      asString(scalar(record, ["@type", "type"])) ?? ""
+    )),
+    ["name", "fullName", "playerName"]
+  ));
+  const htmlPlayerName = plausiblePlayerName($("h1").first().text());
+  const playerName = structuredPlayerName ?? personName ?? htmlPlayerName ?? playerNameFromProfileUrl(pageUrl);
   const htmlSections = $("h1,h2,h3,h4").toArray().map(heading => {
     const node = $(heading);
     const content = node.nextUntil("h1,h2,h3,h4").not("script,style,noscript").text();
@@ -884,7 +931,7 @@ export function normalizeCricbuzzPlayerProfile(
   const heightNumber = parseHeightCm(height);
   return {
     schemaVersion: 1,
-    fullName: values(["fullName", "name", "playerName"]) || clean($("h1").first().text()) || undefined,
+    fullName: playerName,
     country: values(["country", "nationality", "internationalTeam", "intlTeam", "countryName"]),
     role: values(["role", "playingRole", "playerRole"]),
     battingStyle: values(["battingStyle", "batStyle", "bat"]),
