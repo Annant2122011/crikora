@@ -526,7 +526,7 @@ async function listEntities(type: EntityType, url: URL, response: ApiResponse): 
 async function comparePlayers(url: URL, response: ApiResponse): Promise<void> {
   const rawIds = (url.searchParams.get("ids") ?? "").split(",").map(value => value.trim()).filter(Boolean);
   const ids = [...new Set(rawIds)];
-  if (ids.length < 2 || ids.length > 4 || ids.some(id => !/^\\d{1,12}$/.test(id))) {
+  if (ids.length < 2 || ids.length > 4 || ids.some(id => !/^\d{1,12}$/.test(id))) {
     return sendJson(response, 400, { error: "Provide 2 to 4 comma-separated numeric Cricbuzz player IDs." });
   }
 
