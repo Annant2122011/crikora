@@ -161,6 +161,13 @@ function parseLimit(value: string | null, fallback: number, maximum: number): nu
   return parsed;
 }
 
+function parseOffset(value: string | null): number | undefined {
+  if (value === null || value === "") return 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1_000_000) return undefined;
+  return parsed;
+}
+
 async function getSettings(): Promise<CrawlerSettings> {
   const result = await getPool().query<CrawlerSettings>(
     `SELECT refresh_interval_seconds, enabled, last_started_at, last_completed_at,
@@ -466,14 +473,19 @@ async function cleanupCache(request: ApiRequest, response: ApiResponse): Promise
 
 async function listMatches(url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
+  const offset = parseOffset(url.searchParams.get("offset"));
   const status = url.searchParams.get("status");
-  if (limit === undefined || (status && !["live", "upcoming", "completed"].includes(status))) {
+  if (limit === undefined || offset === undefined || (status && !["live", "upcoming", "completed"].includes(status))) {
     sendJson(response, 400, { error: "Invalid match query." });
     return;
   }
-  const rows = await getRepository().list("match", limit);
+  const rows = await getRepository().list("match", limit, offset);
   const data = rows.filter(row => !status || row.payload.status === status).map(present);
-  sendJson(response, 200, { data, meta: { count: data.length, retentionPolicy: RETENTION_POLICY, source: "cricbuzz" } });
+  sendJson(response, 200, {
+    data,
+    meta: { count: data.length, limit, offset, nextOffset: rows.length === limit ? offset + limit : null,
+      retentionPolicy: RETENTION_POLICY, source: "cricbuzz" }
+  });
 }
 
 async function getMatch(matchId: string, response: ApiResponse, eventsOnly = false): Promise<void> {
@@ -498,12 +510,17 @@ function validEntityType(value: string | undefined): EntityType | undefined {
 
 async function listEntities(type: EntityType, url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
-  if (limit === undefined) {
+  const offset = parseOffset(url.searchParams.get("offset"));
+  if (limit === undefined || offset === undefined) {
     sendJson(response, 400, { error: "Invalid limit." });
     return;
   }
-  const rows = await getRepository().list(type, limit);
-  sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } });
+  const rows = await getRepository().list(type, limit, offset);
+  sendJson(response, 200, {
+    data: rows.map(present),
+    meta: { count: rows.length, limit, offset, nextOffset: rows.length === limit ? offset + limit : null,
+      retentionPolicy: RETENTION_POLICY }
+  });
 }
 
 async function getEntity(type: EntityType, sourceId: string, response: ApiResponse): Promise<void> {
@@ -537,7 +554,8 @@ async function listContent(url: URL, response: ApiResponse): Promise<void> {
 
 async function listNews(url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
-  if (limit === undefined) return sendJson(response, 400, { error: "Invalid news limit." });
+  const offset = parseOffset(url.searchParams.get("offset"));
+  if (limit === undefined || offset === undefined) return sendJson(response, 400, { error: "Invalid news pagination." });
   const beforeRaw = url.searchParams.get("before");
   const before = beforeRaw ? new Date(beforeRaw) : undefined;
   if (before && Number.isNaN(before.getTime())) return sendJson(response, 400, { error: "before must be a valid timestamp." });
@@ -550,12 +568,13 @@ async function listNews(url: URL, response: ApiResponse): Promise<void> {
        FROM public.crikora_news_articles
       WHERE ($2::timestamptz IS NULL OR published_at < $2)
       ORDER BY published_at DESC NULLS LAST, source_id DESC
-      LIMIT $1`,
-    [limit, before?.toISOString() ?? null]
+      LIMIT $1 OFFSET $3`,
+    [limit, before?.toISOString() ?? null, offset]
   );
   sendJson(response, 200, {
     data: result.rows,
-    meta: { count: result.rows.length, limit, before: before?.toISOString() ?? null, source: "cricbuzz" }
+    meta: { count: result.rows.length, limit, offset, nextOffset: result.rows.length === limit ? offset + limit : null,
+      before: before?.toISOString() ?? null, source: "cricbuzz" }
   });
 }
 
@@ -575,7 +594,8 @@ async function getNews(sourceId: string, response: ApiResponse): Promise<void> {
 
 async function listSchedule(url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 200, 500);
-  if (limit === undefined) return sendJson(response, 400, { error: "Invalid schedule limit." });
+  const offset = parseOffset(url.searchParams.get("offset"));
+  if (limit === undefined || offset === undefined) return sendJson(response, 400, { error: "Invalid schedule pagination." });
   const fromRaw = url.searchParams.get("from");
   const from = fromRaw ? new Date(fromRaw) : undefined;
   if (from && Number.isNaN(from.getTime())) return sendJson(response, 400, { error: "from must be a valid timestamp." });
@@ -588,12 +608,13 @@ async function listSchedule(url: URL, response: ApiResponse): Promise<void> {
        FROM public.crikora_schedule_fixtures
       WHERE ($2::timestamptz IS NULL OR start_time >= $2)
       ORDER BY start_time ASC NULLS LAST, fixture_source_id
-      LIMIT $1`,
-    [limit, from?.toISOString() ?? null]
+      LIMIT $1 OFFSET $3`,
+    [limit, from?.toISOString() ?? null, offset]
   );
   sendJson(response, 200, {
     data: result.rows,
-    meta: { count: result.rows.length, limit, from: from?.toISOString() ?? null, source: "cricbuzz" }
+    meta: { count: result.rows.length, limit, offset, nextOffset: result.rows.length === limit ? offset + limit : null,
+      from: from?.toISOString() ?? null, source: "cricbuzz" }
   });
 }
 
