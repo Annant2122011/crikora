@@ -262,6 +262,59 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       return;
     }
 
+    if (entity.entityType === "metadata" && isRecord(entity.payload.newsArticle)) {
+      const article = entity.payload.newsArticle;
+      await client.query(
+        `INSERT INTO public.crikora_news_articles
+          (source_id,source_url,canonical_url,title,summary,body_text,author,category,published_at,modified_at,
+           primary_image_url,tags,raw_meta,observed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10::timestamptz,$11,$12,$13::jsonb,$14::timestamptz)
+         ON CONFLICT (source_id) DO UPDATE SET
+           source_url=EXCLUDED.source_url, canonical_url=EXCLUDED.canonical_url,
+           title=EXCLUDED.title, summary=EXCLUDED.summary, body_text=EXCLUDED.body_text,
+           author=EXCLUDED.author, category=EXCLUDED.category, published_at=EXCLUDED.published_at,
+           modified_at=EXCLUDED.modified_at, primary_image_url=EXCLUDED.primary_image_url,
+           tags=EXCLUDED.tags, raw_meta=EXCLUDED.raw_meta, observed_at=EXCLUDED.observed_at`,
+        [
+          String(article.sourceId ?? entity.sourceId), entity.sourceUrl,
+          String(article.canonicalUrl ?? entity.sourceUrl), String(article.title ?? entity.payload.title ?? "Untitled"),
+          nullableString(article.summary), String(article.bodyText ?? ""),
+          nullableString(article.author), nullableString(article.category),
+          nullableString(article.publishedAt), nullableString(article.modifiedAt),
+          nullableString(article.primaryImageUrl),
+          Array.isArray(article.tags) ? article.tags.filter((value): value is string => typeof value === "string") : [],
+          jsonValue(article.rawMeta ?? {}), observedAt
+        ]
+      );
+      return;
+    }
+
+    if (entity.entityType === "metadata" && Array.isArray(entity.payload.scheduleFixtures)) {
+      const fixtures = arrayOfRecords(entity.payload.scheduleFixtures);
+      for (const fixture of fixtures) {
+        await client.query(
+          `INSERT INTO public.crikora_schedule_fixtures
+            (fixture_source_id,match_source_id,source_page_url,match_url,match_title,home_team,away_team,
+             competition,format,start_time,venue,source_text,raw_data,observed_at)
+           VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10,$11,$12::jsonb,$13::timestamptz)
+           ON CONFLICT (fixture_source_id) DO UPDATE SET
+             source_page_url=EXCLUDED.source_page_url, match_url=EXCLUDED.match_url,
+             match_title=EXCLUDED.match_title, home_team=EXCLUDED.home_team, away_team=EXCLUDED.away_team,
+             competition=EXCLUDED.competition, format=EXCLUDED.format, start_time=EXCLUDED.start_time,
+             venue=EXCLUDED.venue, source_text=EXCLUDED.source_text, raw_data=EXCLUDED.raw_data,
+             observed_at=EXCLUDED.observed_at`,
+          [
+            String(fixture.sourceId ?? ""), entity.sourceUrl, String(fixture.matchUrl ?? ""),
+            String(fixture.matchTitle ?? ""), nullableString(fixture.homeTeam), nullableString(fixture.awayTeam),
+            String(fixture.competition ?? "Cricket"), String(fixture.format ?? "Unknown"),
+            nullableString(fixture.startTime), nullableString(fixture.venue),
+            String(fixture.sourceText ?? ""), jsonValue(fixture), observedAt
+          ]
+        );
+      }
+      return;
+    }
+
     if (entity.entityType !== "match" || !isRecord(entity.payload.matchData)) return;
     const data = entity.payload.matchData;
     const innings = arrayOfRecords(data.innings);
