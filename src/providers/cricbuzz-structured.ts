@@ -299,14 +299,26 @@ function parseOverBall(record: DataRecord): { over?: number; ball?: number } {
   return {};
 }
 
+function nestedRecords(record: DataRecord, objectAliases: string[]): DataRecord[] {
+  const value = scalar(record, objectAliases);
+  if (Array.isArray(value)) return value.map(asRecord).filter((item): item is DataRecord => Boolean(item));
+  const nested = asRecord(value);
+  return nested ? [nested] : [];
+}
 function nestedString(record: DataRecord, objectAliases: string[], valueAliases: string[]): string | undefined {
-  const nested = asRecord(scalar(record, objectAliases));
-  return nested ? stringField(nested, valueAliases) : undefined;
+  for (const nested of nestedRecords(record, objectAliases)) {
+    const value = stringField(nested, valueAliases);
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function nestedNumber(record: DataRecord, objectAliases: string[], valueAliases: string[]): number | undefined {
-  const nested = asRecord(scalar(record, objectAliases));
-  return nested ? numberField(nested, valueAliases) : undefined;
+  for (const nested of nestedRecords(record, objectAliases)) {
+    const value = numberField(nested, valueAliases);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function descriptionText(record: DataRecord): string | undefined {
@@ -334,8 +346,11 @@ function commentaryText(record: DataRecord): string | undefined {
   return clean(rendered);
 }
 function nestedPlayerId(record: DataRecord, objectAliases: string[], idAliases: string[]): string | undefined {
-  const nested = asRecord(scalar(record, objectAliases));
-  return nested ? structuredPlayerId(nested, idAliases) : undefined;
+  for (const nested of nestedRecords(record, objectAliases)) {
+    const value = structuredPlayerId(nested, idAliases);
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function parseInningsNumber(record: DataRecord): number {
@@ -565,7 +580,7 @@ function parseHtmlScorecard($: CheerioAPI, inningsMap: Map<number, NormalizedInn
     }
     const batterIndex = normalizedHeaders.findIndex(header => /^(batter|batsman|striker)$/.test(header));
     const bowlerIndex = normalizedHeaders.findIndex(header => header === "bowler");
-    if (batterIndex >= 0) {
+    if (batterIndex >= 0 && !isWicketTable && !isExtrasTable) {
       tableNode.find("tr").each((_i, row) => {
         const cells = $(row).find("th,td").toArray().map(cell => clean($(cell).text()));
         if (cells.length !== headers.length || cells[batterIndex] === headers[batterIndex]) return;
@@ -833,7 +848,7 @@ export function normalizeCricbuzzPlayerProfile(
     role: values(["role", "playingRole", "playerRole"]),
     battingStyle: values(["battingStyle", "batStyle", "bat"]),
     bowlingStyle: values(["bowlingStyle", "bowlStyle", "bowl"]),
-    birthDate: parseBirthDate(values(["dateOfBirth", "dob", "dobFormat", "born"])),
+    birthDate: parseBirthDate(values(["dateOfBirth", "birthDate", "dob", "dobFormat", "born"])),
     birthPlace,
     ...(heightNumber !== undefined ? { heightCm: /m$/.test(height ?? "") && heightNumber < 3 ? heightNumber * 100 : heightNumber } : {}),
     biography,
