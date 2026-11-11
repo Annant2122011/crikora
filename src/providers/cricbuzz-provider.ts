@@ -158,11 +158,13 @@ export function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: strin
   }
 }
 
-function isUsablePlayerImage(value: string | undefined): boolean {
+export function isUsablePlayerImage(value: string | undefined): boolean {
   return Boolean(
     value &&
     /^https:\/\//i.test(value) &&
-    !/(?:placeholder|no[-_ ]?image|default[-_ ]?(?:player|avatar)|unknown[-_ ]?player)/i.test(value)
+    // Cricbuzz uses c582022 as the site-wide Open Graph image; it is not a
+    // player headshot, so route it through the ESPNcricinfo fallback.
+    !/(?:placeholder|no[-_ ]?image|default[-_ ]?(?:player|avatar)|unknown[-_ ]?player|\/c582022\/)/i.test(value)
   );
 }
 

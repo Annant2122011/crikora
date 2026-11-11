@@ -17,7 +17,7 @@ Both men's and women's cricket are included. There is no product-wide men's-only
 
 The sitemap audit contains 4,721 distinct URLs, but the initial queue deliberately excludes broad team directories, auction subtrees, standalone historical scorecards, old player-match records, video collections, photo galleries and account/contact pages. The exact queue is the deduplicated set of eligible source pages, not a target number.
 
-If a Cricbuzz player profile has no usable photo, a narrow ESPNcricinfo player-directory lookup resolves the player using name, country and gender when present. It stores the alternate player profile URL, available headshot/image URL and complete returned profile payload. Ambiguous same-name matches are not attached to a Crikora profile.
+If a Cricbuzz player profile has no usable photo, including the site-wide `c582022` Open Graph image, a narrow ESPNcricinfo player-directory lookup resolves the player using name, country and gender when present. It stores the alternate player profile URL, available headshot/image URL and complete returned profile payload. Ambiguous same-name matches are not attached to a Crikora profile.
 
 ## What the collector reads
 

@@ -1,9 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CricbuzzProvider, classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
-  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl, isTargetedCricbuzzSeedUrl,
+  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl, isTargetedCricbuzzSeedUrl, isUsablePlayerImage,
   labeledValue, parseCricbuzzEntityHtml, shouldFollowTargetedPageLink
 } from "./cricbuzz-provider.js";
+
+describe("player headshot validation", () => {
+  it("rejects Cricbuzz's site-wide Open Graph image as a player photo", () => {
+    expect(isUsablePlayerImage("https://static.cricbuzz.com/a/img/v1/i1/c582022/i.jpg?d=high&p=det")).toBe(false);
+  });
+
+  it("keeps valid individual HTTPS player headshots", () => {
+    expect(isUsablePlayerImage("https://static.cricbuzz.com/a/img/v1/i1/c123456/real-player.jpg")).toBe(true);
+    expect(isUsablePlayerImage("http://static.cricbuzz.com/a/img/v1/i1/c123456/real-player.jpg")).toBe(false);
+    expect(isUsablePlayerImage(undefined)).toBe(false);
+  });
+});
 
 describe("Crikora cricket scope and format classification", () => {
   it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
