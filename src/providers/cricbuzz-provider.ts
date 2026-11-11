@@ -465,6 +465,9 @@ export class CricbuzzProvider implements CricketProvider {
     if (!page) return { discoveredUrls: [], skipped: true };
 
     const identity = classifyCricbuzzEntityUrl(page.url);
+    if (isNewsArticlePath(url.pathname) && !isNewsArticleWithinLookback(page.$)) {
+      return { discoveredUrls: [], skipped: true, sourcePages: [toSourcePageCapture(page)] };
+    }
     let entity: CrikoraEntity | undefined;
     let pages: PageRecord[] = [page];
     if (identity?.entityType === "match") {
@@ -483,6 +486,11 @@ export class CricbuzzProvider implements CricketProvider {
       const squadsUrl = navigation.squads ?? fallback.squads;
       const commentaryUrl = navigation.commentary ?? fallback.commentary;
       const info = infoUrl ? await this.tryFetchPage(new URL(infoUrl), "durable:match-facts", signal) : undefined;
+      const dateCheck = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info);
+      if (bucket === "completed" && !isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
+        const datedPages = [page, info].filter((item): item is PageRecord => Boolean(item));
+        return { discoveredUrls: [], skipped: true, sourcePages: datedPages.map(toSourcePageCapture) };
+      }
       const scorecard = scorecardUrl ? await this.tryFetchPage(new URL(scorecardUrl), "durable:scorecard", signal) : undefined;
       const squadsPage = squadsUrl ? await this.tryFetchPage(new URL(squadsUrl), "durable:squads", signal) : undefined;
       const commentary = commentaryUrl ? await this.tryFetchPage(new URL(commentaryUrl), "durable:commentary", signal) : undefined;
@@ -529,6 +537,14 @@ export class CricbuzzProvider implements CricketProvider {
       const squadsUrl = navigation.squads ?? `${ORIGIN}/cricket-match-squads/${matchId}/${slug}`;
       const commentaryUrl = navigation.commentary ?? `${ORIGIN}/live-cricket-full-commentary/${matchId}/${slug}`;
       const info = await this.tryFetchPage(new URL(factsUrl), "archive:match-facts", signal);
+      const dateCheck = parseMatch(
+        { id: matchId, path: url.pathname, bucket: "completed" },
+        matchPage, info, page
+      );
+      if (!isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
+        const datedPages = [page, overview, info].filter((item): item is PageRecord => Boolean(item));
+        return { discoveredUrls: [], skipped: true, sourcePages: datedPages.map(toSourcePageCapture) };
+      }
       const squads = await this.tryFetchPage(new URL(squadsUrl), "archive:match-squads", signal);
       const commentary = await this.tryFetchPage(new URL(commentaryUrl), "archive:match-commentary", signal);
       const uniquePages = new Map<string, PageRecord>();
@@ -577,12 +593,11 @@ export class CricbuzzProvider implements CricketProvider {
     }
 
     for (const captured of pages) this.queueRelatedPageLinks(captured.$, captured.url);
-    const discoveredUrls = [...new Set([
-      ...pages.slice(1).map(item => item.url),
-      ...pages.flatMap(item => getLinks(item.$, item.url)
+    const discoveredUrls = [...new Set(
+      pages.flatMap(item => getLinks(item.$, item.url)
         .filter(link => shouldFollowTargetedPageLink(item.url, link.url))
         .map(link => link.url))
-    ])]
+    )]
       .filter(linkUrl => isTargetedCricbuzzCollectionUrl(linkUrl));
     return { entity, discoveredUrls, skipped: false, sourcePages: pages.map(toSourcePageCapture) };
   }
