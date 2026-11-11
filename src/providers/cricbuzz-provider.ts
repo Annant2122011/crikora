@@ -405,11 +405,24 @@ export class CricbuzzProvider implements CricketProvider {
   }
 
   async discoverNewsSitemapUrls(signal?: AbortSignal): Promise<string[]> {
-    const sitemapUrl = new URL("/sitemap/cricket-news.xml", ORIGIN);
-    const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
-    return parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls.filter(value =>
-      isNewsArticlePath(new URL(value).pathname)
-    );
+    const sitemapPaths = [
+      "/sitemap/cricket-news.xml",
+      "/sitemap/cricket-news-archive.xml",
+      "/sitemap/cricket-news-editorials.xml"
+    ];
+    const articleUrls = new Set<string>();
+    for (const path of sitemapPaths) {
+      const sitemapUrl = new URL(path, ORIGIN);
+      const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+      for (const value of parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls) {
+        try {
+          if (isNewsArticlePath(new URL(value).pathname)) articleUrls.add(value);
+        } catch {
+          // Ignore malformed sitemap loc entries, but continue other news feeds.
+        }
+      }
+    }
+    return [...articleUrls];
   }
 
   async discoverPlayerSitemapUrls(signal?: AbortSignal): Promise<string[]> {
