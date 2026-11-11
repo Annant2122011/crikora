@@ -17,6 +17,7 @@ const env = z.object({
   LOG_LEVEL: z.string().default("info"),
   POLL_INTERVAL_SECONDS: z.enum(["10", "15", "20", "30"]).default("10"),
   CRIKORA_COLLECTION_ENABLED: z.enum(["true", "false"]).default("false"),
+  CRIKORA_CRICINFO_FALLBACK_ENABLED: z.enum(["true", "false"]).default("true"),
   DATABASE_URL: z.string().min(1),
   AWS_ENDPOINT_URL_S3: z.string().optional(),
   AWS_REGION: z.string().optional(),
@@ -54,7 +55,8 @@ const provider = new CricbuzzProvider({
   maxContentPagesPerPoll: env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL,
   timeoutMs: env.CRICBUZZ_TIMEOUT_MS,
   maxResponseBytes: env.CRICBUZZ_MAX_RESPONSE_BYTES,
-  userAgent: env.CRICBUZZ_USER_AGENT
+  userAgent: env.CRICBUZZ_USER_AGENT,
+  cricinfoFallbackEnabled: env.CRIKORA_CRICINFO_FALLBACK_ENABLED === "true"
 });
 
 const poller = new Poller(provider, repository, Number(env.POLL_INTERVAL_SECONDS) * 1000, error => {
