@@ -364,17 +364,8 @@ export class CricbuzzProvider implements CricketProvider {
       }
     }
 
-    const sectionTick = Math.floor(Date.now() / 10_000);
-    const sectionStart = (sectionTick * 2) % SECTION_INDEXES.length;
-    for (const path of rotate(SECTION_INDEXES, sectionStart, 2)) {
-      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz section refresh aborted.");
-      const page = await this.tryFetchPage(new URL(path, ORIGIN), "section-index", signal);
-      if (!page) continue;
-      capturedPages.set(page.url, page);
-      this.queueRelatedPageLinks(page.$, page.url);
-      const generic = parseEntityPage(page.$, page.url);
-      if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
-    }
+    // Schedule/news indexes are refreshed by their durable 30-minute crawl entries,
+    // not on every live-score poll. This keeps the hot path limited to three match indexes.
 
     const fetchedAt = new Date().toISOString();
     return {
