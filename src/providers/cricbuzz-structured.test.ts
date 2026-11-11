@@ -155,7 +155,8 @@ describe("Cricbuzz live React Server Component schema compatibility", () => {
                 totalRuns: 21, totalBalls: 23 }
             },
             wicketsData: {
-              wkt_1: { batId: 9653, batName: "Lizelle Lee", wktOver: 3.5, wktRuns: 21, ballNbr: 23, wktNbr: 1 }
+              wkt_1: { batId: 9653, batName: "Lizelle Lee", wktOver: 3.5, wktRuns: 21, ballNbr: 23, wktNbr: 1,
+                wicketType: "caught", fieldersInvolved: [{ id: 38748, name: "Eleanor Larosa" }] }
             }
           }]
         }
@@ -184,7 +185,9 @@ describe("Cricbuzz live React Server Component schema compatibility", () => {
         batterTwoRuns: 9, batterTwoBalls: 9, runs: 21, balls: 23
       })],
       fallOfWickets: [expect.objectContaining({
-        wicketNumber: 1, batterName: "Lizelle Lee", score: 21, over: "3.5"
+        wicketNumber: 1, batterName: "Lizelle Lee", playerSourceId: "9653",
+        dismissalType: "caught", fielder: "Eleanor Larosa", fielderSourceId: "38748",
+        score: 21, over: "3.5"
       })]
     });
     expect(data.coverage.deliveryCompleteness).toBe("not-exposed");
@@ -331,6 +334,7 @@ describe("deeply structured profile and match fields", () => {
         inningsId: 1,
         commentaryList: [{
           eventId: "run-out-1",
+          timestamp: 1790000000,
           ballNbr: 6,
           event: "RUN_OUT",
           batsmanStriker: { batId: 101, batName: "Striker", batRuns: 0, outDesc: "run out" },
@@ -374,6 +378,11 @@ describe("deeply structured profile and match fields", () => {
     ]);
     expect(data.commentary[0]).toMatchObject({
       sourceEventId: "run-out-1",
+      batterSourceId: "101",
+      nonStriker: "Non Striker",
+      nonStrikerSourceId: "102",
+      bowlerSourceId: "201",
+      sourceTimestamp: "1790000000",
       description: "Striker run out at the striker's end.",
       commentary: "RUN OUT, batter is short of the crease."
     });
