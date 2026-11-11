@@ -54,8 +54,10 @@ const SECTION_INDEXES = [
 
 const TARGETED_PAGE_KINDS = new Set([
   "match", "match-facts", "match-squads", "match-scorecard", "commentary",
-  "player", "player-stats", "series", "series-subpage", "schedule",
-  "news", "news-index", "news-category"
+  "match-highlights", "live-graphs", "over-by-over", "match-forecast", "wicket-zone",
+  "player", "player-stats", "player-match-performance", "player-match-highlights",
+  "team", "team-subpage", "series", "series-subpage", "series-auction", "schedule",
+  "ranking-or-statistics", "news", "news-index", "news-category"
 ]);
 
 export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
