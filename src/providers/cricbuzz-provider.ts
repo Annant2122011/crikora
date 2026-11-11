@@ -112,6 +112,10 @@ function hasMatchPageIdentity(path: string): boolean {
   return /^\/(?:live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary)\/\d+\//i.test(path);
 }
 
+function isMatchOverviewPath(path: string): boolean {
+  return /^\/live-cricket-scores\/\d+\//i.test(path);
+}
+
 export function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boolean {
   if (!isTargetedCricbuzzCollectionUrl(targetUrl)) return false;
   try {
@@ -129,11 +133,11 @@ export function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: strin
 
     // News indexes discover articles. Articles never recurse into more articles.
     if (sourceNewsIndex) return targetNewsArticle || /^\/cricket-news\/(?:editorial|latest-news)(?:\/|$)/i.test(targetPath);
-    if (sourceMatchIndex) return targetMatch;
+    if (sourceMatchIndex) return isMatchOverviewPath(targetPath);
     if (sourceNewsArticle) return Boolean(targetPlayer && !targetPlayer.isStats);
 
     // A schedule or series index may discover match fixtures and series detail.
-    if (sourceSchedule) return targetMatch || Boolean(targetPlayer) ||
+    if (sourceSchedule) return isMatchOverviewPath(targetPath) || Boolean(targetPlayer) ||
       /^\/cricket-series\/\d+\/[^/]+\/?$/i.test(targetPath) ||
       /^\/cricket-schedule\//i.test(targetPath);
 
