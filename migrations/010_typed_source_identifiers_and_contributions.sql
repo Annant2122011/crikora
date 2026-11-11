@@ -19,7 +19,17 @@ ALTER TABLE public.crikora_match_partnerships
   ADD COLUMN IF NOT EXISTS batter_two_balls integer CHECK (batter_two_balls IS NULL OR batter_two_balls >= 0);
 
 ALTER TABLE public.crikora_match_fall_of_wickets
-  ADD COLUMN IF NOT EXISTS player_source_id text;
+  ADD COLUMN IF NOT EXISTS player_source_id text,
+  ADD COLUMN IF NOT EXISTS dismissal_type text,
+  ADD COLUMN IF NOT EXISTS fielder text,
+  ADD COLUMN IF NOT EXISTS fielder_source_id text;
+
+ALTER TABLE public.crikora_match_commentary
+  ADD COLUMN IF NOT EXISTS batter_source_id text,
+  ADD COLUMN IF NOT EXISTS non_striker text,
+  ADD COLUMN IF NOT EXISTS non_striker_source_id text,
+  ADD COLUMN IF NOT EXISTS bowler_source_id text,
+  ADD COLUMN IF NOT EXISTS source_timestamp text;
 
 CREATE INDEX IF NOT EXISTS crikora_match_deliveries_batter_idx
   ON public.crikora_match_deliveries (batter_source_id, observed_at DESC)
@@ -33,3 +43,9 @@ CREATE INDEX IF NOT EXISTS crikora_match_partnership_batter_one_idx
 CREATE INDEX IF NOT EXISTS crikora_match_partnership_batter_two_idx
   ON public.crikora_match_partnerships (batter_two_source_id, observed_at DESC)
   WHERE batter_two_source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS crikora_match_commentary_batter_idx
+  ON public.crikora_match_commentary (batter_source_id, observed_at DESC)
+  WHERE batter_source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS crikora_match_commentary_bowler_idx
+  ON public.crikora_match_commentary (bowler_source_id, observed_at DESC)
+  WHERE bowler_source_id IS NOT NULL;
