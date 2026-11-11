@@ -90,7 +90,7 @@ describe("Cricbuzz player detail extraction", () => {
 });
 
 describe("Cricbuzz targeted discovery seeds", () => {
-  it("seeds only match, schedule and news indexes, not unrelated directories or historical archive routes", () => {
+  it("seeds match indexes and focused schedule/news indexes, not unrelated directories or historical archive routes", () => {
     const seeds = getCricbuzzDiscoverySeedUrls();
     expect(seeds).toEqual(expect.arrayContaining([
       "https://www.cricbuzz.com/cricket-match/live-scores",
@@ -98,8 +98,6 @@ describe("Cricbuzz targeted discovery seeds", () => {
       "https://www.cricbuzz.com/cricket-match/live-scores/recent-matches",
       "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
       "https://www.cricbuzz.com/cricket-schedule/upcoming-series/international",
-      "https://www.cricbuzz.com/cricket-schedule/series/all",
-      "https://www.cricbuzz.com/cricket-news",
       "https://www.cricbuzz.com/cricket-news/latest-news"
     ]));
     expect(seeds.some(value => /profiles|cricket-team|scorecard-archives|cricket-videos|cricket-stats/.test(value))).toBe(false);
@@ -118,7 +116,8 @@ describe("Cricbuzz targeted discovery seeds", () => {
     for (const value of allowed) expect(isTargetedCricbuzzCollectionUrl(value)).toBe(true);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-scorecard-archives/1877")).toBe(false);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-videos/217038/example")).toBe(false);
-    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(false);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(true);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/men/batting")).toBe(true);
   });
 });
 
