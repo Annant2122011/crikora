@@ -19,9 +19,9 @@ interface Options {
   maxResponseBytes: number;
   userAgent: string;
 }
-interface DiscoveredMatch { id: string; path: string; bucket: MatchBucket; }
+interface DiscoveredMatch { id: string; path: string; bucket: MatchBucket; startTime?: string; }
 interface PageRecord { url: string; html: string; $: PageDoc; fetchedAt: string; }
-interface LinkRecord { url: string; path: string; text: string; }
+interface LinkRecord { url: string; path: string; text: string; matchStartTime?: string; }
 
 export interface CrawledPageResult {
   entity?: CrikoraEntity;
@@ -213,12 +213,19 @@ export class CricbuzzProvider implements CricketProvider {
       for (const link of getLinks(page.$, page.url)) {
         const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (match?.[1] && !discovered.has(match[1])) {
-          const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
+          const item: DiscoveredMatch = {
+            id: match[1],
+            path: link.path,
+            bucket: index.bucket,
+            ...(link.matchStartTime ? { startTime: link.matchStartTime } : {})
+          };
           const stub = parseMatchIndexStub(item, page, link);
+          // A match must have a known start date on or after the configured
+          // cutoff, regardless of whether Cricbuzz labels it live, upcoming
+          // or completed. Unknown dates fail closed instead of entering queue.
+          if (!isAtOrAfterConfiguredMatchStart(stub.startTime)) continue;
           discovered.set(match[1], item);
-          if (index.bucket !== "completed" || isAtOrAfterConfiguredMatchStart(stub.startTime)) {
-            indexRecords.set(match[1], stub);
-          }
+          indexRecords.set(match[1], stub);
         }
       }
     }
@@ -249,7 +256,12 @@ export class CricbuzzProvider implements CricketProvider {
     }
     for (const item of allMatches) {
       const url = new URL(item.path, ORIGIN).toString();
-      if (!pendingMatches.has(url)) pendingMatches.set(url, { url, path: item.path, text: "match index" });
+      if (!pendingMatches.has(url)) pendingMatches.set(url, {
+        url,
+        path: item.path,
+        text: "match index",
+        ...(item.startTime ? { matchStartTime: item.startTime } : {})
+      });
     }
     while (pendingMatches.size > 2_000) {
       const oldest = pendingMatches.keys().next().value as string | undefined;
@@ -536,7 +548,9 @@ export class CricbuzzProvider implements CricketProvider {
       const commentaryUrl = navigation.commentary ?? fallback.commentary;
       const info = infoUrl ? await this.tryFetchPage(new URL(infoUrl), "durable:match-facts", signal) : undefined;
       const dateCheck = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info);
-      if (bucket === "completed" && !isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
+      // Fail closed for every match status. Live/upcoming labels are not proof
+      // that the fixture is after the requested historical cutoff.
+      if (!isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
         const datedPages = [page, info].filter((item): item is PageRecord => Boolean(item));
         return { discoveredUrls: [], skipped: true, sourcePages: datedPages.map(toSourcePageCapture) };
       }
@@ -644,7 +658,7 @@ export class CricbuzzProvider implements CricketProvider {
     for (const captured of pages) this.queueRelatedPageLinks(captured.$, captured.url);
     const discoveredUrls = [...new Set(
       pages.flatMap(item => getLinks(item.$, item.url)
-        .filter(link => shouldFollowTargetedPageLink(item.url, link.url))
+        .filter(link => shouldFollowTargetedPageLink(item.url, link.url) && isEligibleMatchLink(link))
         .map(link => link.url))
     )]
       .filter(linkUrl => isTargetedCricbuzzCollectionUrl(linkUrl));
@@ -653,7 +667,7 @@ export class CricbuzzProvider implements CricketProvider {
 
   private queueRelatedPageLinks($: PageDoc, baseUrl: string): void {
     for (const link of getLinks($, baseUrl)) {
-      if (!shouldFollowTargetedPageLink(baseUrl, link.url)) continue;
+      if (!shouldFollowTargetedPageLink(baseUrl, link.url) || !isEligibleMatchLink(link)) continue;
       const identity = classifyCricbuzzEntityUrl(link.url);
       if (!identity) continue;
       let pending = this.pendingRelatedLinks.get(identity.entityType);
@@ -1011,9 +1025,11 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     if (!href) return false;
     try { return new URL(href, page.url).pathname === link.path; } catch { return false; }
   }).first();
-  const context = clean(anchor.parent().parent().parent().text() || anchor.parent().parent().text() || link.text);
-  const cardDate = context.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\s*\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0] ??
-    context.match(/[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0];
+  const row = anchor.closest("tr");
+  const context = clean(row.length
+    ? row.text()
+    : anchor.parent().parent().parent().text() || anchor.parent().parent().text() || link.text);
+  const cardStartTime = link.matchStartTime ?? extractMatchCardStartTime(context);
   const titleCandidate = context.match(/([^|]{2,100}?\s+vs\s+[^|]{2,100}?)(?:\s{2,}|$)/i)?.[1];
   const title = clean(titleCandidate || link.text || context.slice(0, 180));
   const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
@@ -1029,7 +1045,7 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     awayTeam: clean(teams?.[2] ?? "") || "Unknown",
     status: item.bucket,
     format,
-    startTime: cardDate ? parseDateTime(cardDate) ?? "" : "",
+    startTime: cardStartTime ?? "",
     innings: [],
     updatedAt: now,
     sourceUrl,
@@ -1587,6 +1603,17 @@ function collectRelatedLinks($: PageDoc, baseUrl: string): {
   }
   return result;
 }
+function extractMatchCardStartTime(context: string): string | undefined {
+  const cardDate = context.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\s*\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0] ??
+    context.match(/[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0];
+  return cardDate ? parseDateTime(cardDate) ?? undefined : undefined;
+}
+
+function isEligibleMatchLink(link: LinkRecord): boolean {
+  return !/^\/live-cricket-scores\/\d+\//i.test(link.path) ||
+    isAtOrAfterConfiguredMatchStart(link.matchStartTime);
+}
+
 function getLinks($: PageDoc, baseUrl: string): LinkRecord[] {
   const map = new Map<string, LinkRecord>();
   $("a[href]").each((_i, el) => {
@@ -1598,7 +1625,22 @@ function getLinks($: PageDoc, baseUrl: string): LinkRecord[] {
       const path = parsed.pathname;
       if (path === "/" || path.startsWith("/news/") || path.startsWith("/videos/")) return;
       const url = `${parsed.origin}${path}`;
-      if (!map.has(url)) map.set(url, { url, path, text: clean($(el).text()) });
+      if (!map.has(url)) {
+        const anchor = $(el);
+        const row = anchor.closest("tr");
+        const context = clean(row.length
+          ? row.text()
+          : anchor.parent().parent().parent().text() || anchor.parent().parent().text() ||
+            anchor.parent().text() || anchor.text());
+        map.set(url, {
+          url,
+          path,
+          text: clean(anchor.text()),
+          ...( /^\/live-cricket-scores\/\d+\//i.test(path)
+            ? { matchStartTime: extractMatchCardStartTime(context) }
+            : {})
+        });
+      }
     } catch { /* invalid href */ }
   });
   return [...map.values()];
