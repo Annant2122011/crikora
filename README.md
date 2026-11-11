@@ -139,7 +139,7 @@ The targeted crawl continuously refreshes match indexes, enriches eligible match
 
 ## Backend-only Neon archive storage environment
 
-The API uses these five variables to write compressed source HTML to the private Neon Object Storage bucket. They must be configured on the **core Crikora API project** (the repository-root Vercel project), not on the browser extension or website:
+The API uses these five variables to write compressed source HTML to the private Neon Object Storage bucket. They must be configured on the **core API runtime** (the repository-root Vercel API project or Railway's `crikora-api` service), not on the browser extension, website or crawler worker:
 
 ```dotenv
 AWS_ENDPOINT_URL_S3=https://br-cold-bird-bdw51znf.storage.c-8.us-east-2.aws.neon.tech
@@ -149,7 +149,7 @@ AWS_SECRET_ACCESS_KEY=<NEON_STORAGE_S3_SECRET_ACCESS_KEY>
 CRIKORA_ARCHIVE_BUCKET=crikora-raw-archive
 ```
 
-Use the branch-scoped Neon Object Storage credential created for the `production` branch. `AWS_ACCESS_KEY_ID` is its `token_id`; `AWS_SECRET_ACCESS_KEY` is its `s3_secret_access_key`. Do not substitute the Neon API token. For local development, place the values in an untracked `.env` file. For Vercel, add them as encrypted/sensitive **Production** variables on the root API project and redeploy. The separate durable worker only calls the API and does not need the S3 secret. The frontend and browser extension must never receive any of these five variables.
+Use the branch-scoped Neon Object Storage credential created for the `production` branch. `AWS_ACCESS_KEY_ID` is its `token_id`; `AWS_SECRET_ACCESS_KEY` is its `s3_secret_access_key`. Do not substitute the Neon API token. For local development, place the values in an untracked `.env` file. For Vercel, add them as encrypted/sensitive **Production** variables on the root API project. For Railway, add them to the `crikora-api` service in the `production` environment. The separate crawler worker only calls the API and does not need the S3 secret. The frontend and browser extension must never receive any of these five variables.
 
 The server imports `dotenv/config`, validates the five names, and calls `createArchiveObjectStoreFromEnv(process.env)` before constructing `PostgresEntityRepository`. If the variables are all absent in development, the legacy local bytea fallback is used; a partial set fails at startup; production requires all five. `GET /health` exposes only `archiveObjectStorage: "configured"` or the local fallback state, never secret values. This configuration flag is not a live upload/download test. After adding the five values to a local `.env` or the core API host, run `npm run archive:verify-storage` from the repository root. It uploads a tiny uniquely named diagnostic object to `diagnostics/roundtrip/`, downloads it again and checks the bytes and SHA-256. Keep the worker disabled until this command succeeds. Each successful diagnostic run leaves one small object in the private bucket.
 
