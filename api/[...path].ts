@@ -7,6 +7,7 @@ import { ENTITY_TYPES, RETENTION_POLICY, type EntityType, type StoredEntity } fr
 import { Poller } from "../src/ingestion/poller.js";
 import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "../src/providers/cricbuzz-provider.js";
 import { PostgresEntityRepository } from "../src/storage/postgres-entity-repository.js";
+import { createArchiveObjectStoreFromEnv } from "../src/storage/neon-s3-archive-object-store.js";
 import { DurableCrawlService } from "../src/ingestion/durable-crawl.js";
 
 type ApiRequest = IncomingMessage & { body?: unknown };
@@ -47,7 +48,7 @@ function getPool(): Pool {
 }
 
 function getRepository(): PostgresEntityRepository {
-  repository ??= new PostgresEntityRepository(getDatabaseUrl());
+  repository ??= new PostgresEntityRepository(getDatabaseUrl(), createArchiveObjectStoreFromEnv(process.env));
   return repository;
 }
 
@@ -62,7 +63,8 @@ function getProvider(): CricbuzzProvider {
     maxContentPagesPerPoll: Number(process.env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL ?? 2),
     timeoutMs: Number(process.env.CRICBUZZ_TIMEOUT_MS ?? 15_000),
     maxResponseBytes: Number(process.env.CRICBUZZ_MAX_RESPONSE_BYTES ?? 8_000_000),
-    userAgent: process.env.CRICBUZZ_USER_AGENT ?? "Crikora/0.1 (+https://github.com/Annant2122011/crikora)"
+    userAgent: process.env.CRICBUZZ_USER_AGENT ?? "Crikora/0.1 (+https://github.com/Annant2122011/crikora)",
+    cricinfoFallbackEnabled: process.env.CRIKORA_CRICINFO_FALLBACK_ENABLED !== "false"
   });
   return provider;
 }
@@ -88,14 +90,14 @@ function getDurableCrawl(): DurableCrawlService {
 
 
 
-function getSavedProfileAndNewsInventory(): string[] {
+function getSavedTargetedCricketInventory(): string[] {
   const path = join(process.cwd(), "docs", "cricbuzz-sitemap-inventory.json");
   const parsed = JSON.parse(readFileSync(path, "utf8")) as { urls?: Array<string | { url?: string }> };
-  if (!Array.isArray(parsed.urls)) throw new Error("The saved Crikbuzz inventory has no URL list.");
+  if (!Array.isArray(parsed.urls)) throw new Error("The saved Cricbuzz inventory has no URL list.");
   return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
-    .filter(value => /^https:\/\/www\.cricbuzz\.com\/(?:profiles\/\d+\/|cricket-news\/\d+\/)/i.test(value))
-    .filter(value => getProvider().isAllowedCrawlUrl(value)))];
+    .filter(value => getProvider().isAllowedCrawlUrl(value))
+    .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value)))];
 }
 
 function sendJson(response: ApiResponse, status: number, data: unknown): void {
@@ -390,11 +392,13 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
   }
 
   const provider = getProvider();
-  const savedProfileAndNewsUrls = getSavedProfileAndNewsInventory();
-  const savedNewsUrls = savedProfileAndNewsUrls.filter(value => value.includes("/cricket-news/"));
-  const savedPlayerUrls = savedProfileAndNewsUrls.filter(value => value.includes("/profiles/"));
+  const savedTargetedUrls = getSavedTargetedCricketInventory();
+  const savedNewsUrls = savedTargetedUrls.filter(value => value.includes("/cricket-news/"));
+  const savedPlayerUrls = savedTargetedUrls.filter(value => value.includes("/profiles/"));
   let newsUrls: string[] = [];
   let playerUrls: string[] = [];
+  let sitemapPageUrls: string[] = [];
+  let sitemapDocumentCount = 0;
   const discoveryErrors: string[] = [];
 
   for (const [label, discover] of [
@@ -410,14 +414,30 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
         ? Number((error as { sourceStatus?: unknown }).sourceStatus)
         : undefined;
       if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
-      discoveryErrors.push(`${label} sitemap unavailable (HTTP ${status}); using the saved targeted inventory.`);
+      discoveryErrors.push(label + " sitemap unavailable (HTTP " + status + "); using the saved targeted inventory.");
     }
+  }
+
+  try {
+    const discovery = await provider.discoverSitemapUrls(AbortSignal.timeout(25_000));
+    sitemapPageUrls = discovery.pageUrls
+      .filter(value => provider.isAllowedCrawlUrl(value))
+      .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value));
+    sitemapDocumentCount = discovery.sitemapUrls.length;
+  } catch (error) {
+    const status = error && typeof error === "object" && "sourceStatus" in error
+      ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+      : undefined;
+    if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
+    discoveryErrors.push("Cricbuzz sitemap index unavailable (HTTP " + status + "); using the saved targeted inventory and focused sitemaps.");
   }
 
   const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
   const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
   const crawlUrls = dedupeCricbuzzPageUrls([
     ...provider.getTargetedCollectionSeedUrls(),
+    ...sitemapPageUrls,
+    ...savedTargetedUrls,
     ...selectedNewsUrls,
     ...selectedPlayerUrls
   ]);
@@ -433,7 +453,9 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
       scheduleIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-schedule/.test(value)).length,
       newsArticleSeedCount: selectedNewsUrls.length,
       playerProfileSeedCount: selectedPlayerUrls.length,
-      savedProfileAndNewsUrlCount: savedProfileAndNewsUrls.length,
+      savedTargetedUrlCount: savedTargetedUrls.length,
+      sitemapDocumentCount,
+      sitemapPageUrlCount: sitemapPageUrls.length,
       discoveryErrors,
       crawlUrlCount: crawlUrls.length,
       collectionStartDate: process.env.CRIKORA_MATCH_DETAILS_FROM ?? "2026-11-04",

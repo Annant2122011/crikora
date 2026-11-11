@@ -2,7 +2,8 @@ import { load, type CheerioAPI } from "cheerio";
 import type { CrikoraEntity, EntityType } from "../domain/entities.js";
 import type { EventType, Match, MatchEvent, MatchStatus, ProviderSnapshot, SourcePageCapture } from "../domain/types.js";
 import { decodeCricbuzzFlightScripts } from "./cricbuzz-rsc.js";
-import { normalizeCricbuzzPlayerProfile, parseCricbuzzMatchData } from "./cricbuzz-structured.js";
+import { normalizeCricbuzzPlayerProfile, parseCricbuzzMatchData, type NormalizedPlayerProfile } from "./cricbuzz-structured.js";
+import { CricinfoPlayerFallback } from "./cricinfo-player-fallback.js";
 import type { CricketProvider } from "./provider.js";
 
 type MatchBucket = "live" | "upcoming" | "completed";
@@ -18,6 +19,7 @@ interface Options {
   timeoutMs: number;
   maxResponseBytes: number;
   userAgent: string;
+  cricinfoFallbackEnabled?: boolean;
 }
 interface DiscoveredMatch { id: string; path: string; bucket: MatchBucket; startTime?: string; }
 interface PageRecord { url: string; html: string; $: PageDoc; fetchedAt: string; }
@@ -42,20 +44,20 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores/recent-matches", bucket: "completed" }
 ];
 
-// Two broad section indexes are sampled every refresh tick. The time-derived
-// cursor works across Vercel cold starts without depending on process memory.
+// Only the two upcoming schedule indexes and latest-news index are sampled.
+// The historical series catalogue and broad news index are intentionally omitted.
 const SECTION_INDEXES = [
   "/cricket-schedule/upcoming-series/all",
   "/cricket-schedule/upcoming-series/international",
-  "/cricket-schedule/series/all",
-  "/cricket-news",
   "/cricket-news/latest-news"
 ];
 
 const TARGETED_PAGE_KINDS = new Set([
   "match", "match-facts", "match-squads", "match-scorecard", "commentary",
-  "player", "player-stats", "series", "series-subpage", "schedule",
-  "news", "news-index", "news-category"
+  "match-highlights", "live-graphs", "over-by-over", "match-forecast", "wicket-zone",
+  "player", "player-stats", "player-match-performance", "player-match-highlights",
+  "team", "team-subpage", "series", "series-subpage", "series-auction", "schedule",
+  "ranking-or-statistics", "news", "news-index", "news-category"
 ]);
 
 export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
@@ -128,6 +130,14 @@ export function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: strin
   }
 }
 
+function isUsablePlayerImage(value: string | undefined): boolean {
+  return Boolean(
+    value &&
+    /^https:\/\//i.test(value) &&
+    !/(?:placeholder|no[-_ ]?image|default[-_ ]?(?:player|avatar)|unknown[-_ ]?player)/i.test(value)
+  );
+}
+
 function isAtOrAfterConfiguredMatchStart(value: string | undefined): boolean {
   if (!value) return false;
   const parsed = new Date(value);
@@ -191,6 +201,7 @@ export class CricbuzzProvider implements CricketProvider {
   private matchCursor = 0;
   // Retain discovered URLs that do not fit the current related-page budget.
   private readonly pendingRelatedLinks = new Map<EntityType, Map<string, LinkRecord>>();
+  private readonly cricinfoFallback?: CricinfoPlayerFallback;
 
   constructor(private readonly options: Options) {
     if (!Number.isInteger(options.minRequestIntervalMs) || options.minRequestIntervalMs < 0) {
@@ -199,6 +210,12 @@ export class CricbuzzProvider implements CricketProvider {
     if (options.maxMatchesPerPoll < 1 || options.maxMatchesPerPoll > 50) throw new Error("Invalid maxMatchesPerPoll.");
     if (!Number.isInteger(options.maxContentPagesPerPoll) || options.maxContentPagesPerPoll < 0 || options.maxContentPagesPerPoll > 100) {
       throw new Error("Invalid maxContentPagesPerPoll.");
+    }
+    if (options.cricinfoFallbackEnabled) {
+      this.cricinfoFallback = new CricinfoPlayerFallback({
+        timeoutMs: options.timeoutMs,
+        minRequestIntervalMs: Math.max(900, options.minRequestIntervalMs)
+      });
     }
   }
 
@@ -582,6 +599,7 @@ export class CricbuzzProvider implements CricketProvider {
       };
     } else if (identity) {
       entity = parseEntityPage(page.$, page.url, identity.entityType);
+      if (entity) await this.enrichPlayerProfileFromCricinfo(entity, page, signal);
     }
 
     const scorecardRoute = url.pathname.match(/^\/live-cricket-scorecard\/(\d+)\/([^/]+)\/?$/);
@@ -688,6 +706,83 @@ export class CricbuzzProvider implements CricketProvider {
     }
   }
 
+  private async enrichPlayerProfileFromCricinfo(
+    entity: CrikoraEntity,
+    page: PageRecord,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (!this.cricinfoFallback || entity.entityType !== "player") return;
+    const profile = entity.payload.profile as NormalizedPlayerProfile | undefined;
+    if (!profile || isUsablePlayerImage(profile.profileImageUrl)) return;
+
+    const labelledValue = (pattern: RegExp): string | undefined =>
+      Object.entries(profile.allFields ?? {}).find(([label]) => pattern.test(label.trim()))?.[1];
+    const fullName = profile.fullName ?? page.$("h1").first().text().trim();
+    const country = profile.country ?? labelledValue(/^(?:country|nationality|country name)$/i);
+    const gender = labelledValue(/^(?:gender|sex)$/i);
+    if (!fullName || !country) return;
+
+    try {
+      const supplement = await this.cricinfoFallback.lookup({ fullName, country, gender }, signal);
+      if (!supplement) return;
+
+      const imageUrl = supplement.headshotImageUrl ?? supplement.imageUrl;
+      if (!isUsablePlayerImage(profile.profileImageUrl) && imageUrl) {
+        profile.profileImageUrl = imageUrl;
+      }
+      profile.allFields ??= {};
+      profile.allFields["ESPNcricinfo Profile URL"] = supplement.profileUrl;
+      profile.allFields["ESPNcricinfo Player ID"] = supplement.playerId;
+      if (supplement.imageUrl) profile.allFields["ESPNcricinfo Image URL"] = supplement.imageUrl;
+      if (supplement.headshotImageUrl) profile.allFields["ESPNcricinfo Headshot URL"] = supplement.headshotImageUrl;
+
+      const upsertAttribute = (
+        fieldPath: string,
+        sourceLabel: string,
+        value: string | Record<string, unknown>,
+        valueType: "text" | "json"
+      ) => {
+        const attribute = {
+          fieldPath,
+          sourceLabel,
+          section: "alternate-source",
+          value,
+          valueType
+        } as const;
+        const index = profile.attributes.findIndex(item => item.fieldPath === fieldPath);
+        if (index >= 0) profile.attributes[index] = attribute;
+        else profile.attributes.push(attribute);
+      };
+
+      upsertAttribute(
+        "alternateSources.espncricinfo.profileUrl",
+        "ESPNcricinfo profile URL",
+        supplement.profileUrl,
+        "text"
+      );
+      if (imageUrl) {
+        upsertAttribute(
+          "alternateSources.espncricinfo.imageUrl",
+          "ESPNcricinfo profile image",
+          imageUrl,
+          "text"
+        );
+      }
+      upsertAttribute(
+        "alternateSources.espncricinfo.sourceData",
+        "ESPNcricinfo complete player payload",
+        supplement.sourceData,
+        "json"
+      );
+      entity.payload.profile = profile;
+    } catch (error) {
+      console.warn("[crikora] ESPNcricinfo fallback did not enrich player profile.", {
+        playerSourceId: entity.sourceId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
   private async fetchRelatedEntities(
     links: Map<string, LinkRecord>,
     limit: number,
@@ -717,7 +812,10 @@ export class CricbuzzProvider implements CricketProvider {
         capturedPages.set(page.url, page);
         this.queueRelatedPageLinks(page.$, page.url);
         const parsed = parseEntityPage(page.$, page.url, expectedType);
-        if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
+        if (parsed) {
+          if (expectedType === "player") await this.enrichPlayerProfileFromCricinfo(parsed, page, signal);
+          addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
+        }
       }
       // Ordinary page failures are isolated; source denials still throw above.
       pending.delete(link.url);

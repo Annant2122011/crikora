@@ -93,8 +93,13 @@ function pageKind(url: string): string {
     if (/^\/live-cricket-scorecard\//i.test(path)) return "match-scorecard";
     if (/^\/live-cricket-full-commentary\//i.test(path)) return "commentary";
     if (/^\/profiles\/\d+\//i.test(path)) return /\/(?:all-matches|batting|bowling|stats)(?:\/|$)/i.test(path) ? "player-stats" : "player";
+    if (/^\/player-match-performance\/match\/\d+\/player\/\d+\//i.test(path)) return "player-match-performance";
+    if (/^\/cricket-team\/[^/]+\/\d+\/[^/]+/i.test(path)) return "team-subpage";
+    if (/^\/cricket-team\/[^/]+\/\d+$/i.test(path)) return "team";
+    if (/^\/cricket-stats(?:\/|$)/i.test(path)) return "ranking";
     if (/^\/cricket-schedule(?:\/|$)/i.test(path)) return "schedule";
-    if (/^\/cricket-series\/\d+\//i.test(path)) return "series";
+    if (/^\/cricket-series\/\d+\/[^/]+\/[^/]+/i.test(path)) return "series-subpage";
+    if (/^\/cricket-series\/\d+\/[^/]+$/i.test(path)) return "series";
     if (/^\/cricket-news\/\d+\//i.test(path)) return "news";
     if (/^\/cricket-news\/latest-news(?:\/|$)/i.test(path)) return "news-index";
     if (/^\/cricket-news(?:\/|$)/i.test(path)) return "news-category";
@@ -316,7 +321,7 @@ export class DurableCrawlService {
                )
              )
              OR
-             (coverage.page_kind IN ('player', 'player-stats', 'series')
+             (coverage.page_kind IN ('player', 'player-stats', 'player-match-performance', 'team', 'team-subpage', 'series', 'series-subpage', 'ranking')
                AND coverage.last_fetched_at <= now() - interval '24 hours')
              OR
              (coverage.page_kind IN ('schedule', 'news-index', 'news-category')
