@@ -157,6 +157,9 @@ describe("targeted link following", () => {
   const matchIndex = "https://www.cricbuzz.com/cricket-match/live-scores";
   const matchPage = "https://www.cricbuzz.com/live-cricket-scores/176500/teams-match";
   const squadsPage = "https://www.cricbuzz.com/cricket-match-squads/176500/teams-match";
+  const factsPage = "https://www.cricbuzz.com/cricket-match-facts/176500/teams-match";
+  const scorecardPage = "https://www.cricbuzz.com/live-cricket-scorecard/176500/teams-match";
+  const commentaryPage = "https://www.cricbuzz.com/live-cricket-full-commentary/176500/teams-match";
   const player = "https://www.cricbuzz.com/profiles/777/sample-player";
   const batting = "https://www.cricbuzz.com/profiles/777/sample-player/all-matches/batting";
   const otherPlayer = "https://www.cricbuzz.com/profiles/778/another-player";
@@ -167,6 +170,14 @@ describe("targeted link following", () => {
 
   it("follows match indexes, match participants, player statistics, schedules and news indexes without page-family fanout", () => {
     expect(shouldFollowTargetedPageLink(matchIndex, matchPage)).toBe(true);
+    expect(shouldFollowTargetedPageLink(matchIndex, squadsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(matchIndex, factsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(matchIndex, scorecardPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(matchIndex, commentaryPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, squadsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, factsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, scorecardPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, commentaryPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(matchPage, squadsPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(squadsPage, player)).toBe(true);
     expect(shouldFollowTargetedPageLink(player, batting)).toBe(true);
