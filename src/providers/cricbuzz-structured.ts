@@ -729,9 +729,7 @@ function playerNameFromProfileUrl(pageUrl: string): string | undefined {
     const slug = segments[2];
     if (segments[0] !== "profiles" || !playerId || !/^[0-9]+$/.test(playerId) || !slug) return undefined;
     return slug.split("-").filter(Boolean).map(part =>
-      part.length <= 3 && /^[a-z]+$/i.test(part)
-        ? part[0]!.toUpperCase() + part.slice(1).toLowerCase()
-        : part[0]!.toUpperCase() + part.slice(1).toLowerCase()
+      part[0]!.toUpperCase() + part.slice(1).toLowerCase()
     ).join(" ");
   } catch {
     return undefined;
