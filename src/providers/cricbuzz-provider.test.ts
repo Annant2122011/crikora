@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CricbuzzProvider, classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
-  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl,
+  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl, isTargetedCricbuzzSeedUrl,
   labeledValue, parseCricbuzzEntityHtml, shouldFollowTargetedPageLink
 } from "./cricbuzz-provider.js";
 
@@ -89,6 +89,38 @@ describe("Cricbuzz player detail extraction", () => {
   });
 });
 
+describe("Crikora initial collection seed scope", () => {
+  it("seeds matches, full player profiles, news, schedules and relevant series context", () => {
+    const included = [
+      "https://www.cricbuzz.com/live-cricket-scores/176154/yl-vs-ut-9th-match-t10-2026",
+      "https://www.cricbuzz.com/profiles/10012/smriti-mandhana",
+      "https://www.cricbuzz.com/profiles/10012/smriti-mandhana/batting",
+      "https://www.cricbuzz.com/cricket-news/140543/example-story",
+      "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/matches",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/points-table",
+      "https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting"
+    ];
+    for (const url of included) expect(isTargetedCricbuzzSeedUrl(url), url).toBe(true);
+  });
+
+  it("does not seed match companions, historical player-match pages, team directories or auction/video routes", () => {
+    const excluded = [
+      "https://www.cricbuzz.com/live-cricket-scorecard/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/cricket-match-facts/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/cricket-match-squads/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/live-cricket-full-commentary/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/player-match-performance/match/22397/player/1836/batting",
+      "https://www.cricbuzz.com/cricket-team/india/2",
+      "https://www.cricbuzz.com/cricket-team/sierra-leone-women/490/results",
+      "https://www.cricbuzz.com/cricket-series/ipl-2026/auction/players",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/videos"
+    ];
+    for (const url of excluded) expect(isTargetedCricbuzzSeedUrl(url), url).toBe(false);
+  });
+});
+
 describe("Cricbuzz targeted discovery seeds", () => {
   it("seeds match indexes and focused schedule/news indexes, not unrelated directories or historical archive routes", () => {
     const seeds = getCricbuzzDiscoverySeedUrls();
@@ -125,6 +157,9 @@ describe("targeted link following", () => {
   const matchIndex = "https://www.cricbuzz.com/cricket-match/live-scores";
   const matchPage = "https://www.cricbuzz.com/live-cricket-scores/176500/teams-match";
   const squadsPage = "https://www.cricbuzz.com/cricket-match-squads/176500/teams-match";
+  const factsPage = "https://www.cricbuzz.com/cricket-match-facts/176500/teams-match";
+  const scorecardPage = "https://www.cricbuzz.com/live-cricket-scorecard/176500/teams-match";
+  const commentaryPage = "https://www.cricbuzz.com/live-cricket-full-commentary/176500/teams-match";
   const player = "https://www.cricbuzz.com/profiles/777/sample-player";
   const batting = "https://www.cricbuzz.com/profiles/777/sample-player/all-matches/batting";
   const otherPlayer = "https://www.cricbuzz.com/profiles/778/another-player";
@@ -135,6 +170,14 @@ describe("targeted link following", () => {
 
   it("follows match indexes, match participants, player statistics, schedules and news indexes without page-family fanout", () => {
     expect(shouldFollowTargetedPageLink(matchIndex, matchPage)).toBe(true);
+    expect(shouldFollowTargetedPageLink(matchIndex, squadsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(matchIndex, factsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(matchIndex, scorecardPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(matchIndex, commentaryPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, squadsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, factsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, scorecardPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, commentaryPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(matchPage, squadsPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(squadsPage, player)).toBe(true);
     expect(shouldFollowTargetedPageLink(player, batting)).toBe(true);

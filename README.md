@@ -4,26 +4,24 @@ Crikora is a cricket data collector and JSON API for the Crikora browser extensi
 
 ## Production collection scope
 
-Crikora's collector discovers the public Cricbuzz sitemap tree and applies an explicit cricket-data route allowlist. It includes several thousand potential URLs across the main product data families, rather than treating every site sitemap entry as permission to store unrelated content. The saved 4,721-URL audit in `docs/cricbuzz-sitemap-inventory.json` is used as a fallback seed source when a live sitemap is unavailable.
+Crikora reads the live Cricbuzz sitemaps but applies a strict initial-seed filter so it collects only the website and extension data families: match overviews, player profiles, the full schedule and news. Relevant series context and standings are retained where they support those sections. The saved 4,721-URL audit in `docs/cricbuzz-sitemap-inventory.json` is a fallback source, not an instruction to crawl every listed page.
 
 | Data family | Collection scope |
 | --- | --- |
-| Match centre | Match overviews, facts, scorecards, squads, innings, extras, partnerships, fall of wickets, commentary and structured deliveries from **4 November 2026 onward** |
-| Player profiles and stats | Player profiles, source-labelled fields, biography, React Server Component data, career-stat tabs and player match performance |
-| Teams | Team profiles, squads/rosters, team results, batting/bowling statistics and public team subpages |
-| Series and schedule | Series overview, fixtures, points tables, results, statistics, venues and upcoming schedule indexes |
+| Match centre | Match overviews from **4 November 2026 onward**, plus facts, scorecards, squads, innings, extras, partnerships, fall of wickets and commentary only after the parent match passes the date gate |
+| Player profiles | Every source-labelled field exposed by Cricbuzz, biography, photos, RSC/JSON-LD data, career-stat tabs and profile links; ESPNcricinfo supplements missing photos/URLs when a player match is unambiguous |
+| Schedule | Upcoming fixture indexes, active series context, dates, teams, formats, venues and points tables where exposed |
 | News | Cricket-news articles, full available text, author, category, timestamps, images, tags and source metadata |
-| Rankings | Public cricket rankings and statistical pages, including men's and women's categories |
 
-Both men's and women's cricket are included across every data family. There is no product-wide men's-only filter. The date cutoff applies only to match-detail collection, not to player, team, series, schedule, news or ranking data. Match companion pages are only archived after their parent match has passed the 4 November 2026 date check. Older ball-by-ball history is reserved for the separate Cricsheet import.
+Both men's and women's cricket are included. There is no product-wide men's-only filter. The 4 November cutoff applies only to match details, not to player profiles, schedule or news. Standalone historical scorecards and player-match snippets are not seeded; match companion pages are fetched only after their parent match passes the cutoff. Older ball-by-ball history is reserved for the separate Cricsheet import.
 
-The sitemap audit contains 4,721 distinct URLs. The allowlist intentionally excludes unrelated contact/account pages, premium subscription routes, video collections and photo galleries. The actual queue size is determined by the live sitemap responses, duplicates, unsupported route families and source availability; 4,721 is an inventory ceiling/reference count, not a promise that every URL will be fetched successfully.
+The sitemap audit contains 4,721 distinct URLs, but the initial queue deliberately excludes broad team directories, auction subtrees, standalone historical scorecards, old player-match records, video collections, photo galleries and account/contact pages. The exact queue is the deduplicated set of eligible source pages, not a target number.
 
 If a Cricbuzz player profile has no usable photo, a narrow ESPNcricinfo player-directory lookup resolves the player using name, country and gender when present. It stores the alternate player profile URL, available headshot/image URL and complete returned profile payload. Ambiguous same-name matches are not attached to a Crikora profile.
 
 ## What the collector reads
 
-The backend discovers **both men's and women's** cricket from Cricbuzz's live, upcoming and recent indexes plus the allowlisted sitemap tree. Match details are collected from 4 November 2026 onward; older ball-by-ball history is reserved for the separate Cricsheet import. The format classifier keeps Test, ODI, T20, T10, Sixes and The Hundred distinct. Match facts, scorecards, squads, innings, commentary and participant profiles are enriched through a durable, rate-limited queue. Profile, team, series, schedule, news and ranking pages use the same crawl pipeline. It follows public same-host links and does not guess private Cricbuzz APIs:
+The backend discovers **both men's and women's** cricket from Cricbuzz's live, upcoming and recent indexes, the player sitemap, the cricket-news sitemap and the schedule indexes. Match details are collected from 4 November 2026 onward; older ball-by-ball history is reserved for the separate Cricsheet import. The format classifier keeps Test, ODI, T20, T10, Sixes and The Hundred distinct. Match facts, scorecards, squads, innings, commentary and participant profiles are enriched only after their parent match passes the date gate. Player, schedule and news pages use a durable, rate-limited queue. It follows public same-host links and does not guess private Cricbuzz APIs:
 
 - Match page: live score summary, match identity, competition, teams, format, result and match navigation.
 - Info/facts: date/time text, venue, toss, officials, match facts and related venue/series links.

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import { z } from "zod";
-import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "./providers/cricbuzz-provider.js";
+import { CricbuzzProvider, dedupeCricbuzzPageUrls, isTargetedCricbuzzSeedUrl } from "./providers/cricbuzz-provider.js";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityRepository, type StoredEntity } from "./domain/entities.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
 import { createArchiveObjectStoreFromEnv } from "./storage/neon-s3-archive-object-store.js";
@@ -126,8 +126,7 @@ function savedTargetedCricketInventory(): string[] {
   if (!Array.isArray(parsed.urls)) throw new Error("The saved Cricbuzz inventory has no URL list.");
   return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
-    .filter(value => provider.isAllowedCrawlUrl(value))
-    .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value)))];
+    .filter(value => isTargetedCricbuzzSeedUrl(value)))];
 }
 
 
@@ -415,9 +414,7 @@ app.post("/v1/crawl/start", async (request, reply) => {
   }
   try {
     const discovery = await provider.discoverSitemapUrls(AbortSignal.timeout(25_000));
-    sitemapPageUrls = discovery.pageUrls
-      .filter(value => provider.isAllowedCrawlUrl(value))
-      .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value));
+    sitemapPageUrls = discovery.pageUrls.filter(value => isTargetedCricbuzzSeedUrl(value));
     sitemapDocumentCount = discovery.sitemapUrls.length;
   } catch (error) {
     const status = error && typeof error === "object" && "sourceStatus" in error
@@ -429,7 +426,7 @@ app.post("/v1/crawl/start", async (request, reply) => {
   const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
   const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
   const crawlUrls = dedupeCricbuzzPageUrls([
-    ...provider.getTargetedCollectionSeedUrls(),
+    ...provider.getTargetedCollectionSeedUrls().filter(value => isTargetedCricbuzzSeedUrl(value)),
     ...sitemapPageUrls,
     ...savedTargetedUrls,
     ...selectedNewsUrls,

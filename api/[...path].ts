@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Pool } from "pg";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityType, type StoredEntity } from "../src/domain/entities.js";
 import { Poller } from "../src/ingestion/poller.js";
-import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "../src/providers/cricbuzz-provider.js";
+import { CricbuzzProvider, dedupeCricbuzzPageUrls, isTargetedCricbuzzSeedUrl } from "../src/providers/cricbuzz-provider.js";
 import { PostgresEntityRepository } from "../src/storage/postgres-entity-repository.js";
 import { createArchiveObjectStoreFromEnv } from "../src/storage/neon-s3-archive-object-store.js";
 import { DurableCrawlService } from "../src/ingestion/durable-crawl.js";
@@ -96,8 +96,7 @@ function getSavedTargetedCricketInventory(): string[] {
   if (!Array.isArray(parsed.urls)) throw new Error("The saved Cricbuzz inventory has no URL list.");
   return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
-    .filter(value => getProvider().isAllowedCrawlUrl(value))
-    .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value)))];
+    .filter(value => isTargetedCricbuzzSeedUrl(value)))];
 }
 
 function sendJson(response: ApiResponse, status: number, data: unknown): void {
@@ -420,9 +419,7 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
 
   try {
     const discovery = await provider.discoverSitemapUrls(AbortSignal.timeout(25_000));
-    sitemapPageUrls = discovery.pageUrls
-      .filter(value => provider.isAllowedCrawlUrl(value))
-      .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value));
+    sitemapPageUrls = discovery.pageUrls.filter(value => isTargetedCricbuzzSeedUrl(value));
     sitemapDocumentCount = discovery.sitemapUrls.length;
   } catch (error) {
     const status = error && typeof error === "object" && "sourceStatus" in error
@@ -435,7 +432,7 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
   const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
   const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
   const crawlUrls = dedupeCricbuzzPageUrls([
-    ...provider.getTargetedCollectionSeedUrls(),
+    ...provider.getTargetedCollectionSeedUrls().filter(value => isTargetedCricbuzzSeedUrl(value)),
     ...sitemapPageUrls,
     ...savedTargetedUrls,
     ...selectedNewsUrls,
