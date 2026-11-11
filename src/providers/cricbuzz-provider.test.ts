@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
+  CricbuzzProvider, classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
   isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl,
   labeledValue, parseCricbuzzEntityHtml, shouldFollowTargetedPageLink
 } from "./cricbuzz-provider.js";
@@ -293,6 +293,57 @@ describe("Cricbuzz HTML entity extraction", () => {
     ]));
   });
 });
+
+describe("targeted news sitemap discovery", () => {
+  it("combines current, archived and editorial feeds without crawling other sitemap families", async () => {
+    const feeds: Record<string, string[]> = {
+      "https://www.cricbuzz.com/sitemap/cricket-news.xml": [
+        "https://www.cricbuzz.com/cricket-news/140900/current-story"
+      ],
+      "https://www.cricbuzz.com/sitemap/cricket-news-archive.xml": [
+        "https://www.cricbuzz.com/cricket-news/120000/archive-story"
+      ],
+      "https://www.cricbuzz.com/sitemap/cricket-news-editorials.xml": [
+        "https://www.cricbuzz.com/cricket-news/130000/editorial-story"
+      ]
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const key = input.toString();
+      const urls = feeds[key] ?? [];
+      const xml = `<?xml version="1.0"?><urlset>${urls.map(url => `<url><loc>${url}</loc></url>`).join("")}</urlset>`;
+      return new Response(xml, { status: 200, headers: { "content-type": "application/xml" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const provider = new CricbuzzProvider({
+        minRequestIntervalMs: 0,
+        maxMatchesPerPoll: 1,
+        maxProfilesPerPoll: 1,
+        maxTeamsPerPoll: 1,
+        maxSeriesPerPoll: 1,
+        maxVenuesPerPoll: 1,
+        maxContentPagesPerPoll: 1,
+        timeoutMs: 2_000,
+        maxResponseBytes: 1_000_000,
+        userAgent: "Crikora-Test/1.0"
+      });
+      const urls = await provider.discoverNewsSitemapUrls();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock.mock.calls.map(call => call[0].toString())).toEqual([
+        "https://www.cricbuzz.com/sitemap/cricket-news.xml",
+        "https://www.cricbuzz.com/sitemap/cricket-news-archive.xml",
+        "https://www.cricbuzz.com/sitemap/cricket-news-editorials.xml"
+      ]);
+      expect(urls).toEqual(expect.arrayContaining(Object.values(feeds).flat()));
+      expect(new Set(urls).size).toBe(3);
+      expect(urls.some(url => /cricket-videos|cricket-photo-gallery/.test(url))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("targeted news and schedule normalization", () => {
   it("extracts complete news article metadata and body text", () => {
     const entity = parseCricbuzzEntityHtml(
