@@ -9,13 +9,13 @@ Crikora's production collection is deliberately limited to four Cricbuzz data fa
 | Data family | Collection scope |
 | --- | --- |
 | Match centre | Match overviews, facts, scorecards, squads, innings, extras, partnerships, fall of wickets, commentary and structured deliveries from **4 November 2026 onward** |
-| Player profiles | All profiles exposed by Cricbuzz's player sitemap, plus players discovered from match squads, fixtures and news; all source-labelled profile fields, biography, images, RSC data and career-stat tabs |
-| Schedule | Upcoming/all-series schedule indexes, series-linked fixtures, date/time, teams, format, competition and venue where Cricbuzz exposes them |
+| Player profiles | All profiles exposed by Cricbuzz's player sitemap, plus players discovered from match squads, fixtures and news; all source-labelled profile fields, biography, images, RSC data and career-stat tabs. If a Cricbuzz photo is missing, a narrow ESPNcricinfo player-directory lookup adds its profile URL, image and complete returned player payload. |
+| Schedule | Upcoming schedule indexes and series-linked fixtures, date/time, teams, format, competition and venue where Cricbuzz exposes them; historical series catalogs are excluded |
 | News | Every article exposed by Cricbuzz's cricket-news sitemap, with full available article text, title, author, category, timestamps, image URL, tags and source metadata |
 
 Both men's and women's cricket are included in every collection family. The cutoff is a date filter for match detail collection, not a gender or tournament filter. Older ball-by-ball matches are intentionally excluded from Cricbuzz collection because they will be supplied separately from Cricsheet.
 
-The saved sitemap audit contained 303 player-profile URLs and 770 news-article URLs. Those are the saved fallback inventory counts, not a promise that Cricbuzz's live sitemaps contain exactly those totals today. The normal crawler fetches only the two relevant sitemaps, the three match indexes, and the two schedule/news indexes. It does not traverse the root sitemap, team directory, scorecard archive, videos, photo galleries, rankings, historical matches before the cutoff or unrelated site routes.
+The saved sitemap audit contained 303 player-profile routes (302 profile pages plus one stats tab) and 770 news-article URLs. Those are the saved fallback inventory counts, not a promise that Cricbuzz's live sitemaps contain exactly those totals today. The normal crawler fetches only the two relevant sitemaps, the three match indexes and three focused section indexes (overall upcoming schedule, international upcoming schedule, and latest news). It does not traverse the root sitemap, team directory, scorecard archive, videos, photo galleries, rankings, historical matches before the cutoff or unrelated site routes.
 
 See [the source coverage audit](./docs/STAGE_1_SOURCE_COVERAGE_AUDIT.md) for how the saved inventory was assembled. A captured HTML page is source evidence, not proof that every field Cricbuzz may return through interactive client-side tabs is available in static HTML.
 
