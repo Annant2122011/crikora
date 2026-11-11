@@ -1,13 +1,18 @@
 import "dotenv/config";
 import Fastify from "fastify";
+import { Pool } from "pg";
+import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import { z } from "zod";
-import { CricbuzzProvider } from "./providers/cricbuzz-provider.js";
+import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "./providers/cricbuzz-provider.js";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityRepository, type StoredEntity } from "./domain/entities.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
 import { createArchiveObjectStoreFromEnv } from "./storage/neon-s3-archive-object-store.js";
 import { Poller } from "./ingestion/poller.js";
+import { DurableCrawlService } from "./ingestion/durable-crawl.js";
 import { isArchiveRepository } from "./storage/archive-repository.js";
 
 const env = z.object({
@@ -17,6 +22,11 @@ const env = z.object({
   LOG_LEVEL: z.string().default("info"),
   POLL_INTERVAL_SECONDS: z.enum(["10", "15", "20", "30"]).default("10"),
   CRIKORA_COLLECTION_ENABLED: z.enum(["true", "false"]).default("false"),
+  CRIKORA_AUTO_POLL_ENABLED: z.enum(["true", "false"]).default("false"),
+  CRIKORA_ADMIN_SECRET: z.string().min(24).optional(),
+  CRIKORA_REFRESH_SECRET: z.string().min(24).optional(),
+  CRIKORA_CRAWL_BATCH_SIZE: z.coerce.number().int().min(1).max(3).default(2),
+  CRIKORA_CRAWL_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(8).default(4),
   CRIKORA_CRICINFO_FALLBACK_ENABLED: z.enum(["true", "false"]).default("true"),
   DATABASE_URL: z.string().min(1),
   AWS_ENDPOINT_URL_S3: z.string().optional(),
@@ -66,6 +76,60 @@ const poller = new Poller(provider, repository, Number(env.POLL_INTERVAL_SECONDS
     app.log.error({ err: error }, "Crikora ingestion cycle failed");
   }
 });
+
+const crawlPool = new Pool({
+  connectionString: env.DATABASE_URL,
+  max: 6,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+  application_name: "crikora-railway-api-crawl"
+});
+const durableCrawl = new DurableCrawlService(
+  crawlPool,
+  provider,
+  repository,
+  env.CRIKORA_CRAWL_BATCH_SIZE,
+  env.CRIKORA_CRAWL_MAX_ATTEMPTS
+);
+
+interface CrawlerSettingsRow {
+  refresh_interval_seconds: number;
+  enabled: boolean;
+  last_started_at: Date | string | null;
+  last_completed_at: Date | string | null;
+  lease_until: Date | string | null;
+  last_error: string | null;
+  updated_at: Date | string;
+}
+
+async function getCrawlerSettings(): Promise<CrawlerSettingsRow> {
+  const result = await crawlPool.query<CrawlerSettingsRow>(
+    "SELECT refresh_interval_seconds, enabled, last_started_at, last_completed_at, lease_until, last_error, updated_at FROM public.crikora_crawler_settings WHERE id = 1"
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error("Crikora crawler settings row is missing. Apply migration 002.");
+  return row;
+}
+
+function authMatches(authorization: string | undefined, expected: string | undefined): boolean {
+  if (!authorization || !expected) return false;
+  const provided = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!provided) return false;
+  const left = Buffer.from(provided);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function savedProfileAndNewsInventory(): string[] {
+  const inventoryPath = join(process.cwd(), "docs", "cricbuzz-sitemap-inventory.json");
+  const parsed = JSON.parse(readFileSync(inventoryPath, "utf8")) as { urls?: Array<string | { url?: string }> };
+  if (!Array.isArray(parsed.urls)) throw new Error("The saved Cricbuzz inventory has no URL list.");
+  return [...new Set(parsed.urls
+    .map(item => typeof item === "string" ? item : item.url ?? "")
+    .filter(value => /^https:\/\/www\.cricbuzz\.com\/(?:profiles\/\d+\/|cricket-news\/\d+\/)/i.test(value))
+    .filter(value => provider.isAllowedCrawlUrl(value)))];
+}
+
 
 await app.register(helmet);
 const origins = env.CORS_ORIGINS.split(",").map(value => value.trim()).filter(Boolean);
@@ -268,6 +332,153 @@ app.get("/health", async (_request, reply) => {
   }
 });
 
+app.get("/v1/settings", async (request, reply) => {
+  if (!authMatches(request.headers.authorization, env.CRIKORA_ADMIN_SECRET)) {
+    return reply.code(env.CRIKORA_ADMIN_SECRET ? 401 : 503).send({ error: env.CRIKORA_ADMIN_SECRET ? "Unauthorized" : "CRIKORA_ADMIN_SECRET is not configured." });
+  }
+  const settings = await getCrawlerSettings();
+  return {
+    data: {
+      enabled: settings.enabled,
+      refreshIntervalSeconds: settings.refresh_interval_seconds,
+      lastStartedAt: settings.last_started_at,
+      lastCompletedAt: settings.last_completed_at,
+      updatedAt: settings.updated_at
+    }
+  };
+});
+
+app.put("/v1/settings", async (request, reply) => {
+  if (!authMatches(request.headers.authorization, env.CRIKORA_ADMIN_SECRET)) {
+    return reply.code(env.CRIKORA_ADMIN_SECRET ? 401 : 503).send({ error: env.CRIKORA_ADMIN_SECRET ? "Unauthorized" : "CRIKORA_ADMIN_SECRET is not configured." });
+  }
+  const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+    ? request.body as Record<string, unknown>
+    : {};
+  const interval = body.refreshIntervalSeconds === undefined ? undefined : Number(body.refreshIntervalSeconds);
+  if (interval !== undefined && (!Number.isInteger(interval) || ![10, 15, 20, 30].includes(interval))) {
+    return reply.code(400).send({ error: "refreshIntervalSeconds must be 10, 15, 20 or 30." });
+  }
+  if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+    return reply.code(400).send({ error: "enabled must be a boolean." });
+  }
+  if (body.enabled === true && env.CRIKORA_COLLECTION_ENABLED !== "true") {
+    return reply.code(403).send({ error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
+  }
+  const updated = await crawlPool.query<CrawlerSettingsRow>(
+    "UPDATE public.crikora_crawler_settings\nSET refresh_interval_seconds = COALESCE($1, refresh_interval_seconds), enabled = COALESCE($2, enabled), lease_until = CASE WHEN $2::boolean IS TRUE THEN NULL ELSE lease_until END, last_started_at = CASE WHEN $2::boolean IS TRUE THEN NULL ELSE last_started_at END, updated_at = now()\nWHERE id = 1\nRETURNING refresh_interval_seconds, enabled, last_started_at, last_completed_at, lease_until, last_error, updated_at",
+    [interval ?? null, body.enabled ?? null]
+  );
+  const settings = updated.rows[0];
+  return {
+    data: {
+      enabled: settings?.enabled,
+      refreshIntervalSeconds: settings?.refresh_interval_seconds,
+      lastStartedAt: settings?.last_started_at,
+      lastCompletedAt: settings?.last_completed_at,
+      updatedAt: settings?.updated_at
+    },
+    meta: { availableIntervalsSeconds: [10, 15, 20, 30] }
+  };
+});
+
+app.post("/v1/crawl/start", async (request, reply) => {
+  if (!authMatches(request.headers.authorization, env.CRIKORA_ADMIN_SECRET)) {
+    return reply.code(env.CRIKORA_ADMIN_SECRET ? 401 : 503).send({ error: env.CRIKORA_ADMIN_SECRET ? "Unauthorized" : "CRIKORA_ADMIN_SECRET is not configured." });
+  }
+  if (env.CRIKORA_COLLECTION_ENABLED !== "true") {
+    return reply.code(403).send({ error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
+  }
+  const savedUrls = savedProfileAndNewsInventory();
+  const savedNewsUrls = savedUrls.filter(value => value.includes("/cricket-news/"));
+  const savedPlayerUrls = savedUrls.filter(value => value.includes("/profiles/"));
+  let newsUrls: string[] = [];
+  let playerUrls: string[] = [];
+  const discoveryErrors: string[] = [];
+  for (const [label, discover] of [
+    ["news", () => provider.discoverNewsSitemapUrls(AbortSignal.timeout(25_000))],
+    ["players", () => provider.discoverPlayerSitemapUrls(AbortSignal.timeout(25_000))]
+  ] as const) {
+    try {
+      const found = await discover();
+      if (label === "news") newsUrls = found;
+      else playerUrls = found;
+    } catch (error) {
+      const status = error && typeof error === "object" && "sourceStatus" in error
+        ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+        : undefined;
+      if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
+      discoveryErrors.push(label + " sitemap unavailable (HTTP " + status + "); using saved targeted inventory.");
+    }
+  }
+  const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
+  const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
+  const crawlUrls = dedupeCricbuzzPageUrls([
+    ...provider.getTargetedCollectionSeedUrls(),
+    ...selectedNewsUrls,
+    ...selectedPlayerUrls
+  ]);
+  const result = await durableCrawl.startTargetedCrawl(crawlUrls);
+  return reply.code(result.created ? 202 : 200).send({
+    ok: true,
+    scope: "targeted-product",
+    created: result.created,
+    resumed: result.resumed,
+    data: result.run,
+    meta: {
+      matchIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-match\/live-scores/.test(value)).length,
+      scheduleIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-schedule/.test(value)).length,
+      newsArticleSeedCount: selectedNewsUrls.length,
+      playerProfileSeedCount: selectedPlayerUrls.length,
+      savedProfileAndNewsUrlCount: savedUrls.length,
+      discoveryErrors,
+      crawlUrlCount: crawlUrls.length
+    }
+  });
+});
+
+app.get("/v1/crawl/status", async (request, reply) => {
+  if (!authMatches(request.headers.authorization, env.CRIKORA_ADMIN_SECRET)) {
+    return reply.code(env.CRIKORA_ADMIN_SECRET ? 401 : 503).send({ error: env.CRIKORA_ADMIN_SECRET ? "Unauthorized" : "CRIKORA_ADMIN_SECRET is not configured." });
+  }
+  return { data: await durableCrawl.getLatestStatus() ?? null };
+});
+
+app.post("/v1/crawl/step", async (request, reply) => {
+  if (!authMatches(request.headers.authorization, env.CRIKORA_REFRESH_SECRET)) {
+    return reply.code(env.CRIKORA_REFRESH_SECRET ? 401 : 503).send({ error: env.CRIKORA_REFRESH_SECRET ? "Unauthorized" : "CRIKORA_REFRESH_SECRET is not configured." });
+  }
+  if (env.CRIKORA_COLLECTION_ENABLED !== "true") {
+    return reply.code(403).send({ error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
+  }
+  const settings = await getCrawlerSettings();
+  if (!settings.enabled) return reply.code(409).send({ error: "The crawler is currently disabled." });
+  const step = await durableCrawl.processBatch(AbortSignal.timeout(50_000));
+  const run = await durableCrawl.getLatestStatus();
+  if (step.retryAfterSeconds && step.retryAfterSeconds > 0) {
+    reply.header("retry-after", String(step.retryAfterSeconds));
+  }
+  return { ok: true, ...step, run: run ?? null };
+});
+
+app.post("/v1/refresh/index", async (request, reply) => {
+  if (!authMatches(request.headers.authorization, env.CRIKORA_REFRESH_SECRET)) {
+    return reply.code(env.CRIKORA_REFRESH_SECRET ? 401 : 503).send({ error: env.CRIKORA_REFRESH_SECRET ? "Unauthorized" : "CRIKORA_REFRESH_SECRET is not configured." });
+  }
+  if (env.CRIKORA_COLLECTION_ENABLED !== "true") {
+    return reply.code(403).send({ error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
+  }
+  const settings = await getCrawlerSettings();
+  if (!settings.enabled) return reply.code(409).send({ error: "The crawler is currently disabled." });
+  await poller.tick(AbortSignal.timeout(50_000), true);
+  return {
+    ok: true,
+    status: "completed",
+    refreshIntervalSeconds: settings.refresh_interval_seconds,
+    queuedFollowups: 0
+  };
+});
+
 app.get("/v1/entities/:entityType", async (request, reply) => {
   const params = z.object({ entityType: z.enum(ENTITY_TYPES) }).safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: "Unsupported entity type", allowed: ENTITY_TYPES });
@@ -435,7 +646,7 @@ const cleanupTimer = setInterval(() => {
 cleanupTimer.unref();
 
 await app.listen({ host: env.HOST, port: env.PORT });
-if (env.CRIKORA_COLLECTION_ENABLED === "true") {
+if (env.CRIKORA_AUTO_POLL_ENABLED === "true") {
   void poller.tick().catch(() => undefined);
   poller.start();
 }
@@ -445,6 +656,7 @@ const close = async () => {
   poller.stop();
   await app.close();
   await repository.close();
+  await crawlPool.end();
 };
 process.once("SIGINT", () => void close());
 process.once("SIGTERM", () => void close());
