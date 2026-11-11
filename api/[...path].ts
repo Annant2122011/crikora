@@ -183,6 +183,9 @@ async function health(response: ApiResponse): Promise<void> {
       service: "crikora-crawler-api",
       source: "cricbuzz",
       storage: "postgres",
+      archiveObjectStorage: Boolean(process.env.AWS_ENDPOINT_URL_S3 && process.env.AWS_REGION &&
+        process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && process.env.CRIKORA_ARCHIVE_BUCKET)
+        ? "configured" : "not-configured",
       retentionPolicy: RETENTION_POLICY,
       refreshIntervalSeconds: settings.refresh_interval_seconds,
       enabled: settings.enabled,
