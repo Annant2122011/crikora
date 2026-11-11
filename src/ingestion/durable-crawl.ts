@@ -10,6 +10,7 @@ type QueueStatus = "pending" | "processing" | "completed" | "failed" | "skipped"
 interface RunRow {
   id: string;
   status: RunStatus;
+  collection_scope: string;
   seeded_url_count: number;
   discovered_url_count: number;
   processed_count: number;
@@ -85,8 +86,19 @@ function errorMessage(error: unknown): string {
 
 function pageKind(url: string): string {
   try {
-    const path = new URL(url).pathname.split("/").filter(Boolean);
-    return path[0] ?? "unknown";
+    const path = new URL(url).pathname.replace(/\\/+$/, "") || "/";
+    if (/^\\/live-cricket-scores\\//i.test(path)) return "match";
+    if (/^\\/cricket-match-facts\\//i.test(path)) return "match-facts";
+    if (/^\\/cricket-match-squads\\//i.test(path)) return "match-squads";
+    if (/^\\/live-cricket-scorecard\\//i.test(path)) return "match-scorecard";
+    if (/^\\/live-cricket-full-commentary\\//i.test(path)) return "commentary";
+    if (/^\\/profiles\\/\\d+\\//i.test(path)) return /\\/(?:all-matches|batting|bowling|stats)(?:\\/|$)/i.test(path) ? "player-stats" : "player";
+    if (/^\\/cricket-schedule(?:\\/|$)/i.test(path)) return "schedule";
+    if (/^\\/cricket-series\\/\\d+\\//i.test(path)) return "series";
+    if (/^\\/cricket-news\\/\\d+\\//i.test(path)) return "news";
+    if (/^\\/cricket-news\\/latest-news(?:\\/|$)/i.test(path)) return "news-index";
+    if (/^\\/cricket-news(?:\\/|$)/i.test(path)) return "news-category";
+    return "unknown";
   } catch {
     return "unknown";
   }
@@ -115,15 +127,12 @@ export class DurableCrawlService {
     }
   }
 
-  async startFullCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
-    // Explicitly seed the route-family indexes even when a sitemap omits them.
-    // The archive index is the root of the source-published historical year tree.
+  async startTargetedCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
     const urls = dedupeCricbuzzPageUrls(
-      [...seedUrls, ...getCricbuzzDiscoverySeedUrls()]
-        .filter(url => this.provider.isAllowedCrawlUrl(url))
+      [...seedUrls, ...getCricbuzzDiscoverySeedUrls()].filter(url => this.provider.isAllowedCrawlUrl(url))
     );
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
-    if (!urls.length) throw new Error("The sitemap inventory contains no URLs accepted by the Cricbuzz page allowlist.");
+    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match, schedule, player or news seed URLs.");
     await this.recordCoverageTargets(urls);
 
     const client = await this.pool.connect();
@@ -131,78 +140,85 @@ export class DurableCrawlService {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtext('crikora_full_crawl'))");
 
-      const active = await client.query<RunRow>(
+      let active = await client.query<RunRow>(
         "SELECT * FROM public.crikora_crawl_runs WHERE status IN ('queued','running') ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
       );
-      if (active.rows[0]) {
-        const runId = active.rows[0].id;
-        await this.skipOutOfScopeJobs(client, runId);
-        const inserted = await client.query(
-          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-          [runId, urls, identityKeys, "sitemap"]
+
+      // Preserve the old broad queue as a paused audit record. Do not delete it,
+      // truncate it, or process its thousands of unrelated pending URLs.
+      if (active.rows[0] && active.rows[0]!.collection_scope !== "targeted-product") {
+        await client.query(
+          "UPDATE public.crikora_crawl_runs SET status='paused', last_error=$2, completed_at=now() WHERE id=$1",
+          [active.rows[0]!.id, "Paused and superseded by the targeted Crikora prototype scope: matches from the configured start date, all player profiles, schedules and news."]
         );
-        if (inserted.rowCount) {
-          await client.query(
-            "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2 WHERE id = $1",
-            [runId, inserted.rowCount]
-          );
-        }
-        await client.query("COMMIT");
-        const summary = await this.readSummary(runId);
-        return { created: false, resumed: false, run: summary };
+        active = { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [], _parsers: [], _types: undefined } as typeof active;
       }
 
-      const paused = await client.query<RunRow>(
-        "SELECT * FROM public.crikora_crawl_runs WHERE status = 'paused' ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
-      );
-      if (paused.rows[0]) {
-        const runId = paused.rows[0].id;
-        await this.skipOutOfScopeJobs(client, runId);
+      if (active.rows[0]) {
+        const runId = active.rows[0]!.id;
         const inserted = await client.query(
-          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-          [runId, urls, identityKeys, "sitemap"]
+          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, item.page_kind, 'targeted-seed' FROM unnest($2::text[], $3::text[], $4::text[]) AS item(canonical_url, identity_key, page_kind) ON CONFLICT DO NOTHING",
+          [runId, urls, identityKeys, urls.map(pageKind)]
         );
         if (inserted.rowCount) {
           await client.query(
-            "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2 WHERE id = $1",
+            "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2, completed_at=NULL WHERE id = $1",
             [runId, inserted.rowCount]
           );
         }
         await client.query(
-          "UPDATE public.crikora_crawl_runs SET status = 'running', last_error = NULL, completed_at = NULL WHERE id = $1",
+          "UPDATE public.crikora_crawl_runs SET status='running', last_error=NULL, completed_at=NULL WHERE id=$1",
           [runId]
         );
         await client.query(
-          "UPDATE public.crikora_crawl_queue SET status = 'pending', lease_token = NULL, lease_until = NULL, next_attempt_at = now(), updated_at = now() WHERE run_id = $1 AND status = 'processing'",
+          "UPDATE public.crikora_crawl_queue SET status='pending', lease_token=NULL, lease_until=NULL, next_attempt_at=now(), updated_at=now() WHERE run_id=$1 AND status='processing'",
           [runId]
         );
         await client.query(
-          "UPDATE public.crikora_crawler_settings SET enabled = true, last_error = NULL, lease_until = NULL, updated_at = now() WHERE id = 1"
+          "UPDATE public.crikora_crawler_settings SET enabled=true, last_error=NULL, lease_until=NULL, updated_at=now() WHERE id=1"
         );
         await client.query("COMMIT");
-        const summary = await this.readSummary(runId);
-        return { created: false, resumed: true, run: summary };
+        return { created: false, resumed: true, run: await this.readSummary(runId) };
+      }
+
+      const pausedTarget = await client.query<RunRow>(
+        "SELECT * FROM public.crikora_crawl_runs WHERE status='paused' AND collection_scope='targeted-product' ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
+      );
+      if (pausedTarget.rows[0]) {
+        const runId = pausedTarget.rows[0]!.id;
+        const inserted = await client.query(
+          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, item.page_kind, 'targeted-seed' FROM unnest($2::text[], $3::text[], $4::text[]) AS item(canonical_url, identity_key, page_kind) ON CONFLICT DO NOTHING",
+          [runId, urls, identityKeys, urls.map(pageKind)]
+        );
+        await client.query(
+          "UPDATE public.crikora_crawl_runs SET status='running', last_error=NULL, completed_at=NULL, discovered_url_count=discovered_url_count+$2 WHERE id=$1",
+          [runId, inserted.rowCount ?? 0]
+        );
+        await client.query(
+          "UPDATE public.crikora_crawl_queue SET status='pending', lease_token=NULL, lease_until=NULL, next_attempt_at=now(), updated_at=now() WHERE run_id=$1 AND status='processing'",
+          [runId]
+        );
+        await client.query(
+          "UPDATE public.crikora_crawler_settings SET enabled=true, last_error=NULL, lease_until=NULL, updated_at=now() WHERE id=1"
+        );
+        await client.query("COMMIT");
+        return { created: false, resumed: true, run: await this.readSummary(runId) };
       }
 
       const runId = randomUUID();
       await client.query(
-        "INSERT INTO public.crikora_crawl_runs (id, status, seeded_url_count, discovered_url_count, created_at, started_at) VALUES ($1, 'queued', $2, $2, now(), now())",
+        "INSERT INTO public.crikora_crawl_runs (id,status,collection_scope,seeded_url_count,discovered_url_count,created_at,started_at) VALUES ($1,'running','targeted-product',$2,$2,now(),now())",
         [runId, urls.length]
       );
       await client.query(
-        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-        [runId, urls, identityKeys, "sitemap"]
+        "INSERT INTO public.crikora_crawl_queue (run_id,canonical_url,identity_key,page_kind,discovered_from) SELECT $1,item.canonical_url,item.identity_key,item.page_kind,'targeted-seed' FROM unnest($2::text[],$3::text[],$4::text[]) AS item(canonical_url,identity_key,page_kind) ON CONFLICT DO NOTHING",
+        [runId, urls, identityKeys, urls.map(pageKind)]
       );
       await client.query(
-        "UPDATE public.crikora_crawl_runs SET status = 'running' WHERE id = $1",
-        [runId]
-      );
-      await client.query(
-        "UPDATE public.crikora_crawler_settings SET enabled = true, last_error = NULL, lease_until = NULL, updated_at = now() WHERE id = 1"
+        "UPDATE public.crikora_crawler_settings SET enabled=true,last_error=NULL,lease_until=NULL,updated_at=now() WHERE id=1"
       );
       await client.query("COMMIT");
-      const summary = await this.readSummary(runId);
-      return { created: true, resumed: false, run: summary };
+      return { created: true, resumed: false, run: await this.readSummary(runId) };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
@@ -211,6 +227,10 @@ export class DurableCrawlService {
     }
   }
 
+  async startFullCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
+    // Legacy callers now enter the same narrowly scoped product collection.
+    return this.startTargetedCrawl(seedUrls);
+  }
 
   private async recordCoverageTargets(urls: string[]): Promise<void> {
     if (!urls.length) return;
@@ -302,14 +322,14 @@ export class DurableCrawlService {
                )
              )
              OR
-             (coverage.page_kind IN ('player', 'player-stats', 'team', 'team-subpage',
-                'series', 'series-subpage', 'series-auction', 'venue')
+             (coverage.page_kind IN ('player', 'player-stats', 'series')
                AND coverage.last_fetched_at <= now() - interval '24 hours')
              OR
-             (coverage.page_kind IN ('ranking-or-statistics', 'schedule', 'news-index',
-                'news-category', 'video-index', 'video-collection', 'gallery-index',
-                'player-directory', 'team-directory', 'scorecard-archives')
+             (coverage.page_kind IN ('schedule', 'news-index', 'news-category')
                AND coverage.last_fetched_at <= now() - interval '30 minutes')
+             OR
+             (coverage.page_kind = 'news'
+               AND coverage.last_fetched_at <= now() - interval '24 hours')
            )
          ORDER BY coverage.last_fetched_at ASC, queue.id ASC
          LIMIT 10
