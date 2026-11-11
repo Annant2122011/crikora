@@ -74,6 +74,30 @@ export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
   }
 }
 
+/**
+ * Restrict initial sitemap seeds to the product's data requirements.
+ * Match companion pages are fetched only after their parent match passes the
+ * date gate; historic player-match summaries and broad team directories are
+ * deliberately not seeded.
+ */
+export function isTargetedCricbuzzSeedUrl(value: string): boolean {
+  if (!isTargetedCricbuzzCollectionUrl(value)) return false;
+  try {
+    const url = new URL(value);
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    if (/^\/(?:cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary|player-match-performance|player-match-highlights|cricket-team)(?:\/|$)/i.test(path)) {
+      return false;
+    }
+    if (/^\/cricket-series(?:\/|$)/i.test(path)) {
+      if (/^\/cricket-series\/\d+\/[^/]+$/i.test(path)) return true;
+      return /^\/cricket-series\/\d+\/[^/]+\/(?:matches|points-table|stats|squads|venues)$/i.test(path);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isNewsArticlePath(path: string): boolean {
   return /^\/cricket-news\/\d+\//i.test(path);
 }
