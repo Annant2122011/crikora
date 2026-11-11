@@ -2,7 +2,7 @@
 
 ## Objective
 
-Maintain one Crikora-owned PostgreSQL data platform for (1) the latest normalized data used by the website and browser extension, and (2) an immutable record of every distinct public Cricbuzz page/entity version that Crikora is permitted to collect. New fixtures, match pages, player profiles, series, venues, news and other supported cricket pages are discovered continuously and added without overwriting the evidence already archived.
+Maintain one Crikora-owned PostgreSQL data platform for (1) the latest normalized data used by the website and browser extension, and (2) an immutable record of every distinct public Cricbuzz page/entity version that Crikora is permitted to collect. Crikora's product scope is **both men's and women's cricket**; daily-news selection in ChatGPT is a separate workflow and does not impose a gender filter on this dataset. New fixtures, match pages, player profiles, series, venues, news and other supported cricket pages are discovered continuously and added without overwriting the evidence already archived.
 
 This design does not claim that every fact has been published by Cricbuzz. The collector can only archive fields and records that are actually exposed by accessible source pages. A source coverage ledger must distinguish discovered, captured, skipped, failed and not-yet-discovered pages.
 
@@ -21,7 +21,8 @@ The historical crawl must take the year links and match/series links from the so
 3. **Extraction**: existing TypeScript/Cheerio parser, expanded to retain React Server Component payloads and complete raw HTML page versions. Normalized field-specific parsers are layered on top of captured evidence.
 4. **Current serving cache**: existing `crikora_cache`, still used by the JSON API. Volatile live records may expire after 600 seconds; stable records have no TTL. It is a serving cache, not the archive.
 5. **Permanent evidence archive** (migration 007):
-   - **Typed current projections** (migration 008): normalized player profile columns, extensible typed player attributes and statistic rows, plus separate innings, batting, bowling, extras, partnerships, fall-of-wicket, delivery and commentary tables. These are transactionally refreshed read models; immutable entity snapshots preserve historical versions.
+   - **Typed current projections** (migration 008): normalized player profile columns, extensible typed player attributes and statistic rows, plus separate innings, batting, bowling, extras, partnerships, fall-of-wicket, delivery and commentary tables.
+   - **Typed source identity/contribution extensions** (migration 010): player IDs on delivery, dismissal and fielding rows; individual batter contribution fields on partnerships; and stable source paths for player-stat metrics. These are transactionally refreshed read models; immutable entity snapshots preserve historical versions.
    - `crikora_entity_snapshots`: append-only normalized entity versions, de-duplicated by a canonical content hash.
    - `crikora_source_page_snapshots`: append-only source-page metadata, content SHA-256, original HTML byte count, compressed byte count and a content-addressed `object_key`.
    - Private Neon Object Storage bucket `crikora-raw-archive`: immutable-by-convention gzip HTML objects addressed by SHA-256; the object key is indexed in PostgreSQL. Existing legacy `body_gzip` rows remain supported during migration.
@@ -67,7 +68,7 @@ A full historical archive may take hours or days depending on page count, upstre
 - Preserve unknown source fields in the raw capture/RSC payload rather than discarding them.
 - Never substitute guessed values for missing fields. Emit null/absent and report extraction gaps.
 - Field-level acceptance tests must compare parsed values with captured source fixtures for each route family and every format.
-- The dedicated `cricbuzz-structured.ts` parser reads Cricbuzz React flight data plus semantic HTML tables and explicitly marked commentary elements. It normalizes player identity/biography/attributes/statistics and match innings, batter/bowler lines, extras, partnerships, fall of wickets, deliveries and commentary. Each delivery/commentary item keeps source fields in `rawData` for parser upgrades.
+- The dedicated `cricbuzz-structured.ts` parser reads Cricbuzz React flight data, JSON-LD, semantic HTML tables and explicitly marked commentary elements. Player profiles retain nested arrays/objects as JSON-valued typed attributes while also flattening scalar leaves to typed text/numeric/date/boolean attributes; career metrics are also stored as queryable metric rows with their source paths. The match parser keeps description and commentary distinct and extracts player source IDs, dismissal/fielder identities, individual extras, partnership batter contributions, fall-of-wicket rows and delivery coordinates. Each delivery/commentary item keeps its raw source record in `rawData` for parser upgrades.
 - The match payload exposes `matchData.coverage` with per-page parser signals. A parsed delivery list is marked `present-unverified`, not complete, unless Cricbuzz publishes a verifiable sequence/total. If the source does not expose ball-by-ball data, the collector records `not-exposed`; it must not infer missing balls from wall text.
 - Player core fields are typed PostgreSQL columns; additional source labels and RSC paths use a typed attribute table (text/numeric/date/boolean/JSON), so new Cricbuzz labels do not require a migration for every label. Career/stat table cells are separately queryable by metric label and numeric value.
 
@@ -85,7 +86,7 @@ Crikora covers **both men's and women's cricket** across the website, browser ex
 
 ## Deployment and acceptance gates
 
-1. Apply migrations 001-008 in order on the Crikora Neon branch. Migration 007 provisions immutable raw evidence; migration 008 adds typed current projections. Do not run destructive migrations or reset the database.
+1. Apply migrations 001-010 in order on the Crikora Neon branch. Migration 007 provisions immutable raw evidence; migration 008 adds typed current projections; migration 009 adds the per-delivery extras breakdown; migration 010 adds typed source player identifiers and individual partnership contributions. Do not run destructive migrations or reset the database.
 2. Deploy the API and one durable worker only after CI passes.
 3. Verify health, database ping, migration presence, API history/coverage routes and worker lease.
 4. Run a small archive probe (1877, one modern season, one live match, a player profile, a venue, a news article). Compare source-page count, parsed field counts and extracted values.
