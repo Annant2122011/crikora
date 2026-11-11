@@ -70,6 +70,7 @@ describe("Cricbuzz targeted discovery seeds", () => {
       "https://www.cricbuzz.com/cricket-match/live-scores/upcoming-matches",
       "https://www.cricbuzz.com/cricket-match/live-scores/recent-matches",
       "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
+      "https://www.cricbuzz.com/cricket-schedule/upcoming-series/international",
       "https://www.cricbuzz.com/cricket-schedule/series/all",
       "https://www.cricbuzz.com/cricket-news",
       "https://www.cricbuzz.com/cricket-news/latest-news"
@@ -295,6 +296,34 @@ describe("Cricbuzz HTML entity extraction", () => {
 });
 
 describe("targeted news sitemap discovery", () => {
+  it("continues when an optional archive feed is absent but still respects other source failures", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.endsWith("cricket-news-archive.xml")) {
+        return new Response("Not found", { status: 404 });
+      }
+      const slug = url.endsWith("cricket-news.xml") ? "current" : "editorial";
+      const xml = `<urlset><url><loc>https://www.cricbuzz.com/cricket-news/${slug === "current" ? "140901/current-story" : "140902/editorial-story"}</loc></url></urlset>`;
+      return new Response(xml, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const provider = new CricbuzzProvider({
+        minRequestIntervalMs: 0, maxMatchesPerPoll: 1, maxProfilesPerPoll: 1,
+        maxTeamsPerPoll: 1, maxSeriesPerPoll: 1, maxVenuesPerPoll: 1,
+        maxContentPagesPerPoll: 1, timeoutMs: 2_000, maxResponseBytes: 1_000_000,
+        userAgent: "Crikora-Test/1.0"
+      });
+      const urls = await provider.discoverNewsSitemapUrls();
+      expect(urls).toEqual(expect.arrayContaining([
+        "https://www.cricbuzz.com/cricket-news/140901/current-story",
+        "https://www.cricbuzz.com/cricket-news/140902/editorial-story"
+      ]));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("combines current, archived and editorial feeds without crawling other sitemap families", async () => {
     const feeds: Record<string, string[]> = {
       "https://www.cricbuzz.com/sitemap/cricket-news.xml": [
