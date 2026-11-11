@@ -18,7 +18,7 @@ export interface StoredEntity extends CrikoraEntity {
 export interface EntityRepository {
   upsertMany(entities: CrikoraEntity[]): Promise<void>;
   get(entityType: EntityType, sourceId: string): Promise<StoredEntity | undefined>;
-  list(entityType: EntityType, limit?: number): Promise<StoredEntity[]>;
+  list(entityType: EntityType, limit?: number, offset?: number): Promise<StoredEntity[]>;
   search(query: string, limit?: number): Promise<StoredEntity[]>;
   cleanupExpired(): Promise<number>;
   close(): Promise<void>;
