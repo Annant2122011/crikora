@@ -1600,10 +1600,16 @@ function parseDateTime(value: string): string | null {
     .replace(/\bUTC\b/gi, "+00:00")
     .replace(/\s+/g, " ")
     .trim();
-  const parsed = new Date(normalized);
+  const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2}|GMT|UTC|IST)\s*$/i.test(normalized);
+  const hasClockTime = /\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b/i.test(normalized) ||
+    /T\d{2}:\d{2}/i.test(normalized);
+  // Cricbuzz schedule cards show India-local clock time without a zone.
+  // Interpret those as Asia/Kolkata, not the worker's UTC host timezone.
+  const candidate = hasClockTime && !hasExplicitZone ? normalized + " GMT+0530" : normalized;
+  const parsed = new Date(candidate);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
 
-  const withoutWeekday = normalized.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+/i, "");
+  const withoutWeekday = candidate.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+/i, "");
   const fallback = new Date(withoutWeekday);
   return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
 }
