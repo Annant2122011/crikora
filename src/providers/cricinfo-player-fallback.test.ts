@@ -8,6 +8,28 @@ function jsonResponse(value: unknown): Response {
   });
 }
 
+describe("ESPNcricinfo request context", () => {
+  it("sends requests with the public Cricinfo site origin and browser headers", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("origin")).toBe("https://www.espncricinfo.com");
+      expect(headers.get("referer")).toBe("https://www.espncricinfo.com/");
+      expect(headers.get("sec-fetch-site")).toBe("same-site");
+      expect(headers.get("accept")).toContain("application/json");
+      expect(headers.get("user-agent")).toContain("Chrome/131");
+      return jsonResponse({ content: { featuredTeamsGroups: { groups: [] } } });
+    });
+    const fallback = new CricinfoPlayerFallback({ fetcher, minRequestIntervalMs: 0 });
+
+    await expect(fallback.lookup({
+      fullName: "Ruturaj Gaikwad",
+      country: "India",
+      gender: "Male"
+    })).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ESPNcricinfo player fallback extractor", () => {
   it("resolves both-gender team indexes, preserves the complete profile payload and normalizes photo URLs", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
