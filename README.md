@@ -50,6 +50,7 @@ All successful data endpoints return JSON with a `data` field and small `meta` o
 | `GET /api/v1/matches/:matchId/events` | Match event timeline |
 | `GET /api/v1/players?limit=100&offset=0` | Paginated player directory; profiles contain all extracted source fields |
 | `GET /api/v1/players/:id` | Full player profile |
+| `GET /api/v1/players/compare?ids=11527,10012` | Compare 2–4 players by source-labelled profile fields and career stats |
 | `GET /api/v1/news?limit=100&offset=0` and `GET /api/v1/news/:id` | Full article feed and article detail |
 | `GET /api/v1/schedule?limit=200&offset=0` | Paginated normalized fixture schedule |
 | `GET /api/v1/teams`, `/series`, `/venues` | Supporting entities used by match and profile pages |
@@ -74,7 +75,7 @@ const { data: players } = await crikora.listPlayers();
 // The API's CRIKORA_REFRESH_SECRET must never be bundled into the extension.
 ```
 
-The client exposes typed methods for live/upcoming/recent matches, paginated player profiles, news articles, fixtures, match details and events, supporting entities, entity lookup, search and health checks. It uses JSON-only GET requests, disables browser HTTP caching, supports `AbortSignal`, URL-encodes IDs and surfaces structured HTTP errors. The browser must call the Crikora API, never Cricbuzz directly. Keep `DATABASE_URL` and Crikora's own admin/refresh secrets on the backend only. The public-HTML scraper does not need Cricbuzz-issued API credentials.
+The client exposes typed methods for live/upcoming/recent matches, paginated player profiles, 2–4-player comparison, news articles, fixtures, match details and events, supporting entities, entity lookup, search and health checks. It uses JSON-only GET requests, disables browser HTTP caching, supports `AbortSignal`, URL-encodes IDs and surfaces structured HTTP errors. The browser must call the Crikora API, never Cricbuzz directly. Keep `DATABASE_URL` and Crikora's own admin/refresh secrets on the backend only. The public-HTML scraper does not need Cricbuzz-issued API credentials.
 
 
 
