@@ -282,3 +282,116 @@ describe("Cricbuzz live React Server Component schema compatibility", () => {
     expect(profile.profileImageUrl).toContain("/faceImages/51651.jpg");
   });
 });
+
+describe("deeply structured profile and match fields", () => {
+  it("preserves nested profile objects, arrays, typed scalar leaves, JSON-LD and structured career statistics", () => {
+    const $ = load(`
+      <main><h1>Structured Player</h1><h2>Personal Information</h2><p>Source biography evidence.</p>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"Person","name":"Structured Player","birthDate":"2001-02-03"}</script>
+      </main>`);
+    const profile = normalizeCricbuzzPlayerProfile($, "https://www.cricbuzz.com/profiles/700/structured-player", {
+      rows: { "1": { playerData: {
+        fullName: "Structured Player",
+        country: "India",
+        height: "6 ft 2 in",
+        teams: [{ teamId: 1, teamName: "Mumbai Indians Women" }, { teamId: 2, teamName: "Delhi Capitals Women" }],
+        biography: { paragraphs: ["A complete player profile.", "A second career paragraph."] },
+        careerStats: {
+          ODI: { batting: { matches: 12, innings: 11, runs: 450, average: 45.0, strikeRate: 88.4 } },
+          T20I: { bowling: { matches: 8, wickets: 9, economy: 6.2 } }
+        }
+      } } }
+    });
+    expect(profile).toMatchObject({
+      fullName: "Structured Player",
+      birthDate: "2001-02-03",
+      heightCm: 187.96,
+      teams: ["Mumbai Indians Women", "Delhi Capitals Women"]
+    });
+    expect(profile.biography).toContain("A complete player profile.");
+    expect(profile.attributes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fieldPath: "teams", valueType: "json" }),
+      expect.objectContaining({ fieldPath: "careerStats.ODI.batting.runs", value: 450, valueType: "numeric" })
+    ]));
+    expect(profile.statistics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section: "ODI", metricKey: "runs", valueNumeric: 450, sourcePath: expect.stringContaining("careerStats.ODI") }),
+      expect.objectContaining({ section: "T20I", metricKey: "wickets", valueNumeric: 9 })
+    ]));
+  });
+
+  it("keeps description, commentary, dismissal, fielding and per-delivery extras separately typed", () => {
+    const data = parseCricbuzzMatchData("9988", undefined, undefined, {
+      commentary: { matchPreviewFullComm: { commentary: [{
+        inningsId: 1,
+        commentaryList: [{
+          eventId: "run-out-1",
+          ballNbr: 6,
+          event: "RUN_OUT",
+          batsmanStriker: { batId: 101, batName: "Striker", batRuns: 0, outDesc: "run out" },
+          batsmanNonStriker: { batId: 102, batName: "Non Striker" },
+          bowlerStriker: { bowlId: 201, bowlName: "Bowler" },
+          extrasData: { total: 1, wides: 1, byes: 0, legByes: 0, noBalls: 0, penalty: 0 },
+          wicketInfo: {
+            wicketType: "run out",
+            playerOut: "Striker",
+            playerOutId: 101,
+            fieldersInvolved: [{ id: 301, name: "Keeper" }]
+          },
+          description: "Striker run out at the striker's end.",
+          commText: "RUN OUT, batter is short of the crease."
+        }]
+      }] } }
+    });
+    expect(data.deliveries).toEqual([
+      expect.objectContaining({
+        sourceEventId: "run-out-1",
+        overNumber: 0,
+        ballNumber: 6,
+        batter: "Striker",
+        batterSourceId: "101",
+        nonStriker: "Non Striker",
+        nonStrikerSourceId: "102",
+        bowler: "Bowler",
+        bowlerSourceId: "201",
+        extraRuns: 1,
+        extraType: "wide",
+        extras: { total: 1, byes: 0, legByes: 0, wides: 1, noBalls: 0, penalty: 0 },
+        isWicket: true,
+        dismissalType: "run out",
+        dismissedPlayer: "Striker",
+        dismissedPlayerSourceId: "101",
+        fielder: "Keeper",
+        fielderSourceId: "301",
+        description: "Striker run out at the striker's end.",
+        commentary: "RUN OUT, batter is short of the crease."
+      })
+    ]);
+    expect(data.commentary[0]).toMatchObject({
+      sourceEventId: "run-out-1",
+      description: "Striker run out at the striker's end.",
+      commentary: "RUN OUT, batter is short of the crease."
+    });
+  });
+
+  it("parses extras, fall-of-wickets and partnership tables by their actual header labels", () => {
+    const scorecard = load(`
+      <main><h2>2nd Innings</h2>
+        <table><thead><tr><th>Extras</th><th>Byes</th><th>Leg Byes</th><th>Wides</th><th>No Balls</th><th>Penalty</th></tr></thead>
+          <tbody><tr><td>7</td><td>1</td><td>2</td><td>3</td><td>1</td><td>0</td></tr></tbody>
+        </table>
+        <table><thead><tr><th>Wicket</th><th>Score</th><th>Batter</th><th>Over</th><th>Description</th></tr></thead>
+          <tbody><tr><td>1</td><td>23</td><td>Player Out</td><td>4.2</td><td>caught at deep midwicket</td></tr></tbody>
+        </table>
+        <table><thead><tr><th>Batter 1</th><th>Batter 2</th><th>Runs</th><th>Balls</th></tr></thead>
+          <tbody><tr><td>Player A</td><td>Player B</td><td>64</td><td>42</td></tr></tbody>
+        </table>
+      </main>`);
+    const data = parseCricbuzzMatchData("3333", scorecard, undefined);
+    expect(data.innings[0]).toMatchObject({
+      inningsNumber: 2,
+      extras: { total: 7, byes: 1, legByes: 2, wides: 3, noBalls: 1, penalty: 0 },
+      fallOfWickets: [expect.objectContaining({ wicketNumber: 1, score: 23, batterName: "Player Out", over: "4.2" })],
+      partnerships: [expect.objectContaining({ batterOne: "Player A", batterTwo: "Player B", runs: 64, balls: 42 })]
+    });
+  });
+});
