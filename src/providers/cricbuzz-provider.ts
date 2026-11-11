@@ -97,10 +97,12 @@ function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boo
     const sourcePlayer = playerProfilePath(sourcePath);
     const targetPlayer = playerProfilePath(targetPath);
     const sourceSchedule = /^\/(?:cricket-schedule|cricket-series)(?:\/|$)/i.test(sourcePath);
+    const sourceMatchIndex = /^\/cricket-match\/live-scores(?:\/|$)/i.test(sourcePath);
     const sourceNewsIndex = /^\/cricket-news(?:\/|$)/i.test(sourcePath) && !sourceNewsArticle;
 
     // News indexes discover articles. Articles never recurse into more articles.
     if (sourceNewsIndex) return targetNewsArticle || /^\/cricket-news\/(?:editorial|latest-news)(?:\/|$)/i.test(targetPath);
+    if (sourceMatchIndex) return targetMatch;
     if (sourceNewsArticle) return Boolean(targetPlayer && !targetPlayer.isStats);
 
     // A schedule or series index may discover match fixtures and series detail.
@@ -368,14 +370,16 @@ export class CricbuzzProvider implements CricketProvider {
         const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
         const stub = parseMatchIndexStub(item, page, link);
         discovered.set(item.id, item);
-        matches.push(stub);
-        addEntity(
-          entities,
-          "match",
-          item.id,
-          stub.sourceUrl ?? link.url,
-          stub as unknown as Record<string, unknown>
-        );
+        if (index.bucket !== "completed" || isAtOrAfterConfiguredMatchStart(stub.startTime)) {
+          matches.push(stub);
+          addEntity(
+            entities,
+            "match",
+            item.id,
+            stub.sourceUrl ?? link.url,
+            stub as unknown as Record<string, unknown>
+          );
+        }
       }
     }
 
@@ -405,6 +409,14 @@ export class CricbuzzProvider implements CricketProvider {
     const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
     return parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls.filter(value =>
       isNewsArticlePath(new URL(value).pathname)
+    );
+  }
+
+  async discoverPlayerSitemapUrls(signal?: AbortSignal): Promise<string[]> {
+    const sitemapUrl = new URL("/sitemap/cricket-player-profile.xml", ORIGIN);
+    const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+    return parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls.filter(value =>
+      Boolean(playerProfilePath(new URL(value).pathname))
     );
   }
 
@@ -1131,6 +1143,130 @@ function parseMatch(
   };
 }
 
+
+interface NormalizedNewsArticle {
+  sourceId: string;
+  canonicalUrl: string;
+  title: string;
+  summary?: string;
+  bodyText: string;
+  author?: string;
+  category?: string;
+  publishedAt?: string;
+  modifiedAt?: string;
+  primaryImageUrl?: string;
+  tags: string[];
+  rawMeta: Record<string, string>;
+}
+
+interface NormalizedScheduleFixture {
+  sourceId: string;
+  matchUrl: string;
+  matchTitle: string;
+  homeTeam?: string;
+  awayTeam?: string;
+  competition: string;
+  format: string;
+  startTime?: string;
+  venue?: string;
+  sourceText: string;
+}
+
+function firstMeta($: PageDoc, selectors: string[]): string | undefined {
+  for (const selector of selectors) {
+    const value = clean($(selector).first().attr("content") ?? "");
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function extractNewsArticle($: PageDoc, url: string): NormalizedNewsArticle {
+  const identity = classifyCricbuzzEntityUrl(url);
+  const canonicalUrl = $("link[rel='canonical']").attr("href") || url;
+  const title = clean($("h1").first().text() ||
+    firstMeta($, ["meta[property='og:title']", "meta[name='twitter:title']"]) ||
+    $("title").text());
+  const paragraphs = $("article p, .cb-nws-dtl-itms p, .cb-nws-para, .cb-nws-sub-txt, [itemprop='articleBody'] p")
+    .toArray().map(el => clean($(el).text())).filter(text => text.length > 20);
+  const uniqueParagraphs = [...new Set(paragraphs)];
+  const bodyText = uniqueParagraphs.join("\n\n") || getMainText($).slice(title.length).trim();
+  const summary = firstMeta($, ["meta[name='description']", "meta[property='og:description']", "meta[name='twitter:description']"]);
+  const author = firstMeta($, ["meta[name='author']", "meta[property='article:author']", "meta[name='byl']"]) ??
+    (clean($(".cb-nws-auth-ttl,.cb-nws-author,[rel='author'],[itemprop='author']").first().text()) || undefined);
+  const publishedRaw = firstMeta($, [
+    "meta[property='article:published_time']", "meta[itemprop='datePublished']",
+    "meta[name='date']", "meta[name='pubdate']"
+  ]) ?? $("time[datetime]").first().attr("datetime");
+  const modifiedRaw = firstMeta($, ["meta[property='article:modified_time']", "meta[itemprop='dateModified']"]);
+  const section = firstMeta($, ["meta[property='article:section']"]);
+  const image = firstMeta($, ["meta[property='og:image']", "meta[name='twitter:image']"]);
+  const tags = [...new Set($("a[href*='/cricket-series/'],a[href*='/profiles/'],.cb-nws-tags a")
+    .toArray().map(el => clean($(el).text())).filter(Boolean))].slice(0, 40);
+  const publishedAt = publishedRaw ? parseDateTime(publishedRaw) : null;
+  const modifiedAt = modifiedRaw ? parseDateTime(modifiedRaw) : null;
+  return {
+    sourceId: identity?.sourceId ?? "news:" + stableHash(canonicalUrl),
+    canonicalUrl,
+    title,
+    ...(summary ? { summary } : {}),
+    bodyText: bodyText.slice(0, 200_000),
+    ...(author ? { author } : {}),
+    ...(section ? { category: section } : {}),
+    ...(publishedAt ? { publishedAt } : {}),
+    ...(modifiedAt ? { modifiedAt } : {}),
+    ...(image ? { primaryImageUrl: image } : {}),
+    tags,
+    rawMeta: extractMeta($)
+  };
+}
+
+function extractScheduleFixtures($: PageDoc, url: string): NormalizedScheduleFixture[] {
+  const fixtures = new Map<string, NormalizedScheduleFixture>();
+  const pageTitle = clean($("h1").first().text() || $("title").text());
+  $("a[href]").each((_index, element) => {
+    const link = $(element);
+    const href = link.attr("href");
+    if (!href) return;
+    let absolute: URL;
+    try { absolute = new URL(href, url); } catch { return; }
+    const match = absolute.pathname.match(/^\/live-cricket-scores\/(\d+)\/([^/]+)\/?$/);
+    if (!match) return;
+    const sourceId = match[1]!;
+    if (fixtures.has(sourceId)) return;
+    const row = link.closest("tr");
+    const card = row.length ? row : link.parent().parent();
+    const sourceText = clean(card.text() || link.text());
+    const cells = card.find("td").toArray().map(cell => clean($(cell).text()));
+    const table = card.closest("table");
+    const headers = table.find("thead tr").first().find("th").toArray().map(cell => clean($(cell).text()));
+    const valueFor = (patterns: RegExp[]): string | undefined => {
+      for (let index = 0; index < headers.length; index++) {
+        if (patterns.some(pattern => pattern.test(headers[index] ?? "")) && cells[index]) return cells[index];
+      }
+      return undefined;
+    };
+    const matchTitle = clean(link.text()) || sourceText.slice(0, 180);
+    const teamPair = matchTitle.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
+    const dateText = valueFor([/date/i, /time/i]) ??
+      sourceText.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\s*\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0];
+    const venue = valueFor([/venue/i]);
+    const startTime = dateText ? parseDateTime(dateText) : null;
+    fixtures.set(sourceId, {
+      sourceId,
+      matchUrl: absolute.toString(),
+      matchTitle,
+      ...(teamPair?.[1] ? { homeTeam: clean(teamPair[1]) } : {}),
+      ...(teamPair?.[2] ? { awayTeam: clean(teamPair[2]) } : {}),
+      competition: pageTitle || "Cricket",
+      format: classifyMatchFormat(pageTitle + " " + sourceText),
+      ...(startTime ? { startTime } : {}),
+      ...(venue ? { venue } : {}),
+      sourceText: sourceText.slice(0, 4000)
+    });
+  });
+  return [...fixtures.values()];
+}
+
 function parseEntityPage($: PageDoc, url: string, expected?: EntityType): CrikoraEntity | undefined {
   const path = new URL(url).pathname;
   const rule = PATH_RULES.find(item => item.pattern.test(path));
@@ -1159,6 +1295,9 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
     pageKind: contentKind,
     name: data.title ?? data.heading ?? new URL(url).pathname.split("/").filter(Boolean).at(-1),
     profile: entityType === "player" ? normalizeCricbuzzPlayerProfile($, url, data.serverComponents) : undefined,
+    newsArticle: contentKind === "news" ? extractNewsArticle($, url) : undefined,
+    scheduleFixtures: ["schedule", "series", "series-subpage"].includes(contentKind)
+      ? extractScheduleFixtures($, url) : undefined,
     statistics: data.tables,
     ...(relatedIdentity ? {
       relatedEntityType: relatedIdentity.type,
