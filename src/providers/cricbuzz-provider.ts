@@ -1596,20 +1596,43 @@ function parseDateTime(value: string): string | null {
   if (!value.trim()) return null;
   const normalized = value
     .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
-    .replace(/\bIST\b/gi, "+05:30")
-    .replace(/\bUTC\b/gi, "+00:00")
     .replace(/\s+/g, " ")
     .trim();
-  const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2}|GMT|UTC|IST)\s*$/i.test(normalized);
-  const hasClockTime = /\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b/i.test(normalized) ||
-    /T\d{2}:\d{2}/i.test(normalized);
-  // Cricbuzz schedule cards show India-local clock time without a zone.
-  // Interpret those as Asia/Kolkata, not the worker's UTC host timezone.
-  const candidate = hasClockTime && !hasExplicitZone ? normalized + " GMT+0530" : normalized;
-  const parsed = new Date(candidate);
+
+  // Parse Cricbuzz's common schedule-card form explicitly. Those clock times
+  // are India-local even when the page omits "IST".
+  const localIndia = normalized.match(
+    /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})(?:,?\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?$/i
+  );
+  if (localIndia) {
+    const months: Record<string, number> = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+    };
+    const month = months[localIndia[2]!.slice(0, 3).toLowerCase()];
+    if (month !== undefined) {
+      const day = Number(localIndia[1]);
+      const year = Number(localIndia[3]);
+      let hour = Number(localIndia[4] ?? 0);
+      const minute = Number(localIndia[5] ?? 0);
+      const meridiem = localIndia[6]?.toUpperCase();
+      if (meridiem === "PM" && hour < 12) hour += 12;
+      if (meridiem === "AM" && hour === 12) hour = 0;
+      const utcMillis = Date.UTC(year, month, day, hour, minute) - 330 * 60_000;
+      const date = new Date(utcMillis);
+      if (date.getUTCFullYear() === year && date.getUTCMonth() === month && date.getUTCDate() === day) {
+        return date.toISOString();
+      }
+    }
+  }
+
+  const withExplicitZone = normalized
+    .replace(/\bIST\b/gi, "+05:30")
+    .replace(/\bUTC\b/gi, "+00:00");
+  const parsed = new Date(withExplicitZone);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
 
-  const withoutWeekday = candidate.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+/i, "");
+  const withoutWeekday = withExplicitZone.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+/i, "");
   const fallback = new Date(withoutWeekday);
   return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
 }
