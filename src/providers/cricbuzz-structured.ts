@@ -940,9 +940,9 @@ function normalizeStructuredDelivery(record: DataRecord, matchId: string): Norma
     structuredPlayerId(dismissalContainer, ["playerOutId", "dismissedPlayerId", "batId", "playerId", "id"]) ??
     (isWicket ? batterSourceId : undefined);
   const fielder = stringField(record, ["fielder", "fielderName", "catcher"]) ??
-    nestedString(record, ["fielderDetails", "fieldingPlayer", "fielderInfo"], ["name", "playerName", "fieldingName"]);
+    nestedString(record, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["name", "playerName", "fieldingName"]);
   const fielderSourceId = structuredPlayerId(record, ["fielderId", "catcherId", "fieldingPlayerId"]) ??
-    nestedPlayerId(record, ["fielderDetails", "fieldingPlayer", "fielderInfo"], ["id", "playerId", "fielderId"]);
+    nestedPlayerId(record, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["id", "playerId", "fielderId"]);
   const description = descriptionText(record) ?? stringField(dismissalContainer, ["description", "text"]);
   const explicitExtraType = stringField(record, ["extraType", "extrasType", "extraTypeName"]);
   const inferredExtraType = [
