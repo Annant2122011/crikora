@@ -291,7 +291,7 @@ export class CrikoraApiClient {
   }
 
   comparePlayers(playerIds: string[], signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraPlayerComparison>> {
-    if (playerIds.length < 2 || playerIds.length > 4 || playerIds.some(id => !/^\\d{1,12}$/.test(id))) {
+    if (playerIds.length < 2 || playerIds.length > 4 || playerIds.some(id => !/^\d{1,12}$/.test(id))) {
       throw new TypeError("Player comparison requires 2 to 4 numeric Cricbuzz player IDs.");
     }
     const params = new URLSearchParams({ ids: playerIds.join(",") });
