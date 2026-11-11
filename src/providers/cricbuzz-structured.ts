@@ -808,23 +808,24 @@ export function normalizeCricbuzzPlayerProfile(
   const teamValue = values(["teams", "team", "currentTeams", "domesticTeams", "teamNames"]);
   const teams = teamValue ? teamValue.split(/[,;|]/).map(clean).filter(Boolean) : [];
   const attributes: NormalizedPlayerAttribute[] = [];
-  for (const record of allRecords) {
-    const section = asString(scalar(record, ["section", "category", "group"]));
-    const label = asString(scalar(record, ["label", "name", "key", "title"]));
+  // Traverse each source root once, preserving full RSC/JSON-LD paths such as
+  // rows.1.playerData.careerStats.ODI.batting.runs instead of losing ancestors.
+  for (const root of structuredRoots) flattenProfileAttributes(root, "", undefined, attributes);
+  for (const record of labels) {
+    const label = asString(scalar(record, ["label", "fieldLabel", "displayLabel"]));
     const value = scalar(record, ["value", "text", "displayValue"]);
-    if (label && value !== undefined && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")) {
-      const itemValue = typeof value === "string" ? clean(value) : value;
-      if (String(itemValue)) attributes.push({
-        fieldPath: label.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
-        sourceLabel: label,
-        ...(section ? { section } : {}),
-        value: itemValue,
-        valueType: typeof itemValue === "number" ? "numeric" : typeof itemValue === "boolean" ? "boolean" :
-          (/^\d{4}-\d{2}-\d{2}$/.test(String(itemValue)) || (/born|birth|date/i.test(label) && Boolean(parseBirthDate(String(itemValue))))) ? "date" : "text"
-      });
-    } else {
-      flattenProfileAttributes(record, "", section, attributes);
-    }
+    const section = asString(scalar(record, ["section", "category", "group"]));
+    if (!label || value === undefined || (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean")) continue;
+    const itemValue = typeof value === "string" ? clean(value) : value;
+    if (!String(itemValue)) continue;
+    attributes.push({
+      fieldPath: label.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+      sourceLabel: label,
+      ...(section ? { section } : {}),
+      value: itemValue,
+      valueType: typeof itemValue === "number" ? "numeric" : typeof itemValue === "boolean" ? "boolean" :
+        (/^\d{4}-\d{2}-\d{2}$/.test(String(itemValue)) || (/born|birth|date/i.test(label) && Boolean(parseBirthDate(String(itemValue))))) ? "date" : "text"
+    });
   }
   const allFields: Record<string, string> = {};
   for (const record of allRecords) {
