@@ -552,7 +552,9 @@ export class CricbuzzProvider implements CricketProvider {
       // that the fixture is after the requested historical cutoff.
       if (!isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
         const datedPages = [page, info].filter((item): item is PageRecord => Boolean(item));
-        return { discoveredUrls: [], skipped: true, sourcePages: datedPages.map(toSourcePageCapture) };
+        // The date-check request is transient metadata only. Never archive
+        // pre-cutoff match pages or persist their source HTML.
+        return { discoveredUrls: [], skipped: true };
       }
       const scorecard = scorecardUrl ? await this.tryFetchPage(new URL(scorecardUrl), "durable:scorecard", signal) : undefined;
       const squadsPage = squadsUrl ? await this.tryFetchPage(new URL(squadsUrl), "durable:squads", signal) : undefined;
@@ -606,7 +608,9 @@ export class CricbuzzProvider implements CricketProvider {
       );
       if (!isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
         const datedPages = [page, overview, info].filter((item): item is PageRecord => Boolean(item));
-        return { discoveredUrls: [], skipped: true, sourcePages: datedPages.map(toSourcePageCapture) };
+        // The date-check request is transient metadata only. Never archive
+        // pre-cutoff match pages or persist their source HTML.
+        return { discoveredUrls: [], skipped: true };
       }
       const squads = await this.tryFetchPage(new URL(squadsUrl), "archive:match-squads", signal);
       const commentary = await this.tryFetchPage(new URL(commentaryUrl), "archive:match-commentary", signal);
@@ -1161,6 +1165,8 @@ function parseMatch(
   const venueLink = getLinks(info?.$ ?? $, info?.url ?? base.url).find(link => /\/venues\/\d+/.test(link.path));
   const venueText = labeledValue(infoText || body, "Venue");
   const dateTimeText = labeledValue(infoText || body, "Date & Time") || labeledValue(infoText || body, "Time") ||
+    info?.$("time[datetime]").first().attr("datetime") ||
+    info?.$("meta[property='article:published_time']").first().attr("content") ||
     $("time[datetime]").first().attr("datetime") || "";
   const toss = labeledValue(infoText || body, "Toss");
   const result = body.match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
