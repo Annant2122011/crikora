@@ -127,7 +127,7 @@ function savedTargetedCricketInventory(): string[] {
   return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
     .filter(value => provider.isAllowedCrawlUrl(value))
-    .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value))];
+    .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value)))];
 }
 
 
