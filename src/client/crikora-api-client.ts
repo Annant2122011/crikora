@@ -63,6 +63,12 @@ export interface CrikoraEntity {
 export interface MatchQuery {
   status?: CrikoraMatchStatus;
   limit?: number;
+  offset?: number;
+}
+
+export interface EntityQuery {
+  limit?: number;
+  offset?: number;
 }
 
 export interface ContentQuery {
@@ -104,11 +110,13 @@ export interface CrikoraScheduleFixture {
 
 export interface NewsQuery {
   limit?: number;
+  offset?: number;
   before?: string;
 }
 
 export interface ScheduleQuery {
   limit?: number;
+  offset?: number;
   from?: string;
 }
 
@@ -190,6 +198,7 @@ export class CrikoraApiClient {
     const params = new URLSearchParams();
     if (query.status) params.set("status", query.status);
     if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
     const suffix = params.size ? `?${params.toString()}` : "";
     return this.request<CrikoraEnvelope<CrikoraMatch[]>>(`/v1/matches${suffix}`, signal);
   }
@@ -236,6 +245,10 @@ export class CrikoraApiClient {
     return this.listEntities("venues", limit, signal);
   }
 
+  listPlayersPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("players", query.limit ?? 100, query.offset ?? 0, signal);
+  }
+
   getEntity(entityType: string, sourceId: string, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity>> {
     return this.request<CrikoraEnvelope<CrikoraEntity>>(
       `/v1/entities/${encodeURIComponent(entityType)}/${encodeURIComponent(sourceId)}`,
@@ -254,6 +267,7 @@ export class CrikoraApiClient {
   listNews(query: NewsQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraNewsArticle[]>> {
     const params = new URLSearchParams();
     if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
     if (query.before) params.set("before", query.before);
     const suffix = params.size ? `?${params.toString()}` : "";
     return this.request<CrikoraEnvelope<CrikoraNewsArticle[]>>(`/v1/news${suffix}`, signal);
@@ -269,6 +283,7 @@ export class CrikoraApiClient {
   listSchedule(query: ScheduleQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraScheduleFixture[]>> {
     const params = new URLSearchParams();
     if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
     if (query.from) params.set("from", query.from);
     const suffix = params.size ? `?${params.toString()}` : "";
     return this.request<CrikoraEnvelope<CrikoraScheduleFixture[]>>(`/v1/schedule${suffix}`, signal);
@@ -339,9 +354,10 @@ export class CrikoraApiClient {
   private listEntities(
     entity: string,
     limit: number,
+    offset = 0,
     signal?: AbortSignal
   ): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    const params = new URLSearchParams({ limit: String(limit) });
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/${entity}?${params.toString()}`, signal);
   }
 
