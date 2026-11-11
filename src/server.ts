@@ -126,7 +126,8 @@ function savedTargetedCricketInventory(): string[] {
   if (!Array.isArray(parsed.urls)) throw new Error("The saved Cricbuzz inventory has no URL list.");
   return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
-    .filter(value => provider.isAllowedCrawlUrl(value)))];
+    .filter(value => provider.isAllowedCrawlUrl(value))
+    .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value))];
 }
 
 
@@ -414,7 +415,9 @@ app.post("/v1/crawl/start", async (request, reply) => {
   }
   try {
     const discovery = await provider.discoverSitemapUrls(AbortSignal.timeout(25_000));
-    sitemapPageUrls = discovery.pageUrls.filter(value => provider.isAllowedCrawlUrl(value));
+    sitemapPageUrls = discovery.pageUrls
+      .filter(value => provider.isAllowedCrawlUrl(value))
+      .filter(value => !/^https:\/\/www\.cricbuzz\.com\/(?:cricket-match-facts|cricket-match-squads|live-cricket-full-commentary|cricket-match-highlights|live-cricket-graphs|live-cricket-over-by-over|cricket-match-forecast|special-content\/wicket-zone|player-match-highlights)\//i.test(value));
     sitemapDocumentCount = discovery.sitemapUrls.length;
   } catch (error) {
     const status = error && typeof error === "object" && "sourceStatus" in error
