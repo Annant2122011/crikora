@@ -373,7 +373,16 @@ export class DurableCrawlService {
 
     const leaseToken = randomUUID();
     const claimed = await this.pool.query<QueueRow>(
-      "WITH candidates AS (SELECT id FROM public.crikora_crawl_queue WHERE run_id = $1 AND ((status = 'pending' AND next_attempt_at <= now()) OR (status = 'processing' AND lease_until <= now())) ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED) UPDATE public.crikora_crawl_queue AS queue SET status = 'processing', attempts = queue.attempts + 1, lease_token = $3, lease_until = now() + make_interval(secs => $4), updated_at = now() FROM candidates WHERE queue.id = candidates.id RETURNING queue.id, queue.canonical_url, queue.attempts",
+      "WITH candidates AS (SELECT id FROM public.crikora_crawl_queue WHERE run_id = $1 AND ((status = 'pending' AND next_attempt_at <= now()) OR (status = 'processing' AND lease_until <= now())) ORDER BY CASE
+        WHEN page_kind = 'player' THEN 0
+        WHEN page_kind = 'player-stats' THEN 1
+        WHEN page_kind = 'match' THEN 2
+        WHEN page_kind = 'schedule' THEN 3
+        WHEN page_kind IN ('series', 'series-subpage') THEN 4
+        WHEN page_kind = 'ranking' THEN 5
+        WHEN page_kind = 'news' THEN 6
+        ELSE 7
+      END, id LIMIT $2 FOR UPDATE SKIP LOCKED) UPDATE public.crikora_crawl_queue AS queue SET status = 'processing', attempts = queue.attempts + 1, lease_token = $3, lease_until = now() + make_interval(secs => $4), updated_at = now() FROM candidates WHERE queue.id = candidates.id RETURNING queue.id, queue.canonical_url, queue.attempts",
       [active.id, this.batchSize, leaseToken, this.leaseSeconds]
     );
 
