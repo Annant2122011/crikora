@@ -787,7 +787,8 @@ export function normalizeCricbuzzPlayerProfile(
   const values = (aliases: string[]) => profileValue(allRecords, aliases);
   const htmlSections = $("h1,h2,h3,h4").toArray().map(heading => {
     const node = $(heading);
-    return { heading: clean(node.text()), text: clean(node.nextUntil("h1,h2,h3,h4").text()) };
+    const content = node.nextUntil("h1,h2,h3,h4").not("script,style,noscript").text();
+    return { heading: clean(node.text()), text: clean(content) };
   }).filter(section => section.heading && section.text);
   const structuredSections = rscRecords.map(record => ({
     heading: stringField(record, ["heading", "sectionTitle", "sectionName", "title", "label"]),
@@ -798,9 +799,11 @@ export function normalizeCricbuzzPlayerProfile(
   const sections = [...new Map([...htmlSections, ...structuredSections].map(section =>
     [section.heading.toLowerCase() + ":" + section.text, section]
   )).values()];
-  const biography = sections.filter(section => /bio|about|career|summary|early life|profile|personal|background/i.test(section.heading))
-    .map(section => section.text).join("\n\n") ||
-    values(["biography", "bio", "description", "playerDescription", "summary", "about", "profileDescription"]);
+  const htmlBiography = sections.filter(section => /bio|about|career|summary|early life|profile|background/i.test(section.heading))
+    .map(section => section.text);
+  const structuredBiography = values(["biography", "bio", "description", "playerDescription", "summary", "about", "profileDescription"]);
+  const biography = [...new Set([...htmlBiography, structuredBiography].filter((value): value is string => Boolean(value)))]
+    .join("\n\n");
   const image = $("meta[property='og:image']").attr("content") ||
     $("img[alt]").filter((_i, element) => /player|profile/i.test($(element).attr("alt") ?? "")).first().attr("src") ||
     $("img[alt]").first().attr("src") ||
@@ -834,6 +837,16 @@ export function normalizeCricbuzzPlayerProfile(
     if (label && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")) {
       allFields[label] = String(value);
     }
+  }
+  // Keep original source spelling/value (for example DoBFormat) separate from normalized typed values.
+  for (const root of structuredRoots) {
+    walkRecords(root, record => {
+      for (const [key, value] of Object.entries(record)) {
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+          allFields[key] ??= String(value);
+        }
+      }
+    });
   }
   // Include every scalar React payload field under its original source key as well as HTML labels.
   for (const attribute of attributes) {
@@ -913,7 +926,7 @@ function collectStructuredRecords(root: unknown, predicate: (record: DataRecord)
 function normalizeStructuredDelivery(record: DataRecord, matchId: string): NormalizedDelivery | undefined {
   const { over, ball } = parseOverBall(record);
   const commentary = commentaryText(record);
-  const batter = stringField(record, ["batter", "batsman", "striker", "batsmanName", "strikerName"]) ??
+  const batter = stringField(record, ["batter", "batsman", "striker", "batsmanName", "strikerName", "batsmanStriker"]) ??
     nestedString(record, ["batsmanStriker"], ["batName", "batsmanName", "playerName", "name"]);
   const nonStriker = stringField(record, ["nonStriker", "nonStrikerName", "batsmanNonStriker"]) ??
     nestedString(record, ["batsmanNonStriker", "nonStrikerDetails"], ["batName", "batsmanName", "playerName", "name"]);
