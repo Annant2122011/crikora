@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CricbuzzProvider, classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
-  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl,
+  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl, isTargetedCricbuzzSeedUrl,
   labeledValue, parseCricbuzzEntityHtml, shouldFollowTargetedPageLink
 } from "./cricbuzz-provider.js";
 
@@ -86,6 +86,38 @@ describe("Cricbuzz player detail extraction", () => {
     expect(labeledValue(text, "Born")).toBe("22 May 1987");
     expect(labeledValue(text, "Birth Place")).toBe("Durban");
     expect(labeledValue(text, "Teams")).toBe("South Africa, Titans");
+  });
+});
+
+describe("Crikora initial collection seed scope", () => {
+  it("seeds matches, full player profiles, news, schedules and relevant series context", () => {
+    const included = [
+      "https://www.cricbuzz.com/live-cricket-scores/176154/yl-vs-ut-9th-match-t10-2026",
+      "https://www.cricbuzz.com/profiles/10012/smriti-mandhana",
+      "https://www.cricbuzz.com/profiles/10012/smriti-mandhana/batting",
+      "https://www.cricbuzz.com/cricket-news/140543/example-story",
+      "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/matches",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/points-table",
+      "https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting"
+    ];
+    for (const url of included) expect(isTargetedCricbuzzSeedUrl(url), url).toBe(true);
+  });
+
+  it("does not seed match companions, historical player-match pages, team directories or auction/video routes", () => {
+    const excluded = [
+      "https://www.cricbuzz.com/live-cricket-scorecard/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/cricket-match-facts/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/cricket-match-squads/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/live-cricket-full-commentary/170703/pak-vs-sl-1st-test",
+      "https://www.cricbuzz.com/player-match-performance/match/22397/player/1836/batting",
+      "https://www.cricbuzz.com/cricket-team/india/2",
+      "https://www.cricbuzz.com/cricket-team/sierra-leone-women/490/results",
+      "https://www.cricbuzz.com/cricket-series/ipl-2026/auction/players",
+      "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/videos"
+    ];
+    for (const url of excluded) expect(isTargetedCricbuzzSeedUrl(url), url).toBe(false);
   });
 });
 
