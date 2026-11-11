@@ -7,6 +7,7 @@ import { ENTITY_TYPES, RETENTION_POLICY, type EntityType, type StoredEntity } fr
 import { Poller } from "../src/ingestion/poller.js";
 import { CricbuzzProvider, dedupeCricbuzzPageUrls } from "../src/providers/cricbuzz-provider.js";
 import { PostgresEntityRepository } from "../src/storage/postgres-entity-repository.js";
+import { createArchiveObjectStoreFromEnv } from "../src/storage/neon-s3-archive-object-store.js";
 import { DurableCrawlService } from "../src/ingestion/durable-crawl.js";
 
 type ApiRequest = IncomingMessage & { body?: unknown };
@@ -47,7 +48,7 @@ function getPool(): Pool {
 }
 
 function getRepository(): PostgresEntityRepository {
-  repository ??= new PostgresEntityRepository(getDatabaseUrl());
+  repository ??= new PostgresEntityRepository(getDatabaseUrl(), createArchiveObjectStoreFromEnv(process.env));
   return repository;
 }
 
@@ -62,7 +63,8 @@ function getProvider(): CricbuzzProvider {
     maxContentPagesPerPoll: Number(process.env.CRICBUZZ_MAX_CONTENT_PAGES_PER_POLL ?? 2),
     timeoutMs: Number(process.env.CRICBUZZ_TIMEOUT_MS ?? 15_000),
     maxResponseBytes: Number(process.env.CRICBUZZ_MAX_RESPONSE_BYTES ?? 8_000_000),
-    userAgent: process.env.CRICBUZZ_USER_AGENT ?? "Crikora/0.1 (+https://github.com/Annant2122011/crikora)"
+    userAgent: process.env.CRICBUZZ_USER_AGENT ?? "Crikora/0.1 (+https://github.com/Annant2122011/crikora)",
+    cricinfoFallbackEnabled: process.env.CRIKORA_CRICINFO_FALLBACK_ENABLED !== "false"
   });
   return provider;
 }
