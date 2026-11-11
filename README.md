@@ -138,11 +138,27 @@ Use `CrikoraApiClient.getArchiveCoverage()`, `listArchivedEntities()` and `getEn
 
 The archive crawl is continuous: after the durable backlog is drained, the existing worker keeps checking current match and section indexes, durably queues every indexed match URL for deep enrichment, and re-enqueues newly discovered pages. The live index feed remains on the configured 10–30-second cadence. Up to 10 already-captured match pages are scheduled for deep refresh per pass (live every 2 minutes; upcoming every 15 minutes), keeping facts, scorecards, squads and commentary current without flooding the historical queue. A large historical backfill can take substantial time. A coverage status of "captured" means that a permitted page was fetched and archived, not that every possible field was present on the page. Check extraction gaps and skipped/failed counts before declaring any route family complete.
 
+## Backend-only Neon archive storage environment
+
+The API uses these five variables to write compressed source HTML to the private Neon Object Storage bucket. They must be configured on the **core Crikora API project** (the repository-root Vercel project), not on the browser extension or website:
+
+```dotenv
+AWS_ENDPOINT_URL_S3=https://br-cold-bird-bdw51znf.storage.c-8.us-east-2.aws.neon.tech
+AWS_REGION=us-east-2
+AWS_ACCESS_KEY_ID=<NEON_STORAGE_TOKEN_ID>
+AWS_SECRET_ACCESS_KEY=<NEON_STORAGE_S3_SECRET_ACCESS_KEY>
+CRIKORA_ARCHIVE_BUCKET=crikora-raw-archive
+```
+
+Use the branch-scoped Neon Object Storage credential created for the `production` branch. `AWS_ACCESS_KEY_ID` is its `token_id`; `AWS_SECRET_ACCESS_KEY` is its `s3_secret_access_key`. Do not substitute the Neon API token. For local development, place the values in an untracked `.env` file. For Vercel, add them as encrypted/sensitive **Production** variables on the root API project and redeploy. The separate durable worker only calls the API and does not need the S3 secret. The frontend and browser extension must never receive any of these five variables.
+
+The server imports `dotenv/config`, validates the five names, and calls `createArchiveObjectStoreFromEnv(process.env)` before constructing `PostgresEntityRepository`. If the variables are all absent in development, the legacy local bytea fallback is used; a partial set fails at startup; production requires all five. `GET /health` exposes only `archiveObjectStorage: "configured"` or the local fallback state, never secret values. This configuration flag is not a live upload/download test; verify a real private-bucket round trip before enabling the archive worker.
+
 ## Neon setup
 
 A separate Neon project named `crikora` was created for cricket data. The existing `resolvX` support-bot database was left untouched.
 
-1. Apply migrations `001_crikora_cache.sql` through `007_permanent_historical_archive.sql` to the Crikora production database, in numeric order. Migration 007 is additive and creates the immutable history and raw-page evidence tables.
+1. Apply migrations `001_crikora_cache.sql` through `010_typed_source_identifiers_and_contributions.sql` to the Crikora production database, in numeric order. Migrations 007-010 are additive: archive evidence, typed player/match projections, detailed extras and player-identity fields.
 2. Set the **pooled** Neon connection string in the backend environment as `DATABASE_URL`. Do not put it in the browser extension or commit it.
 3. Keep `CRIKORA_COLLECTION_ENABLED=false` until the selected runtime and worker have passed their health checks. This is Crikora’s own operator-controlled feature switch, not a Cricbuzz-issued credential or source-side allowlist.
 4. Set `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` as Vercel server-only secrets. Set `CORS_ORIGINS` to exact deployed origins when browser calls are introduced.
@@ -192,7 +208,7 @@ GitHub Actions runs typecheck, build and tests on pushes and pull requests to `m
 
 ## Durable full-site crawl
 
-The initial crawl merges the saved 4,721-URL snapshot with the current sitemap inventory, explicitly seeds the scorecard archive and cricket directories, then applies the men's-cricket route allowlist; the raw sitemap count is not the number of queued cricket pages. Migration `004_crikora_durable_crawl.sql` adds a Neon-backed run and URL queue with lease recovery, retries and progress tracking. The worker drains one bounded historical page batch, then calls the lightweight `POST /api/refresh/index` route to keep live/upcoming/recent match summaries fresh while the backlog is still running.
+The initial crawl merges the saved 4,721-URL snapshot with the current sitemap inventory, explicitly seeds the scorecard archive and cricket directories, then applies the all-gender cricket route allowlist; men's and women's cricket share the same dataset, and the raw sitemap count is not the number of queued cricket pages. Migration `004_crikora_durable_crawl.sql` adds a Neon-backed run and URL queue with lease recovery, retries and progress tracking. The worker drains one bounded historical page batch, then calls the lightweight `POST /api/refresh/index` route to keep live/upcoming/recent match summaries fresh while the backlog is still running.
 
 - Core API: `POST /api/crawl/start`, `GET /api/crawl/status`, `POST /api/crawl/step`, `POST /api/cleanup`.
 - Worker: `POST /v1/crawl/start` (requires the worker admin bearer token).
