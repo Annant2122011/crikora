@@ -1,6 +1,4 @@
 import { timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Pool } from "pg";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityType, type StoredEntity } from "../src/domain/entities.js";
@@ -28,7 +26,6 @@ let repository: PostgresEntityRepository | undefined;
 let poller: Poller | undefined;
 let provider: CricbuzzProvider | undefined;
 let durableCrawl: DurableCrawlService | undefined;
-let sitemapUrls: string[] | undefined;
 
 function getDatabaseUrl(): string {
   const value = process.env.DATABASE_URL;
@@ -87,16 +84,16 @@ function getDurableCrawl(): DurableCrawlService {
   return durableCrawl;
 }
 
-function getSitemapUrls(): string[] {
-  if (sitemapUrls) return sitemapUrls;
+
+
+function getSavedProfileAndNewsInventory(): string[] {
   const path = join(process.cwd(), "docs", "cricbuzz-sitemap-inventory.json");
   const parsed = JSON.parse(readFileSync(path, "utf8")) as { urls?: Array<string | { url?: string }> };
-  if (!Array.isArray(parsed.urls)) throw new Error("The Crikora sitemap inventory has no URL list.");
-  sitemapUrls = parsed.urls
+  if (!Array.isArray(parsed.urls)) throw new Error("The saved Crikbuzz inventory has no URL list.");
+  return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
-    .filter(value => Boolean(value) && getProvider().isAllowedCrawlUrl(value));
-  if (!sitemapUrls.length) throw new Error("No sitemap URLs passed the Crikora crawler allowlist.");
-  return sitemapUrls;
+    .filter(value => /^https:\/\/www\.cricbuzz\.com\/(?:profiles\/\d+\/|cricket-news\/\d+\/)/i.test(value))
+    .filter(value => getProvider().isAllowedCrawlUrl(value)))];
 }
 
 function sendJson(response: ApiResponse, status: number, data: unknown): void {
@@ -375,7 +372,7 @@ async function refresh(request: ApiRequest, response: ApiResponse, indexOnly = f
   }
 }
 
-async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promise<void> {
+async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): Promise<void> {
   const expected = process.env.CRIKORA_ADMIN_SECRET;
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
   if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
@@ -383,53 +380,54 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
     return sendJson(response, 403, { error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
   }
 
-  // Keep the saved inventory as a backstop, then merge the current public sitemap URLs.
-  // Sitemap XML requests use the same source allowlist, spacing, timeout and denial handling.
-  const savedInventoryUrls = getSitemapUrls();
-  let liveSitemap = { sitemapUrls: [] as string[], pageUrls: [] as string[] };
-  try {
-    liveSitemap = await getProvider().discoverSitemapUrls(AbortSignal.timeout(45_000));
-  } catch (error) {
-    const status = error && typeof error === "object" && "sourceStatus" in error
-      ? Number((error as { sourceStatus?: unknown }).sourceStatus)
-      : undefined;
-    if (
-      status === 401 || status === 403 ||
-      (status !== undefined && status >= 300 && status < 400) ||
-      (status !== undefined && status >= 400 && status < 500 && status !== 429)
-    ) {
-      console.warn(
-        "Crikora could not refresh one or more live sitemap documents; continuing with the saved cricket-only inventory.",
-        { status, message: error instanceof Error ? error.message : String(error) }
-      );
-    } else {
-      // Preserve 429 Retry-After and transient 5xx/network failures.
-      throw error;
+  const provider = getProvider();
+  const savedProfileAndNewsUrls = getSavedProfileAndNewsInventory();
+  let newsUrls: string[] = [];
+  let playerUrls: string[] = [];
+  const discoveryErrors: string[] = [];
+
+  for (const [label, discover] of [
+    ["news", () => provider.discoverNewsSitemapUrls(AbortSignal.timeout(25_000))],
+    ["players", () => provider.discoverPlayerSitemapUrls(AbortSignal.timeout(25_000))]
+  ] as const) {
+    try {
+      const found = await discover();
+      if (label === "news") newsUrls = found;
+      else playerUrls = found;
+    } catch (error) {
+      const status = error && typeof error === "object" && "sourceStatus" in error
+        ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+        : undefined;
+      if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
+      discoveryErrors.push(`${label} sitemap unavailable (HTTP ${status}); using the saved targeted inventory.`);
     }
   }
-  // Current sitemap URLs take precedence over saved aliases with stale or malformed slugs.
-  // Individual non-cricket and source-denied pages are filtered or skipped by the provider.
-  const mergedCandidateUrls = [...new Set([...liveSitemap.pageUrls, ...savedInventoryUrls])];
-  const crawlUrls = dedupeCricbuzzPageUrls(mergedCandidateUrls);
-  const result = await getDurableCrawl().startFullCrawl(crawlUrls);
+
+  const liveProfileAndNews = [...newsUrls, ...playerUrls];
+  const crawlUrls = dedupeCricbuzzPageUrls([
+    ...provider.getTargetedCollectionSeedUrls(),
+    ...(liveProfileAndNews.length ? liveProfileAndNews : savedProfileAndNewsUrls)
+  ]);
+  const result = await getDurableCrawl().startTargetedCrawl(crawlUrls);
   sendJson(response, result.created ? 202 : 200, {
     ok: true,
+    scope: "targeted-product",
     created: result.created,
     resumed: result.resumed,
     data: result.run,
     meta: {
-      savedInventoryUrlCount: savedInventoryUrls.length,
-      liveSitemapDocumentCount: liveSitemap.sitemapUrls.length,
-      liveSitemapUrlCount: liveSitemap.pageUrls.length,
-      rawInventoryUrlCount: mergedCandidateUrls.length,
-      inventoryUrlCount: crawlUrls.length,
-      dedupeRemovedUrlCount: mergedCandidateUrls.length - crawlUrls.length,
-      queueTotalCount: result.run.totalCount,
+      matchIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-match\/live-scores/.test(value)).length,
+      scheduleIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-schedule/.test(value)).length,
+      newsArticleSeedCount: newsUrls.length || savedProfileAndNewsUrls.filter(value => /cricket-news\/\d+\//.test(value)).length,
+      playerProfileSeedCount: playerUrls.length || savedProfileAndNewsUrls.filter(value => /\/profiles\/\d+\//.test(value)).length,
+      savedProfileAndNewsUrlCount: savedProfileAndNewsUrls.length,
+      discoveryErrors,
+      crawlUrlCount: crawlUrls.length,
+      collectionStartDate: process.env.CRIKORA_MATCH_DETAILS_FROM ?? "2026-11-04",
       retentionPolicy: RETENTION_POLICY
     }
   });
 }
-
 async function crawlStatus(request: ApiRequest, response: ApiResponse): Promise<void> {
   const expected = process.env.CRIKORA_ADMIN_SECRET;
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
@@ -529,6 +527,69 @@ async function listContent(url: URL, response: ApiResponse): Promise<void> {
   });
 }
 
+
+
+async function listNews(url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
+  if (limit === undefined) return sendJson(response, 400, { error: "Invalid news limit." });
+  const beforeRaw = url.searchParams.get("before");
+  const before = beforeRaw ? new Date(beforeRaw) : undefined;
+  if (before && Number.isNaN(before.getTime())) return sendJson(response, 400, { error: "before must be a valid timestamp." });
+  const result = await getPool().query(
+    `SELECT source_id AS id, source_url AS "sourceUrl", canonical_url AS "canonicalUrl",
+            title, summary, body_text AS "bodyText", author, category,
+            published_at AS "publishedAt", modified_at AS "modifiedAt",
+            primary_image_url AS "primaryImageUrl", tags, raw_meta AS "rawMeta",
+            observed_at AS "observedAt"
+       FROM public.crikora_news_articles
+      WHERE ($2::timestamptz IS NULL OR published_at < $2)
+      ORDER BY published_at DESC NULLS LAST, source_id DESC
+      LIMIT $1`,
+    [limit, before?.toISOString() ?? null]
+  );
+  sendJson(response, 200, {
+    data: result.rows,
+    meta: { count: result.rows.length, limit, before: before?.toISOString() ?? null, source: "cricbuzz" }
+  });
+}
+
+async function getNews(sourceId: string, response: ApiResponse): Promise<void> {
+  const result = await getPool().query(
+    `SELECT source_id AS id, source_url AS "sourceUrl", canonical_url AS "canonicalUrl",
+            title, summary, body_text AS "bodyText", author, category,
+            published_at AS "publishedAt", modified_at AS "modifiedAt",
+            primary_image_url AS "primaryImageUrl", tags, raw_meta AS "rawMeta",
+            observed_at AS "observedAt"
+       FROM public.crikora_news_articles WHERE source_id=$1`,
+    [sourceId.startsWith("news:") ? sourceId : `news:${sourceId}`]
+  );
+  if (!result.rows[0]) return sendJson(response, 404, { error: "News article not found." });
+  sendJson(response, 200, { data: result.rows[0], meta: { source: "cricbuzz" } });
+}
+
+async function listSchedule(url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 200, 500);
+  if (limit === undefined) return sendJson(response, 400, { error: "Invalid schedule limit." });
+  const fromRaw = url.searchParams.get("from");
+  const from = fromRaw ? new Date(fromRaw) : undefined;
+  if (from && Number.isNaN(from.getTime())) return sendJson(response, 400, { error: "from must be a valid timestamp." });
+  const result = await getPool().query(
+    `SELECT fixture_source_id AS id, match_source_id AS "matchSourceId",
+            source_page_url AS "sourcePageUrl", match_url AS "matchUrl",
+            match_title AS "matchTitle", home_team AS "homeTeam", away_team AS "awayTeam",
+            competition, format, start_time AS "startTime", venue, source_text AS "sourceText",
+            observed_at AS "observedAt"
+       FROM public.crikora_schedule_fixtures
+      WHERE ($2::timestamptz IS NULL OR start_time >= $2)
+      ORDER BY start_time ASC NULLS LAST, fixture_source_id
+      LIMIT $1`,
+    [limit, from?.toISOString() ?? null]
+  );
+  sendJson(response, 200, {
+    data: result.rows,
+    meta: { count: result.rows.length, limit, from: from?.toISOString() ?? null, source: "cricbuzz" }
+  });
+}
 
 async function search(url: URL, response: ApiResponse): Promise<void> {
   const query = url.searchParams.get("q")?.trim() ?? "";
@@ -815,7 +876,7 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   if (path === "settings" && method === "PUT") return updateSettings(request, response);
   if (path === "refresh" && method === "POST") return refresh(request, response);
   if (path === "refresh/index" && method === "POST") return refresh(request, response, true);
-  if (path === "crawl/start" && method === "POST") return startFullCrawl(request, response);
+  if (path === "crawl/start" && method === "POST") return startTargetedCrawl(request, response);
   if (path === "crawl/status" && method === "GET") return crawlStatus(request, response);
   if (path === "crawl/step" && method === "POST") return crawlStep(request, response);
   if (path === "cleanup" && method === "POST") return cleanupCache(request, response);
@@ -879,6 +940,9 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   if (parts[1] === "content" && parts.length === 2 && method === "GET") {
     return listContent(url, response);
   }
+  if (parts[1] === "news" && parts.length === 2 && method === "GET") return listNews(url, response);
+  if (parts[1] === "news" && parts.length === 3 && method === "GET") return getNews(parts[2]!, response);
+  if (parts[1] === "schedule" && parts.length === 2 && method === "GET") return listSchedule(url, response);
   if (parts[1] === "search" && parts.length === 2 && method === "GET") {
     return search(url, response);
   }
