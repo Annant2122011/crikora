@@ -46,6 +46,7 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
 // cursor works across Vercel cold starts without depending on process memory.
 const SECTION_INDEXES = [
   "/cricket-schedule/upcoming-series/all",
+  "/cricket-schedule/series/all",
   "/cricket-news",
   "/cricket-news/latest-news"
 ];
@@ -89,16 +90,36 @@ function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boo
   try {
     const sourcePath = new URL(sourceUrl).pathname;
     const targetPath = new URL(targetUrl).pathname;
-    if (isNewsArticlePath(sourcePath) && isNewsArticlePath(targetPath)) return false;
-    if (hasMatchPageIdentity(sourcePath) && hasMatchPageIdentity(targetPath)) return false;
+    const sourceNewsArticle = isNewsArticlePath(sourcePath);
+    const targetNewsArticle = isNewsArticlePath(targetPath);
+    const sourceMatch = hasMatchPageIdentity(sourcePath);
+    const targetMatch = hasMatchPageIdentity(targetPath);
     const sourcePlayer = playerProfilePath(sourcePath);
     const targetPlayer = playerProfilePath(targetPath);
-    if (sourcePlayer && targetPlayer) {
-      if (sourcePlayer.id !== targetPlayer.id) return false;
-      // A profile can lead to its own stats tabs, but not to related-player carousels.
-      if (!targetPlayer.isStats || !sourcePlayer.isStats) return false;
+    const sourceSchedule = /^\\/(?:cricket-schedule|cricket-series)(?:\\/|$)/i.test(sourcePath);
+    const sourceNewsIndex = /^\\/cricket-news(?:\\/|$)/i.test(sourcePath) && !sourceNewsArticle;
+
+    // News indexes discover articles. Articles never recurse into more articles.
+    if (sourceNewsIndex) return targetNewsArticle || /^\\/cricket-news\\/(?:editorial|latest-news)(?:\\/|$)/i.test(targetPath);
+    if (sourceNewsArticle) return Boolean(targetPlayer && !targetPlayer.isStats);
+
+    // A schedule or series index may discover match fixtures and series detail.
+    if (sourceSchedule) return targetMatch || Boolean(targetPlayer) ||
+      /^\\/cricket-series\\/\\d+\\/[^/]+\\/?$/i.test(targetPath) ||
+      /^\\/cricket-schedule\\//i.test(targetPath);
+
+    // Match pages can discover the participants' profiles, not every related
+    // match carousel or unrelated directory route.
+    if (sourceMatch) {
+      if (targetMatch) return false;
+      return Boolean(targetPlayer);
     }
-    return true;
+
+    // Each profile discovers only its own statistics tabs.
+    if (sourcePlayer && targetPlayer) {
+      return sourcePlayer.id === targetPlayer.id && targetPlayer.isStats;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -114,17 +135,7 @@ function isAtOrAfterConfiguredMatchStart(value: string | undefined): boolean {
   return parsed.getTime() >= cutoff.getTime();
 }
 
-function isNewsArticleWithinLookback($: PageDoc): boolean {
-  const rawDate = $("meta[property='article:published_time']").attr("content") ??
-    $("meta[name='date'],meta[name='pubdate'],meta[itemprop='datePublished']").first().attr("content") ??
-    $("time[datetime]").first().attr("datetime");
-  if (!rawDate) return true;
-  const publishedAt = new Date(rawDate);
-  if (Number.isNaN(publishedAt.getTime())) return true;
-  const days = Number(process.env.CRIKORA_NEWS_LOOKBACK_DAYS ?? 30);
-  const lookbackMs = Math.max(1, Math.min(365, Number.isFinite(days) ? days : 30)) * 86_400_000;
-  return publishedAt.getTime() >= Date.now() - lookbackMs;
-}
+
 
 export function getCricbuzzDiscoverySeedUrls(): string[] {
   return [...INDEXES.map(item => new URL(item.path, ORIGIN).toString()),
@@ -202,7 +213,9 @@ export class CricbuzzProvider implements CricketProvider {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
           const stub = parseMatchIndexStub(item, page, link);
           discovered.set(match[1], item);
-          indexRecords.set(match[1], stub);
+          if (index.bucket !== "completed" || isAtOrAfterConfiguredMatchStart(stub.startTime)) {
+            indexRecords.set(match[1], stub);
+          }
         }
       }
     }
@@ -221,6 +234,8 @@ export class CricbuzzProvider implements CricketProvider {
     }
 
     const allMatches = [...discovered.values()];
+    // Persist every match URL into the targeted durable queue. Completed index
+    // stubs are withheld until their detail page proves the configured date.
     // Persist every match URL into the durable crawl queue, not only the small
     // per-poll deep-enrichment slice. This prevents cold starts from repeatedly
     // enriching only the first few matches in the index.
@@ -385,6 +400,14 @@ export class CricbuzzProvider implements CricketProvider {
     return getCricbuzzDiscoverySeedUrls();
   }
 
+  async discoverNewsSitemapUrls(signal?: AbortSignal): Promise<string[]> {
+    const sitemapUrl = new URL("/sitemap/cricket-news.xml", ORIGIN);
+    const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+    return parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls.filter(value =>
+      isNewsArticlePath(new URL(value).pathname)
+    );
+  }
+
   getPendingRelatedUrls(): string[] {
     return [...new Set([...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]))];
   }
@@ -456,9 +479,6 @@ export class CricbuzzProvider implements CricketProvider {
     if (!page) return { discoveredUrls: [], skipped: true };
 
     const identity = classifyCricbuzzEntityUrl(page.url);
-    if (isNewsArticlePath(url.pathname) && !isNewsArticleWithinLookback(page.$)) {
-      return { discoveredUrls: [], skipped: true, sourcePages: [toSourcePageCapture(page)] };
-    }
     let entity: CrikoraEntity | undefined;
     let pages: PageRecord[] = [page];
     if (identity?.entityType === "match") {
@@ -954,6 +974,8 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     try { return new URL(href, page.url).pathname === link.path; } catch { return false; }
   }).first();
   const context = clean(anchor.parent().parent().parent().text() || anchor.parent().parent().text() || link.text);
+  const cardDate = context.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\\s*\\d{1,2}(?:st|nd|rd|th)?\\s+[A-Za-z]{3,9}\\s+\\d{4}(?:[,\\s]+\\d{1,2}:\\d{2}\\s*(?:AM|PM))?/i)?.[0] ??
+    context.match(/[A-Za-z]{3,9}\\s+\\d{1,2},?\\s+\\d{4}(?:[,\\s]+\\d{1,2}:\\d{2}\\s*(?:AM|PM))?/i)?.[0];
   const titleCandidate = context.match(/([^|]{2,100}?\s+vs\s+[^|]{2,100}?)(?:\s{2,}|$)/i)?.[1];
   const title = clean(titleCandidate || link.text || context.slice(0, 180));
   const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
@@ -969,7 +991,7 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     awayTeam: clean(teams?.[2] ?? "") || "Unknown",
     status: item.bucket,
     format,
-    startTime: "",
+    startTime: cardDate ? parseDateTime(cardDate) ?? "" : "",
     innings: [],
     updatedAt: now,
     sourceUrl,
@@ -1084,7 +1106,8 @@ function parseMatch(
   const seriesLink = getLinks($, base.url).find(link => link.path.startsWith("/cricket-series/"));
   const venueLink = getLinks(info?.$ ?? $, info?.url ?? base.url).find(link => /\/venues\/\d+/.test(link.path));
   const venueText = labeledValue(infoText || body, "Venue");
-  const dateTimeText = labeledValue(infoText || body, "Time") || labeledValue(infoText || body, "Date & Time");
+  const dateTimeText = labeledValue(infoText || body, "Date & Time") || labeledValue(infoText || body, "Time") ||
+    $("time[datetime]").first().attr("datetime") || "";
   const toss = labeledValue(infoText || body, "Toss");
   const result = body.match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
   const status: MatchStatus = result || discovered.bucket === "completed" ? "completed" : discovered.bucket;
@@ -1431,8 +1454,19 @@ export function labeledValue(text: string, label: string): string {
   return clean(text.match(regex)?.[1] ?? "");
 }
 function parseDateTime(value: string): string | null {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  if (!value.trim()) return null;
+  const normalized = value
+    .replace(/\\b(\\d{1,2})(st|nd|rd|th)\\b/gi, "$1")
+    .replace(/\\bIST\\b/gi, "+05:30")
+    .replace(/\\bUTC\\b/gi, "+00:00")
+    .replace(/\\s+/g, " ")
+    .trim();
+  const parsed = new Date(normalized);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+
+  const withoutWeekday = normalized.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\\s+/i, "");
+  const fallback = new Date(withoutWeekday);
+  return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
 }
 function num(value: string | undefined): number {
   const parsed = Number.parseFloat((value ?? "").replace(/[^\d.-]/g, ""));
