@@ -230,23 +230,35 @@ export class CrikoraApiClient {
   }
 
   listPlayers(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("players", limit, signal);
+    return this.listEntities("players", limit, 0, signal);
   }
 
   listTeams(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("teams", limit, signal);
+    return this.listEntities("teams", limit, 0, signal);
   }
 
   listSeries(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("series", limit, signal);
+    return this.listEntities("series", limit, 0, signal);
   }
 
   listVenues(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("venues", limit, signal);
+    return this.listEntities("venues", limit, 0, signal);
   }
 
   listPlayersPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
     return this.listEntities("players", query.limit ?? 100, query.offset ?? 0, signal);
+  }
+
+  listTeamsPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("teams", query.limit ?? 100, query.offset ?? 0, signal);
+  }
+
+  listSeriesPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("series", query.limit ?? 100, query.offset ?? 0, signal);
+  }
+
+  listVenuesPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("venues", query.limit ?? 100, query.offset ?? 0, signal);
   }
 
   getEntity(entityType: string, sourceId: string, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity>> {
