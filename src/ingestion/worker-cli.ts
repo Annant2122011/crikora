@@ -28,6 +28,7 @@ interface Config {
   refreshSecret: string;
   leaseSeconds: number;
   idlePollSeconds: number;
+  stepTimeoutMs: number;
   startFullCrawlOnEnable: boolean;
   workerEnabled: boolean;
 }
@@ -66,6 +67,10 @@ function requiredEnv(name: string): string {
 function readConfig(): Config {
   const leaseSeconds = Number(process.env.CRIKORA_WORKER_LEASE_SECONDS ?? 180);
   const idlePollSeconds = Number(process.env.CRIKORA_WORKER_IDLE_POLL_SECONDS ?? 10);
+  const stepTimeoutMs = Number(process.env.CRIKORA_WORKER_STEP_TIMEOUT_MS ?? 180_000);
+  if (!Number.isInteger(stepTimeoutMs) || stepTimeoutMs < 60_000 || stepTimeoutMs > 300_000) {
+    throw new RangeError("CRIKORA_WORKER_STEP_TIMEOUT_MS must be between 60000 and 300000.");
+  }
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 60 || leaseSeconds > 7_200) {
     throw new RangeError("CRIKORA_WORKER_LEASE_SECONDS must be between 60 and 7200.");
   }
@@ -86,6 +91,7 @@ function readConfig(): Config {
     refreshSecret: requiredEnv("CRIKORA_REFRESH_SECRET"),
     leaseSeconds,
     idlePollSeconds,
+    stepTimeoutMs,
     startFullCrawlOnEnable: process.env.CRIKORA_START_FULL_CRAWL === "true",
     workerEnabled: process.env.CRIKORA_WORKER_ENABLED !== "false"
   };
@@ -238,7 +244,10 @@ async function readCrawlStatus(config: Config): Promise<Record<string, unknown> 
 }
 
 async function processCrawlStep(config: Config): Promise<{ active: boolean; retryAfterSeconds: number }> {
-  const result = await requestApi(config, "crawl/step", "POST", "refresh", 55_000);
+  // A profile page can require the HTML fetch, structured-data decoding,
+  // profile-tab extraction and optional ESPNcricinfo fallback. Railway's
+  // long-running worker can wait longer than a serverless function request.
+  const result = await requestApi(config, "crawl/step", "POST", "refresh", config.stepTimeoutMs);
   if (result.status === 401 || result.status === 403 || result.status === 409) {
     throw new ApiError(
       `Crawl step stopped by the core API: ${result.body.error ?? result.status}`,
