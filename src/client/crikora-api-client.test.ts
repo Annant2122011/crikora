@@ -88,7 +88,7 @@ describe("CrikoraApiClient", () => {
     const fetcher = vi.fn(async () => jsonResponse({ data: { players: [], comparison: [] } })) as unknown as typeof fetch;
     const client = new CrikoraApiClient("https://api.crikora.example", fetcher);
 
-    await expect(client.comparePlayers(["abc", "123"])).rejects.toThrow(TypeError);
+    expect(() => client.comparePlayers(["abc", "123"])).toThrow(TypeError);
     await client.comparePlayers(["11527", "10012"]);
 
     expect(fetcher).toHaveBeenCalledWith(
