@@ -45,23 +45,86 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
 // Two broad section indexes are sampled every refresh tick. The time-derived
 // cursor works across Vercel cold starts without depending on process memory.
 const SECTION_INDEXES = [
+  "/cricket-schedule/upcoming-series/all",
   "/cricket-news",
-  "/cricket-videos",
-  "/cricket-videos/categories",
-  "/cricket-videos/playlists",
-  "/cricket-photo-gallery",
-  "/cricket-team",
-  "/profiles",
-  "/cricket-schedule/series/all",
-  "/cricket-schedule/upcoming-series/international",
-  "/cricket-stats/icc-rankings/men/batting",
-  "/cricket-stats/icc-rankings/men/bowling",
-  "/cricket-stats/icc-rankings/women/batting",
-  "/cricket-stats/icc-rankings/women/bowling",
-  "/cricket-stats/points-table/test/icc-world-test-championship",
-  "/cricket-series/auctions",
-  "/cricket-scorecard-archives"
+  "/cricket-news/latest-news"
 ];
+
+const TARGETED_PAGE_KINDS = new Set([
+  "match", "match-facts", "match-squads", "match-scorecard", "commentary",
+  "player", "player-stats", "series", "series-subpage", "schedule",
+  "news", "news-index", "news-category"
+]);
+
+export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) return false;
+    const path = url.pathname.replace(/\\/+$/, "") || "/";
+    if (INDEXES.some(index => index.path === path) || SECTION_INDEXES.includes(path)) return true;
+    const rule = PATH_RULES.find(item => item.pattern.test(path));
+    if (!rule) return false;
+    return TARGETED_PAGE_KINDS.has(rule.kind ?? rule.type);
+  } catch {
+    return false;
+  }
+}
+
+function isNewsArticlePath(path: string): boolean {
+  return /^\\/cricket-news\\/\\d+\\//i.test(path);
+}
+
+function playerProfilePath(path: string): { id: string; isStats: boolean } | undefined {
+  const match = path.match(/^\\/profiles\\/(\\d+)\\/[^/]+(.*)$/i);
+  if (!match) return undefined;
+  return { id: match[1]!, isStats: Boolean(match[2]) };
+}
+
+function hasMatchPageIdentity(path: string): boolean {
+  return /^\\/(?:live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary)\\/\\d+\\//i.test(path);
+}
+
+function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boolean {
+  if (!isTargetedCricbuzzCollectionUrl(targetUrl)) return false;
+  try {
+    const sourcePath = new URL(sourceUrl).pathname;
+    const targetPath = new URL(targetUrl).pathname;
+    if (isNewsArticlePath(sourcePath) && isNewsArticlePath(targetPath)) return false;
+    if (hasMatchPageIdentity(sourcePath) && hasMatchPageIdentity(targetPath)) return false;
+    const sourcePlayer = playerProfilePath(sourcePath);
+    const targetPlayer = playerProfilePath(targetPath);
+    if (sourcePlayer && targetPlayer) {
+      if (sourcePlayer.id !== targetPlayer.id) return false;
+      // A profile can lead to its own stats tabs, but not to related-player carousels.
+      if (!targetPlayer.isStats || !sourcePlayer.isStats) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isAtOrAfterConfiguredMatchStart(value: string | undefined): boolean {
+  if (!value) return false;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const configuredDate = process.env.CRIKORA_MATCH_DETAILS_FROM?.trim() || "2026-11-04";
+  const cutoff = new Date(configuredDate + "T00:00:00+05:30");
+  if (Number.isNaN(cutoff.getTime())) throw new Error("CRIKORA_MATCH_DETAILS_FROM must be YYYY-MM-DD.");
+  return parsed.getTime() >= cutoff.getTime();
+}
+
+function isNewsArticleWithinLookback($: PageDoc): boolean {
+  const rawDate = $("meta[property='article:published_time']").attr("content") ??
+    $("meta[name='date'],meta[name='pubdate'],meta[itemprop='datePublished']").first().attr("content") ??
+    $("time[datetime]").first().attr("datetime");
+  if (!rawDate) return true;
+  const publishedAt = new Date(rawDate);
+  if (Number.isNaN(publishedAt.getTime())) return true;
+  const days = Number(process.env.CRIKORA_NEWS_LOOKBACK_DAYS ?? 30);
+  const lookbackMs = Math.max(1, Math.min(365, Number.isFinite(days) ? days : 30)) * 86_400_000;
+  return publishedAt.getTime() >= Date.now() - lookbackMs;
+}
 
 export function getCricbuzzDiscoverySeedUrls(): string[] {
   return [...INDEXES.map(item => new URL(item.path, ORIGIN).toString()),
@@ -324,11 +387,15 @@ export class CricbuzzProvider implements CricketProvider {
   }
 
   isAllowedCrawlUrl(value: string): boolean {
-    return isAllowedCricbuzzPageUrl(value);
+    return isTargetedCricbuzzCollectionUrl(value);
+  }
+
+  getTargetedCollectionSeedUrls(): string[] {
+    return getCricbuzzDiscoverySeedUrls();
   }
 
   getPendingRelatedUrls(): string[] {
-    return [...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]);
+    return [...new Set([...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]))];
   }
 
   /**
@@ -512,14 +579,17 @@ export class CricbuzzProvider implements CricketProvider {
     for (const captured of pages) this.queueRelatedPageLinks(captured.$, captured.url);
     const discoveredUrls = [...new Set([
       ...pages.slice(1).map(item => item.url),
-      ...pages.flatMap(item => getLinks(item.$, item.url).map(link => link.url))
+      ...pages.flatMap(item => getLinks(item.$, item.url)
+        .filter(link => shouldFollowTargetedPageLink(item.url, link.url))
+        .map(link => link.url))
     ])]
-      .filter(linkUrl => isAllowedCricbuzzPageUrl(linkUrl));
+      .filter(linkUrl => isTargetedCricbuzzCollectionUrl(linkUrl));
     return { entity, discoveredUrls, skipped: false, sourcePages: pages.map(toSourcePageCapture) };
   }
 
   private queueRelatedPageLinks($: PageDoc, baseUrl: string): void {
     for (const link of getLinks($, baseUrl)) {
+      if (!shouldFollowTargetedPageLink(baseUrl, link.url)) continue;
       const identity = classifyCricbuzzEntityUrl(link.url);
       if (!identity) continue;
       let pending = this.pendingRelatedLinks.get(identity.entityType);
