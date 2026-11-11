@@ -363,9 +363,16 @@ export class CricinfoPlayerFallback {
     this.lastRequestAt = Date.now();
     const response = await this.fetcher(url, {
       headers: {
-        accept: "application/json",
-        "accept-language": "en-US,en;q=0.8",
-        "user-agent": "Crikora/0.1 (+https://github.com/Annant2122011/crikora)"
+        accept: "application/json, text/plain, */*",
+        "accept-language": "en-US,en;q=0.9",
+        "cache-control": "no-cache",
+        origin: "https://www.espncricinfo.com",
+        pragma: "no-cache",
+        referer: "https://www.espncricinfo.com/",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
       },
       redirect: "follow",
       cache: "no-store",
