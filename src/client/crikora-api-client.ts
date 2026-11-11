@@ -76,6 +76,20 @@ export interface ContentQuery {
   limit?: number;
 }
 
+export interface CrikoraPlayerComparison {
+  players: Array<{
+    player: CrikoraEntity;
+    playerId: string;
+    displayName: string;
+    comparisonFields: Record<string, unknown>;
+    careerStatistics: unknown[];
+  }>;
+  comparison: Array<{
+    label: string;
+    values: Record<string, unknown>;
+  }>;
+}
+
 export interface CrikoraNewsArticle {
   id: string;
   sourceUrl: string;
@@ -274,6 +288,17 @@ export class CrikoraApiClient {
     if (query.limit !== undefined) params.set("limit", String(query.limit));
     const suffix = params.size ? `?${params.toString()}` : "";
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/content${suffix}`, signal);
+  }
+
+  comparePlayers(playerIds: string[], signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraPlayerComparison>> {
+    if (playerIds.length < 2 || playerIds.length > 4 || playerIds.some(id => !/^\\d{1,12}$/.test(id))) {
+      throw new TypeError("Player comparison requires 2 to 4 numeric Cricbuzz player IDs.");
+    }
+    const params = new URLSearchParams({ ids: playerIds.join(",") });
+    return this.request<CrikoraEnvelope<CrikoraPlayerComparison>>(
+      `/v1/players/compare?${params.toString()}`,
+      signal
+    );
   }
 
   listNews(query: NewsQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraNewsArticle[]>> {
