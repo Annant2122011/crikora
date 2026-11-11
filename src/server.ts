@@ -6,7 +6,9 @@ import { z } from "zod";
 import { CricbuzzProvider } from "./providers/cricbuzz-provider.js";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityRepository, type StoredEntity } from "./domain/entities.js";
 import { PostgresEntityRepository } from "./storage/postgres-entity-repository.js";
+import { createArchiveObjectStoreFromEnv } from "./storage/neon-s3-archive-object-store.js";
 import { Poller } from "./ingestion/poller.js";
+import { isArchiveRepository } from "./storage/archive-repository.js";
 
 const env = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -16,6 +18,11 @@ const env = z.object({
   POLL_INTERVAL_SECONDS: z.enum(["10", "15", "20", "30"]).default("10"),
   CRIKORA_COLLECTION_ENABLED: z.enum(["true", "false"]).default("false"),
   DATABASE_URL: z.string().min(1),
+  AWS_ENDPOINT_URL_S3: z.string().optional(),
+  AWS_REGION: z.string().optional(),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  CRIKORA_ARCHIVE_BUCKET: z.string().optional(),
   CRICBUZZ_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).default(0),
   CRICBUZZ_MAX_MATCHES_PER_POLL: z.coerce.number().int().min(1).max(50).default(2),
   CRICBUZZ_MAX_PROFILES_PER_POLL: z.coerce.number().int().min(0).max(100).default(2),
@@ -31,7 +38,10 @@ const env = z.object({
 
 async function startServer(): Promise<void> {
 const app = Fastify({ logger: { level: env.LOG_LEVEL }, requestIdHeader: "x-request-id" });
-const repository: EntityRepository = new PostgresEntityRepository(env.DATABASE_URL);
+// Read the five Neon Object Storage variables from the same process environment
+// loaded by dotenv/config or injected by the production host. Never expose them in API responses.
+const archiveObjectStore = createArchiveObjectStoreFromEnv(process.env);
+const repository: EntityRepository = new PostgresEntityRepository(env.DATABASE_URL, archiveObjectStore);
 await (repository as PostgresEntityRepository).ping();
 
 const provider = new CricbuzzProvider({
@@ -136,7 +146,7 @@ app.get("/", async (request, reply) => {
     <div class="endpoint">
       <strong>Service:</strong> crikora-api<br>
       <strong>Source:</strong> ${provider.id}<br>
-      <strong>Storage:</strong> postgres<br>
+      <strong>Storage:</strong> postgres<br>\n      <strong>Archive object storage:</strong> ${archiveObjectStore ? "configured" : "local fallback"}<br>
       <strong>Collection Enabled:</strong> ${env.CRIKORA_COLLECTION_ENABLED === "true"}<br>
     </div>
 
@@ -246,6 +256,7 @@ app.get("/health", async (_request, reply) => {
       service: "crikora-api",
       source: provider.id,
       storage: "postgres",
+      archiveObjectStorage: archiveObjectStore ? "configured" : "local-bytea-fallback",
       retentionPolicy: RETENTION_POLICY,
       collectionEnabled: env.CRIKORA_COLLECTION_ENABLED === "true",
       refreshIntervalSeconds: Number(env.POLL_INTERVAL_SECONDS)
@@ -270,6 +281,25 @@ app.get("/v1/entities/:entityType/:sourceId", async (request, reply) => {
   const row = await repository.get(params.data.entityType, params.data.sourceId);
   if (!row) return reply.code(404).send({ error: "Entity not found or expired" });
   return { data: present(row), meta: { retentionPolicy: RETENTION_POLICY, source: provider.id } };
+});
+
+app.get("/v1/entities/:entityType/:sourceId/details", async (request, reply) => {
+  const params = z.object({
+    entityType: z.enum(ENTITY_TYPES),
+    sourceId: z.string().min(1).max(200)
+  }).safeParse(request.params);
+  const query = z.object({ limit: z.coerce.number().int().min(1).max(200).default(100) }).safeParse(request.query);
+  if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid entity details query." });
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const current = await repository.get(params.data.entityType, params.data.sourceId);
+  const latestHistory = current ? [] : await repository.listEntityHistory(params.data.entityType, params.data.sourceId, 1);
+  const related = await repository.listRelatedEntityPages(params.data.entityType, params.data.sourceId, query.data.limit);
+  const entity = current ? present(current) : latestHistory[0] ?? null;
+  if (!entity && !related.length) return reply.code(404).send({ error: "Entity and its archived detail pages were not found." });
+  return {
+    data: { entity, related },
+    meta: { relatedCount: related.length, retention: "permanent", source: provider.id }
+  };
 });
 
 app.get("/v1/matches", async (request, reply) => {
@@ -349,6 +379,44 @@ app.get("/v1/search", async (request, reply) => {
   if (!query.success) return reply.code(400).send({ error: "Supply a search term q and an optional limit." });
   const rows = await repository.search(query.data.q, query.data.limit);
   return { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } };
+});
+
+app.get("/v1/archive/coverage", async (_request, reply) => {
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const data = await repository.getArchiveCoverage();
+  return { data, meta: { retention: "permanent", appendOnly: true } };
+});
+
+app.get("/v1/archive/entities/:entityType", async (request, reply) => {
+  const params = z.object({ entityType: z.enum(ENTITY_TYPES) }).safeParse(request.params);
+  const query = z.object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    before: z.string().min(1).optional()
+  }).safeParse(request.query);
+  if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid archive entity query." });
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const data = await repository.listArchivedEntities(params.data.entityType, query.data.limit, query.data.before);
+  return {
+    data,
+    meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true }
+  };
+});
+
+app.get("/v1/archive/entities/:entityType/:sourceId/history", async (request, reply) => {
+  const params = z.object({
+    entityType: z.enum(ENTITY_TYPES),
+    sourceId: z.string().min(1).max(200)
+  }).safeParse(request.params);
+  const query = z.object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    before: z.string().regex(/^[0-9]+$/).optional()
+  }).safeParse(request.query);
+  if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid archive history query." });
+  if (!isArchiveRepository(repository)) return reply.code(503).send({ error: "Permanent archive storage is unavailable." });
+  const data = await repository.listEntityHistory(
+    params.data.entityType, params.data.sourceId, query.data.limit, query.data.before
+  );
+  return { data, meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true } };
 });
 
 app.setErrorHandler((error, _request, reply) => {

@@ -63,12 +63,110 @@ export interface CrikoraEntity {
 export interface MatchQuery {
   status?: CrikoraMatchStatus;
   limit?: number;
+  offset?: number;
+}
+
+export interface EntityQuery {
+  limit?: number;
+  offset?: number;
 }
 
 export interface ContentQuery {
   kind?: string;
   limit?: number;
 }
+
+export interface CrikoraPlayerComparison {
+  players: Array<{
+    player: CrikoraEntity;
+    playerId: string;
+    displayName: string;
+    comparisonFields: Record<string, unknown>;
+    careerStatistics: unknown[];
+  }>;
+  comparison: Array<{
+    label: string;
+    values: Record<string, unknown>;
+  }>;
+}
+
+export interface CrikoraNewsArticle {
+  id: string;
+  sourceUrl: string;
+  canonicalUrl: string;
+  title: string;
+  summary?: string;
+  bodyText: string;
+  author?: string;
+  category?: string;
+  publishedAt?: string;
+  modifiedAt?: string;
+  primaryImageUrl?: string;
+  tags: string[];
+  observedAt: string;
+}
+
+export interface CrikoraScheduleFixture {
+  id: string;
+  matchSourceId: string;
+  sourcePageUrl: string;
+  matchUrl: string;
+  matchTitle: string;
+  homeTeam?: string;
+  awayTeam?: string;
+  competition: string;
+  format: string;
+  startTime?: string;
+  venue?: string;
+  sourceText: string;
+  observedAt: string;
+}
+
+export interface NewsQuery {
+  limit?: number;
+  offset?: number;
+  before?: string;
+}
+
+export interface ScheduleQuery {
+  limit?: number;
+  offset?: number;
+  from?: string;
+}
+
+export interface ArchiveCoverage {
+  pageKind: string;
+  status: string;
+  pageCount: number;
+  totalFetches: number;
+  rawPageVersions: number;
+  entityVersions: number;
+  rawPageBytes: number;
+  storedBytes: number;
+  lastFetchedAt: string | null;
+}
+
+export interface CrikoraEntitySnapshot {
+  id: string;
+  entityType: string;
+  sourceId: string;
+  sourceUrl: string;
+  payloadHash: string;
+  schemaVersion: number;
+  payload: Record<string, unknown>;
+  observedAt: string;
+}
+
+export interface ArchiveHistoryQuery {
+  limit?: number;
+  before?: string;
+}
+
+export interface CrikoraEntityDetails {
+  entity: CrikoraEntity | CrikoraEntitySnapshot | null;
+  related: CrikoraEntitySnapshot[];
+}
+
 
 export class CrikoraApiError extends Error {
   constructor(
@@ -114,6 +212,7 @@ export class CrikoraApiClient {
     const params = new URLSearchParams();
     if (query.status) params.set("status", query.status);
     if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
     const suffix = params.size ? `?${params.toString()}` : "";
     return this.request<CrikoraEnvelope<CrikoraMatch[]>>(`/v1/matches${suffix}`, signal);
   }
@@ -145,19 +244,35 @@ export class CrikoraApiClient {
   }
 
   listPlayers(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("players", limit, signal);
+    return this.listEntities("players", limit, 0, signal);
   }
 
   listTeams(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("teams", limit, signal);
+    return this.listEntities("teams", limit, 0, signal);
   }
 
   listSeries(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("series", limit, signal);
+    return this.listEntities("series", limit, 0, signal);
   }
 
   listVenues(limit = 100, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    return this.listEntities("venues", limit, signal);
+    return this.listEntities("venues", limit, 0, signal);
+  }
+
+  listPlayersPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("players", query.limit ?? 100, query.offset ?? 0, signal);
+  }
+
+  listTeamsPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("teams", query.limit ?? 100, query.offset ?? 0, signal);
+  }
+
+  listSeriesPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("series", query.limit ?? 100, query.offset ?? 0, signal);
+  }
+
+  listVenuesPage(query: EntityQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
+    return this.listEntities("venues", query.limit ?? 100, query.offset ?? 0, signal);
   }
 
   getEntity(entityType: string, sourceId: string, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity>> {
@@ -175,9 +290,94 @@ export class CrikoraApiClient {
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/content${suffix}`, signal);
   }
 
+  comparePlayers(playerIds: string[], signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraPlayerComparison>> {
+    if (playerIds.length < 2 || playerIds.length > 4 || playerIds.some(id => !/^\d{1,12}$/.test(id))) {
+      throw new TypeError("Player comparison requires 2 to 4 numeric Cricbuzz player IDs.");
+    }
+    const params = new URLSearchParams({ ids: playerIds.join(",") });
+    return this.request<CrikoraEnvelope<CrikoraPlayerComparison>>(
+      `/v1/players/compare?${params.toString()}`,
+      signal
+    );
+  }
+
+  listNews(query: NewsQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraNewsArticle[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
+    if (query.before) params.set("before", query.before);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraNewsArticle[]>>(`/v1/news${suffix}`, signal);
+  }
+
+  getNews(articleId: string, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraNewsArticle>> {
+    return this.request<CrikoraEnvelope<CrikoraNewsArticle>>(
+      `/v1/news/${encodeURIComponent(articleId.replace(/^news:/, ""))}`,
+      signal
+    );
+  }
+
+  listSchedule(query: ScheduleQuery = {}, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraScheduleFixture[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.offset !== undefined) params.set("offset", String(query.offset));
+    if (query.from) params.set("from", query.from);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraScheduleFixture[]>>(`/v1/schedule${suffix}`, signal);
+  }
+
   search(query: string, limit = 30, signal?: AbortSignal): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/search?${params.toString()}`, signal);
+  }
+
+
+  getEntityDetails(
+    entityType: string,
+    sourceId: string,
+    limit = 100,
+    signal?: AbortSignal
+  ): Promise<CrikoraEnvelope<CrikoraEntityDetails>> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    return this.request<CrikoraEnvelope<CrikoraEntityDetails>>(
+      `/v1/entities/${encodeURIComponent(entityType)}/${encodeURIComponent(sourceId)}/details?${params.toString()}`,
+      signal
+    );
+  }
+
+  getArchiveCoverage(signal?: AbortSignal): Promise<CrikoraEnvelope<ArchiveCoverage[]>> {
+    return this.request<CrikoraEnvelope<ArchiveCoverage[]>>("/v1/archive/coverage", signal);
+  }
+
+  listArchivedEntities(
+    entityType: string,
+    query: ArchiveHistoryQuery = {},
+    signal?: AbortSignal
+  ): Promise<CrikoraEnvelope<CrikoraEntitySnapshot[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.before) params.set("before", query.before);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraEntitySnapshot[]>>(
+      `/v1/archive/entities/${encodeURIComponent(entityType)}${suffix}`,
+      signal
+    );
+  }
+
+  getEntityHistory(
+    entityType: string,
+    sourceId: string,
+    query: ArchiveHistoryQuery = {},
+    signal?: AbortSignal
+  ): Promise<CrikoraEnvelope<CrikoraEntitySnapshot[]>> {
+    const params = new URLSearchParams();
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.before) params.set("before", query.before);
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return this.request<CrikoraEnvelope<CrikoraEntitySnapshot[]>>(
+      `/v1/archive/entities/${encodeURIComponent(entityType)}/${encodeURIComponent(sourceId)}/history${suffix}`,
+      signal
+    );
   }
 
   private listByStatus(
@@ -191,9 +391,10 @@ export class CrikoraApiClient {
   private listEntities(
     entity: string,
     limit: number,
+    offset = 0,
     signal?: AbortSignal
   ): Promise<CrikoraEnvelope<CrikoraEntity[]>> {
-    const params = new URLSearchParams({ limit: String(limit) });
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     return this.request<CrikoraEnvelope<CrikoraEntity[]>>(`/v1/${entity}?${params.toString()}`, signal);
   }
 

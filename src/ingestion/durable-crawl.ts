@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { EntityRepository } from "../domain/entities.js";
-import { dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, type CricbuzzProvider } from "../providers/cricbuzz-provider.js";
+import { isArchiveRepository } from "../storage/archive-repository.js";
+import { dedupeCricbuzzPageUrls, getCricbuzzCrawlIdentityKey, getCricbuzzDiscoverySeedUrls, type CricbuzzProvider } from "../providers/cricbuzz-provider.js";
 
 type RunStatus = "queued" | "running" | "completed" | "paused";
 type QueueStatus = "pending" | "processing" | "completed" | "failed" | "skipped";
@@ -9,6 +10,7 @@ type QueueStatus = "pending" | "processing" | "completed" | "failed" | "skipped"
 interface RunRow {
   id: string;
   status: RunStatus;
+  collection_scope: string;
   seeded_url_count: number;
   discovered_url_count: number;
   processed_count: number;
@@ -84,8 +86,19 @@ function errorMessage(error: unknown): string {
 
 function pageKind(url: string): string {
   try {
-    const path = new URL(url).pathname.split("/").filter(Boolean);
-    return path[0] ?? "unknown";
+    const path = new URL(url).pathname.replace(/\/+$/, "") || "/";
+    if (/^\/live-cricket-scores\//i.test(path)) return "match";
+    if (/^\/cricket-match-facts\//i.test(path)) return "match-facts";
+    if (/^\/cricket-match-squads\//i.test(path)) return "match-squads";
+    if (/^\/live-cricket-scorecard\//i.test(path)) return "match-scorecard";
+    if (/^\/live-cricket-full-commentary\//i.test(path)) return "commentary";
+    if (/^\/profiles\/\d+\//i.test(path)) return /\/(?:all-matches|batting|bowling|stats)(?:\/|$)/i.test(path) ? "player-stats" : "player";
+    if (/^\/cricket-schedule(?:\/|$)/i.test(path)) return "schedule";
+    if (/^\/cricket-series\/\d+\//i.test(path)) return "series";
+    if (/^\/cricket-news\/\d+\//i.test(path)) return "news";
+    if (/^\/cricket-news\/latest-news(?:\/|$)/i.test(path)) return "news-index";
+    if (/^\/cricket-news(?:\/|$)/i.test(path)) return "news-category";
+    return "unknown";
   } catch {
     return "unknown";
   }
@@ -114,94 +127,121 @@ export class DurableCrawlService {
     }
   }
 
-  async startFullCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
-    const urls = dedupeCricbuzzPageUrls(seedUrls.filter(url => this.provider.isAllowedCrawlUrl(url)));
+  async startTargetedCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
+    const urls = dedupeCricbuzzPageUrls(
+      [...seedUrls, ...getCricbuzzDiscoverySeedUrls()].filter(url => this.provider.isAllowedCrawlUrl(url))
+    );
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
-    if (!urls.length) throw new Error("The sitemap inventory contains no URLs accepted by the Cricbuzz page allowlist.");
+    const kinds = urls.map(pageKind);
+    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match, schedule, player or news seed URLs.");
+    await this.recordCoverageTargets(urls);
 
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtext('crikora_full_crawl'))");
 
-      const active = await client.query<RunRow>(
+      const activeResult = await client.query<RunRow>(
         "SELECT * FROM public.crikora_crawl_runs WHERE status IN ('queued','running') ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
       );
-      if (active.rows[0]) {
-        const runId = active.rows[0].id;
-        await this.skipOutOfScopeJobs(client, runId);
-        const inserted = await client.query(
-          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-          [runId, urls, identityKeys, "sitemap"]
+      let activeRunId = activeResult.rows[0]?.id;
+      if (activeRunId && activeResult.rows[0]?.collection_scope !== "targeted-product") {
+        // Preserve the previous broad queue as a paused audit record. Pending
+        // URLs are retained but will no longer be claimed by the active worker.
+        await client.query(
+          "UPDATE public.crikora_crawl_runs SET status='paused', last_error=$2, completed_at=now() WHERE id=$1",
+          [activeRunId, "Paused and superseded by targeted prototype scope. The previous mixed sitemap queue is retained and will not be processed."]
         );
-        if (inserted.rowCount) {
-          await client.query(
-            "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2 WHERE id = $1",
-            [runId, inserted.rowCount]
-          );
-        }
-        await client.query("COMMIT");
-        const summary = await this.readSummary(runId);
-        return { created: false, resumed: false, run: summary };
+        activeRunId = undefined;
       }
 
-      const paused = await client.query<RunRow>(
-        "SELECT * FROM public.crikora_crawl_runs WHERE status = 'paused' ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
-      );
-      if (paused.rows[0]) {
-        const runId = paused.rows[0].id;
-        await this.skipOutOfScopeJobs(client, runId);
+      if (activeRunId) {
         const inserted = await client.query(
-          "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-          [runId, urls, identityKeys, "sitemap"]
-        );
-        if (inserted.rowCount) {
-          await client.query(
-            "UPDATE public.crikora_crawl_runs SET discovered_url_count = discovered_url_count + $2 WHERE id = $1",
-            [runId, inserted.rowCount]
-          );
-        }
-        await client.query(
-          "UPDATE public.crikora_crawl_runs SET status = 'running', last_error = NULL, completed_at = NULL WHERE id = $1",
-          [runId]
+          "INSERT INTO public.crikora_crawl_queue (run_id,canonical_url,identity_key,page_kind,discovered_from) SELECT $1,item.canonical_url,item.identity_key,item.page_kind,'targeted-seed' FROM unnest($2::text[],$3::text[],$4::text[]) AS item(canonical_url,identity_key,page_kind) ON CONFLICT DO NOTHING",
+          [activeRunId, urls, identityKeys, kinds]
         );
         await client.query(
-          "UPDATE public.crikora_crawl_queue SET status = 'pending', lease_token = NULL, lease_until = NULL, next_attempt_at = now(), updated_at = now() WHERE run_id = $1 AND status = 'processing'",
-          [runId]
+          "UPDATE public.crikora_crawl_runs SET status='running',last_error=NULL,completed_at=NULL,discovered_url_count=discovered_url_count+$2 WHERE id=$1",
+          [activeRunId, inserted.rowCount ?? 0]
         );
         await client.query(
-          "UPDATE public.crikora_crawler_settings SET enabled = true, last_error = NULL, lease_until = NULL, updated_at = now() WHERE id = 1"
+          "UPDATE public.crikora_crawl_queue SET status='pending',lease_token=NULL,lease_until=NULL,next_attempt_at=now(),updated_at=now() WHERE run_id=$1 AND status='processing'",
+          [activeRunId]
+        );
+        await client.query(
+          "UPDATE public.crikora_crawler_settings SET enabled=true,last_error=NULL,lease_until=NULL,updated_at=now() WHERE id=1"
         );
         await client.query("COMMIT");
-        const summary = await this.readSummary(runId);
-        return { created: false, resumed: true, run: summary };
+        return { created: false, resumed: false, run: await this.readSummary(activeRunId) };
+      }
+
+      const pausedTarget = await client.query<RunRow>(
+        "SELECT * FROM public.crikora_crawl_runs WHERE status='paused' AND collection_scope='targeted-product' ORDER BY created_at DESC LIMIT 1 FOR UPDATE"
+      );
+      if (pausedTarget.rows[0]) {
+        const runId = pausedTarget.rows[0]!.id;
+        const inserted = await client.query(
+          "INSERT INTO public.crikora_crawl_queue (run_id,canonical_url,identity_key,page_kind,discovered_from) SELECT $1,item.canonical_url,item.identity_key,item.page_kind,'targeted-seed' FROM unnest($2::text[],$3::text[],$4::text[]) AS item(canonical_url,identity_key,page_kind) ON CONFLICT DO NOTHING",
+          [runId, urls, identityKeys, kinds]
+        );
+        await client.query(
+          "UPDATE public.crikora_crawl_runs SET status='running',last_error=NULL,completed_at=NULL,discovered_url_count=discovered_url_count+$2 WHERE id=$1",
+          [runId, inserted.rowCount ?? 0]
+        );
+        await client.query(
+          "UPDATE public.crikora_crawl_queue SET status='pending',lease_token=NULL,lease_until=NULL,next_attempt_at=now(),updated_at=now() WHERE run_id=$1 AND status='processing'",
+          [runId]
+        );
+        await client.query(
+          "UPDATE public.crikora_crawler_settings SET enabled=true,last_error=NULL,lease_until=NULL,updated_at=now() WHERE id=1"
+        );
+        await client.query("COMMIT");
+        return { created: false, resumed: true, run: await this.readSummary(runId) };
       }
 
       const runId = randomUUID();
       await client.query(
-        "INSERT INTO public.crikora_crawl_runs (id, status, seeded_url_count, discovered_url_count, created_at, started_at) VALUES ($1, 'queued', $2, $2, now(), now())",
+        "INSERT INTO public.crikora_crawl_runs (id,status,collection_scope,seeded_url_count,discovered_url_count,created_at,started_at) VALUES ($1,'running','targeted-product',$2,$2,now(),now())",
         [runId, urls.length]
       );
       await client.query(
-        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'sitemap' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-        [runId, urls, identityKeys, "sitemap"]
+        "INSERT INTO public.crikora_crawl_queue (run_id,canonical_url,identity_key,page_kind,discovered_from) SELECT $1,item.canonical_url,item.identity_key,item.page_kind,'targeted-seed' FROM unnest($2::text[],$3::text[],$4::text[]) AS item(canonical_url,identity_key,page_kind)",
+        [runId, urls, identityKeys, kinds]
       );
       await client.query(
-        "UPDATE public.crikora_crawl_runs SET status = 'running' WHERE id = $1",
-        [runId]
-      );
-      await client.query(
-        "UPDATE public.crikora_crawler_settings SET enabled = true, last_error = NULL, lease_until = NULL, updated_at = now() WHERE id = 1"
+        "UPDATE public.crikora_crawler_settings SET enabled=true,last_error=NULL,lease_until=NULL,updated_at=now() WHERE id=1"
       );
       await client.query("COMMIT");
-      const summary = await this.readSummary(runId);
-      return { created: true, resumed: false, run: summary };
+      return { created: true, resumed: false, run: await this.readSummary(runId) };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
       client.release();
     }
+  }
+
+  async startFullCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
+    // Legacy callers now enter the same narrowly scoped product collection.
+    return this.startTargetedCrawl(seedUrls);
+  }
+
+  private async recordCoverageTargets(urls: string[]): Promise<void> {
+    if (!urls.length) return;
+    const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
+    const kinds = urls.map(pageKind);
+    await this.pool.query(
+      `INSERT INTO public.crikora_archive_coverage
+        (source_url, identity_key, page_kind, status)
+       SELECT item.source_url, item.identity_key, item.page_kind, 'pending'
+       FROM unnest($1::text[], $2::text[], $3::text[]) AS item(source_url, identity_key, page_kind)
+       ON CONFLICT (source_url) DO UPDATE SET
+         identity_key = EXCLUDED.identity_key,
+         page_kind = EXCLUDED.page_kind,
+         status = CASE WHEN public.crikora_archive_coverage.status = 'captured' THEN 'captured' ELSE 'pending' END,
+         last_discovered_at = now(), updated_at = now()`,
+      [urls, identityKeys, kinds]
+    );
   }
 
   private async skipOutOfScopeJobs(client: PoolClient, runId: string): Promise<number> {
@@ -231,24 +271,87 @@ export class DurableCrawlService {
   async enqueueDiscoveredUrls(values: string[]): Promise<number> {
     const urls = dedupeCricbuzzPageUrls(values.filter(url => this.provider.isAllowedCrawlUrl(url)));
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
-    if (!urls.length) return 0;
+    if (urls.length) await this.recordCoverageTargets(urls);
+
     const latest = await this.pool.query<{ id: string; status: RunStatus }>(
       "SELECT id, status FROM public.crikora_crawl_runs ORDER BY created_at DESC LIMIT 1"
     );
     const run = latest.rows[0];
     if (!run || run.status === "paused") return 0;
-    const inserted = await this.pool.query(
-      "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'live-index' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
-      [run.id, urls, identityKeys, "discovered"]
+
+    let added = 0;
+    if (urls.length) {
+      const inserted = await this.pool.query(
+        "INSERT INTO public.crikora_crawl_queue (run_id, canonical_url, identity_key, page_kind, discovered_from) SELECT $1, item.canonical_url, item.identity_key, $4, 'live-index' FROM unnest($2::text[], $3::text[]) AS item(canonical_url, identity_key) ON CONFLICT DO NOTHING",
+        [run.id, urls, identityKeys, "discovered"]
+      );
+      added = inserted.rowCount ?? 0;
+    }
+
+    // Re-enrich changed, already-captured records on their own cadence. Match
+    // details are refreshed most often; player career/stat pages and stable
+    // entity pages are refreshed daily; volatile directories are revisited
+    // more frequently. Selection is DB-wide, not limited to the in-memory map.
+    const duePages = await this.pool.query(
+      `WITH due AS (
+         SELECT queue.id
+         FROM public.crikora_crawl_queue AS queue
+         JOIN public.crikora_archive_coverage AS coverage
+           ON coverage.source_url = queue.canonical_url
+         LEFT JOIN public.crikora_cache AS cached
+           ON cached.entity_type = 'match'
+          AND cached.source_id = substring(queue.identity_key from 7)
+         WHERE queue.run_id = $1
+           AND queue.status = 'completed'
+           AND coverage.last_fetched_at IS NOT NULL
+           AND (
+             (
+               coverage.page_kind = 'match'
+               AND (
+                 (cached.payload->>'status' = 'live'
+                   AND coverage.last_fetched_at <= now() - interval '2 minutes')
+                 OR
+                 (cached.payload->>'status' = 'upcoming'
+                   AND coverage.last_fetched_at <= now() - interval '15 minutes')
+               )
+             )
+             OR
+             (coverage.page_kind IN ('player', 'player-stats', 'series')
+               AND coverage.last_fetched_at <= now() - interval '24 hours')
+             OR
+             (coverage.page_kind IN ('schedule', 'news-index', 'news-category')
+               AND coverage.last_fetched_at <= now() - interval '30 minutes')
+             OR
+             (coverage.page_kind = 'news'
+               AND coverage.last_fetched_at <= now() - interval '24 hours')
+           )
+         ORDER BY coverage.last_fetched_at ASC, queue.id ASC
+         LIMIT 10
+         FOR UPDATE OF queue SKIP LOCKED
+       )
+       UPDATE public.crikora_crawl_queue AS queue
+          SET status = 'pending',
+              next_attempt_at = now(),
+              attempts = 0,
+              lease_token = NULL,
+              lease_until = NULL,
+              completed_at = NULL,
+              last_error = NULL,
+              updated_at = now()
+         FROM due
+        WHERE queue.id = due.id
+       RETURNING queue.id`,
+      [run.id]
     );
-    const added = inserted.rowCount ?? 0;
-    if (added) {
+    const refreshed = duePages.rowCount ?? 0;
+    const scheduled = added + refreshed;
+    if (scheduled) {
       await this.pool.query(
         "UPDATE public.crikora_crawl_runs SET status = CASE WHEN status = 'completed' THEN 'running' ELSE status END, completed_at = NULL, discovered_url_count = discovered_url_count + $2 WHERE id = $1",
         [run.id, added]
       );
     }
-    return added;
+    return scheduled;
   }
 
   async processBatch(signal?: AbortSignal): Promise<CrawlStepResult> {
@@ -269,6 +372,15 @@ export class DurableCrawlService {
       [active.id, this.batchSize, leaseToken, this.leaseSeconds]
     );
 
+    if (claimed.rows.length) {
+      await this.pool.query(
+        `UPDATE public.crikora_archive_coverage
+            SET status = 'processing', last_attempted_at = now(), updated_at = now()
+          WHERE source_url = ANY($1::text[])`,
+        [claimed.rows.map(row => row.canonical_url)]
+      );
+    }
+
     let processed = 0;
     for (let index = 0; index < claimed.rows.length; index += 1) {
       const row = claimed.rows[index]!;
@@ -287,7 +399,19 @@ export class DurableCrawlService {
           continue;
         }
         const page = await this.provider.fetchCrawlPage(row.canonical_url, signal);
+        if (page.sourcePages?.length && isArchiveRepository(this.repository)) {
+          await this.repository.recordSourcePages(page.sourcePages, active.id);
+        }
         if (page.entity) await this.repository.upsertMany([page.entity]);
+        if (page.skipped) {
+          await this.pool.query(
+            `UPDATE public.crikora_archive_coverage
+                SET status = 'skipped', last_attempted_at = now(),
+                    attempt_count = attempt_count + 1, updated_at = now()
+              WHERE source_url = $1`,
+            [row.canonical_url]
+          );
+        }
         if (page.discoveredUrls.length) {
           const discovered = dedupeCricbuzzPageUrls(page.discoveredUrls.filter(url => url !== row.canonical_url));
           if (discovered.length) {
@@ -319,6 +443,16 @@ export class DurableCrawlService {
             "UPDATE public.crikora_crawl_queue SET status = 'skipped', lease_token = NULL, lease_until = NULL, completed_at = now(), last_error = $1, updated_at = now() WHERE id = $2 AND run_id = $3 AND lease_token = $4",
             [message, row.id, active.id, leaseToken]
           );
+          await this.pool.query(
+            `INSERT INTO public.crikora_archive_coverage
+              (source_url, identity_key, page_kind, status, last_attempted_at, last_http_status, attempt_count, last_error)
+             VALUES ($1, $2, $3, 'skipped', now(), $4, $5, $6)
+             ON CONFLICT (source_url) DO UPDATE SET
+               status = 'skipped', last_attempted_at = now(), last_http_status = EXCLUDED.last_http_status,
+               attempt_count = public.crikora_archive_coverage.attempt_count + 1,
+               last_error = EXCLUDED.last_error, updated_at = now()`,
+            [row.canonical_url, getCricbuzzCrawlIdentityKey(row.canonical_url), pageKind(row.canonical_url), status ?? null, count(row.attempts), message]
+          );
           processed += 1;
           console.warn("Crikora skipped one unavailable cricket page and continued the durable run", {
             url: row.canonical_url,
@@ -334,6 +468,16 @@ export class DurableCrawlService {
             "UPDATE public.crikora_crawl_queue SET status = 'failed', lease_token = NULL, lease_until = NULL, completed_at = now(), last_error = $1, updated_at = now() WHERE id = $2 AND run_id = $3 AND lease_token = $4",
             [message, row.id, active.id, leaseToken]
           );
+          await this.pool.query(
+            `INSERT INTO public.crikora_archive_coverage
+              (source_url, identity_key, page_kind, status, last_attempted_at, last_http_status, attempt_count, last_error)
+             VALUES ($1, $2, $3, 'failed', now(), $4, $5, $6)
+             ON CONFLICT (source_url) DO UPDATE SET
+               status = 'failed', last_attempted_at = now(), last_http_status = EXCLUDED.last_http_status,
+               attempt_count = public.crikora_archive_coverage.attempt_count + 1,
+               last_error = EXCLUDED.last_error, updated_at = now()`,
+            [row.canonical_url, getCricbuzzCrawlIdentityKey(row.canonical_url), pageKind(row.canonical_url), status ?? null, count(row.attempts), message]
+          );
           processed += 1;
           continue;
         }
@@ -344,6 +488,13 @@ export class DurableCrawlService {
         await this.pool.query(
           "UPDATE public.crikora_crawl_queue SET status = 'pending', next_attempt_at = now() + make_interval(secs => $1::double precision / 1000), lease_token = NULL, lease_until = NULL, last_error = $2, updated_at = now() WHERE id = $3 AND run_id = $4 AND lease_token = $5",
           [delayMs, message, row.id, active.id, leaseToken]
+        );
+        await this.pool.query(
+          `UPDATE public.crikora_archive_coverage
+              SET status = 'pending', last_attempted_at = now(), last_http_status = $2,
+                  attempt_count = attempt_count + 1, last_error = $3, updated_at = now()
+            WHERE source_url = $1`,
+          [row.canonical_url, status ?? null, message]
         );
         await this.releaseClaimed(active.id, leaseToken);
         const run = await this.readSummary(active.id);

@@ -274,7 +274,9 @@ async function processCrawlStep(config: Config): Promise<{ active: boolean; retr
 }
 
 async function runRefresh(config: Config): Promise<number> {
-  const result = await requestApi(config, "refresh", "POST", "refresh", 55_000);
+  // Only refresh the compact live/upcoming/recent match indexes here.
+  // The durable crawl owns player, news, schedule and match-detail enrichment.
+  const result = await requestApi(config, "refresh/index", "POST", "refresh", 55_000);
   if (result.status === 401 || result.status === 403 || result.status === 409) {
     throw new ApiError(
       `Refresh stopped by the core API: ${result.body.error ?? result.status}`,
@@ -370,6 +372,7 @@ async function main(): Promise<void> {
 
     const startFullCrawlOnEnable = config.startFullCrawlOnEnable || args.has("--start-crawl");
     let loggedDisabled = false;
+    let targetedStartRequested = false;
 
     do {
       if (stopped.value) break;
@@ -389,18 +392,14 @@ async function main(): Promise<void> {
       }
       loggedDisabled = false;
 
+      if (startFullCrawlOnEnable && !targetedStartRequested) {
+        // This idempotent endpoint pauses an older broad run and starts/resumes
+        // the new targeted-product run before any worker step can claim legacy URLs.
+        await startFullCrawl(config);
+        targetedStartRequested = true;
+      }
       let crawl = await readCrawlStatus(config);
-      if (!crawl && startFullCrawlOnEnable) {
-        await startFullCrawl(config);
-        crawl = await readCrawlStatus(config);
-      }
       let crawlStatus = typeof crawl?.status === "string" ? crawl.status : "idle";
-      if (crawlStatus === "paused" && startFullCrawlOnEnable) {
-        log("Resuming the existing durable crawl after applying the current cricket-only URL scope.");
-        await startFullCrawl(config);
-        crawl = await readCrawlStatus(config);
-        crawlStatus = typeof crawl?.status === "string" ? crawl.status : "idle";
-      }
       if (crawlStatus === "paused") {
         log("Full crawl remains paused; check the recorded run error before resuming.");
         break;

@@ -28,6 +28,20 @@ export interface Match {
   stats?: Record<string, unknown>;
   images?: Array<{ url: string; alt?: string }>;
   events?: MatchEvent[];
+  /** Structured innings, deliveries, extras, partnerships and commentary. */
+  matchData?: {
+    schemaVersion: number;
+    innings: unknown[];
+    deliveries: unknown[];
+    commentary: unknown[];
+    coverage?: {
+      scorecard: boolean;
+      deliveries: boolean;
+      commentary: boolean;
+      deliveryCompleteness: "present-unverified" | "not-exposed";
+      sources: string[];
+    };
+  };
 }
 export interface MatchEvent {
   id: string; matchId: string; inningsId: string; type: EventType;
@@ -35,9 +49,20 @@ export interface MatchEvent {
   over?: string; occurredAt: string; sourceEventId: string;
   runs?: number; wickets?: number; dismissal?: string;
 }
+export interface SourcePageCapture {
+  url: string;
+  html: string;
+  contentType: string;
+  fetchedAt: string;
+  pageKind: string;
+  entityType?: string;
+  sourceId?: string;
+}
+
 export interface ProviderSnapshot {
   matches: Match[];
   events: MatchEvent[];
   fetchedAt: string;
   entities: import("./entities.js").CrikoraEntity[];
+  sourcePages?: SourcePageCapture[];
 }

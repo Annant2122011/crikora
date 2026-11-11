@@ -64,6 +64,39 @@ describe("CrikoraApiClient", () => {
     );
   });
 
+
+  it("requests the dedicated news and schedule read models with pagination", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ data: [], meta: { count: 0, offset: 100 } })) as unknown as typeof fetch;
+    const client = new CrikoraApiClient("https://api.crikora.example/api", fetcher);
+
+    await client.listNews({ limit: 100, offset: 100 });
+    await client.listSchedule({ limit: 200, offset: 200, from: "2026-11-04T00:00:00.000Z" });
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      "https://api.crikora.example/api/v1/news?limit=100&offset=100",
+      expect.any(Object)
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      "https://api.crikora.example/api/v1/schedule?limit=200&offset=200&from=2026-11-04T00%3A00%3A00.000Z",
+      expect.any(Object)
+    );
+  });
+
+  it("validates and calls player comparison with numeric Cricbuzz IDs", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ data: { players: [], comparison: [] } })) as unknown as typeof fetch;
+    const client = new CrikoraApiClient("https://api.crikora.example", fetcher);
+
+    expect(() => client.comparePlayers(["abc", "123"])).toThrow(TypeError);
+    await client.comparePlayers(["11527", "10012"]);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://api.crikora.example/v1/players/compare?ids=11527%2C10012",
+      expect.any(Object)
+    );
+  });
+
   it("surfaces useful non-2xx API errors", async () => {
     const fetcher = vi.fn(async () => jsonResponse({ error: "Entity not found or expired" }, 404)) as unknown as typeof fetch;
     const client = new CrikoraApiClient("https://api.crikora.example", fetcher);

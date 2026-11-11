@@ -1,6 +1,8 @@
 import { load, type CheerioAPI } from "cheerio";
 import type { CrikoraEntity, EntityType } from "../domain/entities.js";
-import type { EventType, Match, MatchEvent, MatchStatus, ProviderSnapshot } from "../domain/types.js";
+import type { EventType, Match, MatchEvent, MatchStatus, ProviderSnapshot, SourcePageCapture } from "../domain/types.js";
+import { decodeCricbuzzFlightScripts } from "./cricbuzz-rsc.js";
+import { normalizeCricbuzzPlayerProfile, parseCricbuzzMatchData } from "./cricbuzz-structured.js";
 import type { CricketProvider } from "./provider.js";
 
 type MatchBucket = "live" | "upcoming" | "completed";
@@ -18,13 +20,14 @@ interface Options {
   userAgent: string;
 }
 interface DiscoveredMatch { id: string; path: string; bucket: MatchBucket; }
-interface PageRecord { url: string; html: string; $: PageDoc; }
+interface PageRecord { url: string; html: string; $: PageDoc; fetchedAt: string; }
 interface LinkRecord { url: string; path: string; text: string; }
 
 export interface CrawledPageResult {
   entity?: CrikoraEntity;
   discoveredUrls: string[];
   skipped: boolean;
+  sourcePages?: SourcePageCapture[];
 }
 
 export interface CricbuzzSitemapDiscoveryResult {
@@ -42,21 +45,105 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
 // Two broad section indexes are sampled every refresh tick. The time-derived
 // cursor works across Vercel cold starts without depending on process memory.
 const SECTION_INDEXES = [
-  "/cricket-news",
-  "/cricket-videos",
-  "/cricket-videos/categories",
-  "/cricket-videos/playlists",
-  "/cricket-photo-gallery",
-  "/cricket-team",
-  "/profiles",
-  "/cricket-schedule/series/all",
+  "/cricket-schedule/upcoming-series/all",
   "/cricket-schedule/upcoming-series/international",
-  "/cricket-stats/icc-rankings/men/batting",
-  "/cricket-stats/icc-rankings/women/batting",
-  "/cricket-stats/points-table/test/icc-world-test-championship",
-  "/cricket-series/auctions",
-  "/cricket-scorecard-archives"
+  "/cricket-schedule/series/all",
+  "/cricket-news",
+  "/cricket-news/latest-news"
 ];
+
+const TARGETED_PAGE_KINDS = new Set([
+  "match", "match-facts", "match-squads", "match-scorecard", "commentary",
+  "player", "player-stats", "series", "series-subpage", "schedule",
+  "news", "news-index", "news-category"
+]);
+
+export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) return false;
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    if (INDEXES.some(index => index.path === path) || SECTION_INDEXES.includes(path)) return true;
+    const rule = PATH_RULES.find(item => item.pattern.test(path));
+    if (!rule) return false;
+    return TARGETED_PAGE_KINDS.has(rule.kind ?? rule.type);
+  } catch {
+    return false;
+  }
+}
+
+function isNewsArticlePath(path: string): boolean {
+  return /^\/cricket-news\/\d+\//i.test(path);
+}
+
+function playerProfilePath(path: string): { id: string; isStats: boolean } | undefined {
+  const match = path.match(/^\/profiles\/(\d+)\/[^/]+(.*)$/i);
+  if (!match) return undefined;
+  return { id: match[1]!, isStats: Boolean(match[2]) };
+}
+
+function hasMatchPageIdentity(path: string): boolean {
+  return /^\/(?:live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary)\/\d+\//i.test(path);
+}
+
+export function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boolean {
+  if (!isTargetedCricbuzzCollectionUrl(targetUrl)) return false;
+  try {
+    const sourcePath = new URL(sourceUrl).pathname;
+    const targetPath = new URL(targetUrl).pathname;
+    const sourceNewsArticle = isNewsArticlePath(sourcePath);
+    const targetNewsArticle = isNewsArticlePath(targetPath);
+    const sourceMatch = hasMatchPageIdentity(sourcePath);
+    const targetMatch = hasMatchPageIdentity(targetPath);
+    const sourcePlayer = playerProfilePath(sourcePath);
+    const targetPlayer = playerProfilePath(targetPath);
+    const sourceSchedule = /^\/(?:cricket-schedule|cricket-series)(?:\/|$)/i.test(sourcePath);
+    const sourceMatchIndex = /^\/cricket-match\/live-scores(?:\/|$)/i.test(sourcePath);
+    const sourceNewsIndex = /^\/cricket-news(?:\/|$)/i.test(sourcePath) && !sourceNewsArticle;
+
+    // News indexes discover articles. Articles never recurse into more articles.
+    if (sourceNewsIndex) return targetNewsArticle || /^\/cricket-news\/(?:editorial|latest-news)(?:\/|$)/i.test(targetPath);
+    if (sourceMatchIndex) return targetMatch;
+    if (sourceNewsArticle) return Boolean(targetPlayer && !targetPlayer.isStats);
+
+    // A schedule or series index may discover match fixtures and series detail.
+    if (sourceSchedule) return targetMatch || Boolean(targetPlayer) ||
+      /^\/cricket-series\/\d+\/[^/]+\/?$/i.test(targetPath) ||
+      /^\/cricket-schedule\//i.test(targetPath);
+
+    // Match pages can discover the participants' profiles, not every related
+    // match carousel or unrelated directory route.
+    if (sourceMatch) {
+      if (targetMatch) return false;
+      return Boolean(targetPlayer);
+    }
+
+    // Each profile discovers only its own statistics tabs.
+    if (sourcePlayer && targetPlayer) {
+      return sourcePlayer.id === targetPlayer.id && targetPlayer.isStats;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function isAtOrAfterConfiguredMatchStart(value: string | undefined): boolean {
+  if (!value) return false;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const configuredDate = process.env.CRIKORA_MATCH_DETAILS_FROM?.trim() || "2026-11-04";
+  const cutoff = new Date(configuredDate + "T00:00:00+05:30");
+  if (Number.isNaN(cutoff.getTime())) throw new Error("CRIKORA_MATCH_DETAILS_FROM must be YYYY-MM-DD.");
+  return parsed.getTime() >= cutoff.getTime();
+}
+
+
+
+export function getCricbuzzDiscoverySeedUrls(): string[] {
+  return [...INDEXES.map(item => new URL(item.path, ORIGIN).toString()),
+    ...SECTION_INDEXES.map(path => new URL(path, ORIGIN).toString())];
+}
 
 const PATH_RULES: Array<{ type: EntityType; pattern: RegExp; kind?: string }> = [
   { type: "match", pattern: /^\/live-cricket-scores\/(\d+)\/[^/]+\/?$/ },
@@ -118,16 +205,20 @@ export class CricbuzzProvider implements CricketProvider {
   async fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
     const discovered = new Map<string, DiscoveredMatch>();
     const indexRecords = new Map<string, Match>();
+    const capturedPages = new Map<string, PageRecord>();
     for (const index of INDEXES) {
       const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
       if (!page) continue;
+      capturedPages.set(page.url, page);
       for (const link of getLinks(page.$, page.url)) {
         const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
         if (match?.[1] && !discovered.has(match[1])) {
           const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
           const stub = parseMatchIndexStub(item, page, link);
           discovered.set(match[1], item);
-          indexRecords.set(match[1], stub);
+          if (index.bucket !== "completed" || isAtOrAfterConfiguredMatchStart(stub.startTime)) {
+            indexRecords.set(match[1], stub);
+          }
         }
       }
     }
@@ -139,10 +230,33 @@ export class CricbuzzProvider implements CricketProvider {
     for (const path of sectionPaths) {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
       const page = await this.tryFetchPage(new URL(path, ORIGIN), "section-index", signal);
-      if (page) sectionPages.push(page);
+      if (page) {
+        sectionPages.push(page);
+        capturedPages.set(page.url, page);
+      }
     }
 
     const allMatches = [...discovered.values()];
+    // Persist every match URL into the targeted durable queue. Completed index
+    // stubs are withheld until their detail page proves the configured date.
+    // Persist every match URL into the durable crawl queue, not only the small
+    // per-poll deep-enrichment slice. This prevents cold starts from repeatedly
+    // enriching only the first few matches in the index.
+    let pendingMatches = this.pendingRelatedLinks.get("match");
+    if (!pendingMatches) {
+      pendingMatches = new Map<string, LinkRecord>();
+      this.pendingRelatedLinks.set("match", pendingMatches);
+    }
+    for (const item of allMatches) {
+      const url = new URL(item.path, ORIGIN).toString();
+      if (!pendingMatches.has(url)) pendingMatches.set(url, { url, path: item.path, text: "match index" });
+    }
+    while (pendingMatches.size > 2_000) {
+      const oldest = pendingMatches.keys().next().value as string | undefined;
+      if (!oldest) break;
+      pendingMatches.delete(oldest);
+    }
+
     const selected = rotate(allMatches, this.matchCursor, this.options.maxMatchesPerPoll);
     if (allMatches.length) this.matchCursor = (this.matchCursor + selected.length) % allMatches.length;
 
@@ -182,8 +296,8 @@ export class CricbuzzProvider implements CricketProvider {
         ? await this.tryFetchPage(new URL(navigation.commentary, ORIGIN), "commentary", signal)
         : undefined;
 
-      const match = parseMatch(discoveredMatch, base, info, scorecard, squads);
-      const matchEvents = commentary ? parseEvents(commentary.$, match) : parseEvents(base.$, match);
+      const match = parseMatch(discoveredMatch, base, info, scorecard, squads, commentary);
+      const matchEvents = toMatchEvents(match.matchData, match);
       match.events = matchEvents;
       const existingIndex = matches.findIndex(existing => existing.sourceMatchId === match.sourceMatchId);
       if (existingIndex >= 0) matches[existingIndex] = match;
@@ -202,6 +316,8 @@ export class CricbuzzProvider implements CricketProvider {
       addEntity(entities, "match", discoveredMatch.id, base.url, payload);
 
       for (const page of combinedPages) {
+        capturedPages.set(page.url, page);
+        this.queueRelatedPageLinks(page.$, page.url);
         const related = collectRelatedLinks(page.$, page.url);
         mergeLinks(profileLinks, related.profiles);
         mergeLinks(teamLinks, related.teams);
@@ -214,6 +330,7 @@ export class CricbuzzProvider implements CricketProvider {
     }
 
     for (const page of sectionPages) {
+      this.queueRelatedPageLinks(page.$, page.url);
       const related = collectRelatedLinks(page.$, page.url);
       mergeLinks(profileLinks, related.profiles);
       mergeLinks(teamLinks, related.teams);
@@ -224,22 +341,113 @@ export class CricbuzzProvider implements CricketProvider {
       if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
     }
 
-    await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, signal);
-    await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, signal);
-    await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, signal);
-    await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, signal);
-    await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, signal);
+    await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, capturedPages, signal);
+    await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, capturedPages, signal);
 
     const fetchedAt = new Date().toISOString();
-    return { matches, events, entities: [...entities.values()], fetchedAt };
+    return { matches, events, entities: [...entities.values()], fetchedAt, sourcePages: [...capturedPages.values()].map(toSourcePageCapture) };
+  }
+
+  async fetchMatchIndexSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
+    const discovered = new Map<string, DiscoveredMatch>();
+    const matches: Match[] = [];
+    const entities = new Map<string, CrikoraEntity>();
+    const capturedPages = new Map<string, PageRecord>();
+
+    // Keep the live catalog lightweight, while sampling the changing section
+    // directories on a time-derived cursor that survives serverless cold starts.
+    for (const index of INDEXES) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz index refresh aborted.");
+      const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
+      if (!page) continue;
+      capturedPages.set(page.url, page);
+      this.queueRelatedPageLinks(page.$, page.url);
+      for (const link of getLinks(page.$, page.url)) {
+        const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
+        if (!match?.[1] || discovered.has(match[1])) continue;
+        const item: DiscoveredMatch = { id: match[1], path: link.path, bucket: index.bucket };
+        const stub = parseMatchIndexStub(item, page, link);
+        discovered.set(item.id, item);
+        if (index.bucket !== "completed" || isAtOrAfterConfiguredMatchStart(stub.startTime)) {
+          matches.push(stub);
+          addEntity(
+            entities,
+            "match",
+            item.id,
+            stub.sourceUrl ?? link.url,
+            stub as unknown as Record<string, unknown>
+          );
+        }
+      }
+    }
+
+    // Schedule/news indexes are refreshed by their durable 30-minute crawl entries,
+    // not on every live-score poll. This keeps the hot path limited to three match indexes.
+
+    const fetchedAt = new Date().toISOString();
+    return {
+      matches,
+      events: [],
+      entities: [...entities.values()],
+      fetchedAt,
+      sourcePages: [...capturedPages.values()].map(toSourcePageCapture)
+    };
   }
 
   isAllowedCrawlUrl(value: string): boolean {
-    return isAllowedCricbuzzPageUrl(value);
+    return isTargetedCricbuzzCollectionUrl(value);
+  }
+
+  getTargetedCollectionSeedUrls(): string[] {
+    return getCricbuzzDiscoverySeedUrls();
+  }
+
+  async discoverNewsSitemapUrls(signal?: AbortSignal): Promise<string[]> {
+    const sitemapPaths = [
+      "/sitemap/cricket-news.xml",
+      "/sitemap/cricket-news-archive.xml",
+      "/sitemap/cricket-news-editorials.xml"
+    ];
+    const articleUrls = new Set<string>();
+    for (const path of sitemapPaths) {
+      const sitemapUrl = new URL(path, ORIGIN);
+      let xml: string;
+      try {
+        xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+      } catch (error) {
+        const status = error && typeof error === "object" && "sourceStatus" in error
+          ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+          : undefined;
+        // An archive/editorial sitemap can legitimately be absent on a source
+        // deployment. Continue with remaining feeds only for a permanent 404/410.
+        // Denials and throttles remain terminal so the collector respects them.
+        if (status === 404 || status === 410) continue;
+        throw error;
+      }
+      for (const value of parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls) {
+        try {
+          if (isNewsArticlePath(new URL(value).pathname)) articleUrls.add(value);
+        } catch {
+          // Ignore malformed sitemap loc entries, but continue other news feeds.
+        }
+      }
+    }
+    return [...articleUrls];
+  }
+
+  async discoverPlayerSitemapUrls(signal?: AbortSignal): Promise<string[]> {
+    const sitemapUrl = new URL("/sitemap/cricket-player-profile.xml", ORIGIN);
+    const xml = await this.fetchSitemapDocument(sitemapUrl, signal);
+    return parseCricbuzzSitemapXml(xml, sitemapUrl.toString()).pageUrls.filter(value =>
+      Boolean(playerProfilePath(new URL(value).pathname))
+    );
   }
 
   getPendingRelatedUrls(): string[] {
-    return [...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]);
+    return [...new Set([...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]))];
   }
 
   /**
@@ -327,11 +535,16 @@ export class CricbuzzProvider implements CricketProvider {
       const squadsUrl = navigation.squads ?? fallback.squads;
       const commentaryUrl = navigation.commentary ?? fallback.commentary;
       const info = infoUrl ? await this.tryFetchPage(new URL(infoUrl), "durable:match-facts", signal) : undefined;
+      const dateCheck = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info);
+      if (bucket === "completed" && !isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
+        const datedPages = [page, info].filter((item): item is PageRecord => Boolean(item));
+        return { discoveredUrls: [], skipped: true, sourcePages: datedPages.map(toSourcePageCapture) };
+      }
       const scorecard = scorecardUrl ? await this.tryFetchPage(new URL(scorecardUrl), "durable:scorecard", signal) : undefined;
       const squadsPage = squadsUrl ? await this.tryFetchPage(new URL(squadsUrl), "durable:squads", signal) : undefined;
       const commentary = commentaryUrl ? await this.tryFetchPage(new URL(commentaryUrl), "durable:commentary", signal) : undefined;
       pages = [page, info, scorecard, squadsPage, commentary].filter((item): item is PageRecord => Boolean(item));
-      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage);
+      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage, commentary);
       match.infoUrl = info?.url;
       match.scorecardUrl = scorecard?.url;
       match.squadsUrl = squadsPage?.url;
@@ -355,6 +568,68 @@ export class CricbuzzProvider implements CricketProvider {
       entity = parseEntityPage(page.$, page.url, identity.entityType);
     }
 
+    const scorecardRoute = url.pathname.match(/^\/live-cricket-scorecard\/(\d+)\/([^/]+)\/?$/);
+    if (scorecardRoute) {
+      const matchId = scorecardRoute[1]!;
+      const slug = scorecardRoute[2]!;
+      // Year/archive pages commonly link directly to scorecards. Resolve the
+      // matching live-score page and companion tabs so a historical scorecard
+      // becomes a proper match entity instead of generic page metadata.
+      const overview = await this.tryFetchPage(
+        new URL(`/live-cricket-scores/${matchId}/${slug}`, ORIGIN),
+        "archive:match-overview",
+        signal
+      );
+      const matchPage = overview ?? page;
+      const navigation = collectMatchNavigation(matchPage.$, matchPage.url, matchId);
+      const factsUrl = navigation.info ?? `${ORIGIN}/cricket-match-facts/${matchId}/${slug}`;
+      const squadsUrl = navigation.squads ?? `${ORIGIN}/cricket-match-squads/${matchId}/${slug}`;
+      const commentaryUrl = navigation.commentary ?? `${ORIGIN}/live-cricket-full-commentary/${matchId}/${slug}`;
+      const info = await this.tryFetchPage(new URL(factsUrl), "archive:match-facts", signal);
+      const dateCheck = parseMatch(
+        { id: matchId, path: url.pathname, bucket: "completed" },
+        matchPage, info, page
+      );
+      if (!isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
+        const datedPages = [page, overview, info].filter((item): item is PageRecord => Boolean(item));
+        return { discoveredUrls: [], skipped: true, sourcePages: datedPages.map(toSourcePageCapture) };
+      }
+      const squads = await this.tryFetchPage(new URL(squadsUrl), "archive:match-squads", signal);
+      const commentary = await this.tryFetchPage(new URL(commentaryUrl), "archive:match-commentary", signal);
+      const uniquePages = new Map<string, PageRecord>();
+      for (const candidate of [page, overview, info, squads, commentary]) {
+        if (candidate) uniquePages.set(candidate.url, candidate);
+      }
+      pages = [...uniquePages.values()];
+      const match = parseMatch(
+        { id: matchId, path: url.pathname, bucket: "completed" },
+        matchPage,
+        info,
+        page,
+        squads
+      );
+      match.status = "completed";
+      match.scorecardUrl = page.url;
+      match.infoUrl = info?.url;
+      match.squadsUrl = squads?.url;
+      match.commentaryUrl = commentary?.url;
+      entity = {
+        entityType: "match",
+        sourceId: matchId,
+        sourceUrl: matchPage.url,
+        payload: {
+          ...match,
+          pageKind: "match-scorecard",
+          matchFacts: info ? extractPageData(info.$, info.url) : null,
+          scorecardPage: extractPageData(page.$, page.url),
+          squadPage: squads ? extractPageData(squads.$, squads.url) : null,
+          commentaryPage: commentary ? extractPageData(commentary.$, commentary.url) : null,
+          sourcePages: pages.map(item => item.url)
+        },
+        fetchedAt: new Date().toISOString()
+      };
+    }
+
     if (!entity) {
       const path = new URL(page.url).pathname.replace(/\/+$/, "") || "/";
       entity = {
@@ -366,13 +641,33 @@ export class CricbuzzProvider implements CricketProvider {
       };
     }
 
-    const discoveredUrls = [...new Set([
-      ...pages.slice(1).map(item => item.url),
-      ...pages.flatMap(item => getLinks(item.$, item.url).map(link => link.url))
-    ])]
-      .filter(linkUrl => isAllowedCricbuzzPageUrl(linkUrl))
-      .slice(0, 250);
-    return { entity, discoveredUrls, skipped: false };
+    for (const captured of pages) this.queueRelatedPageLinks(captured.$, captured.url);
+    const discoveredUrls = [...new Set(
+      pages.flatMap(item => getLinks(item.$, item.url)
+        .filter(link => shouldFollowTargetedPageLink(item.url, link.url))
+        .map(link => link.url))
+    )]
+      .filter(linkUrl => isTargetedCricbuzzCollectionUrl(linkUrl));
+    return { entity, discoveredUrls, skipped: false, sourcePages: pages.map(toSourcePageCapture) };
+  }
+
+  private queueRelatedPageLinks($: PageDoc, baseUrl: string): void {
+    for (const link of getLinks($, baseUrl)) {
+      if (!shouldFollowTargetedPageLink(baseUrl, link.url)) continue;
+      const identity = classifyCricbuzzEntityUrl(link.url);
+      if (!identity) continue;
+      let pending = this.pendingRelatedLinks.get(identity.entityType);
+      if (!pending) {
+        pending = new Map<string, LinkRecord>();
+        this.pendingRelatedLinks.set(identity.entityType, pending);
+      }
+      if (!pending.has(link.url)) pending.set(link.url, link);
+      while (pending.size > 2_000) {
+        const newest = [...pending.keys()].at(-1);
+        if (!newest) break;
+        pending.delete(newest);
+      }
+    }
   }
 
   private async fetchRelatedEntities(
@@ -380,6 +675,7 @@ export class CricbuzzProvider implements CricketProvider {
     limit: number,
     expectedType: EntityType,
     entities: Map<string, CrikoraEntity>,
+    capturedPages: Map<string, PageRecord>,
     signal?: AbortSignal
   ): Promise<void> {
     if (!limit) return;
@@ -400,6 +696,8 @@ export class CricbuzzProvider implements CricketProvider {
       if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
       const page = await this.tryFetchPage(new URL(link.url), `related:${expectedType}`, signal);
       if (page) {
+        capturedPages.set(page.url, page);
+        this.queueRelatedPageLinks(page.$, page.url);
         const parsed = parseEntityPage(page.$, page.url, expectedType);
         if (parsed) addEntity(entities, parsed.entityType, parsed.sourceId, parsed.sourceUrl, parsed.payload);
       }
@@ -549,8 +847,25 @@ export class CricbuzzProvider implements CricketProvider {
     if (/captcha|robot check|access denied|unusual traffic/i.test(html.slice(0, 100_000))) {
       throw createSourceHttpError("Cricbuzz presented an access challenge; the collector stopped without bypassing it.", 403);
     }
-    return { url: url.toString(), html, $: load(html) };
+    return { url: url.toString(), html, $: load(html), fetchedAt: new Date().toISOString() };
   }
+}
+
+
+function toSourcePageCapture(page: PageRecord): SourcePageCapture {
+  const parsed = new URL(page.url);
+  const path = parsed.pathname.replace(/\/+$/, "") || "/";
+  const identity = classifyCricbuzzEntityUrl(page.url);
+  const rule = PATH_RULES.find(item => item.pattern.test(path));
+  const pageKind = rule?.kind ?? identity?.entityType ?? path.split("/").filter(Boolean)[0] ?? "root";
+  return {
+    url: page.url,
+    html: page.html,
+    contentType: "text/html; charset=utf-8",
+    fetchedAt: page.fetchedAt,
+    pageKind,
+    ...(identity ? { entityType: identity.entityType, sourceId: identity.sourceId } : {})
+  };
 }
 
 function readSourceStatus(error: unknown): number | undefined {
@@ -697,6 +1012,8 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     try { return new URL(href, page.url).pathname === link.path; } catch { return false; }
   }).first();
   const context = clean(anchor.parent().parent().parent().text() || anchor.parent().parent().text() || link.text);
+  const cardDate = context.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\s*\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0] ??
+    context.match(/[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0];
   const titleCandidate = context.match(/([^|]{2,100}?\s+vs\s+[^|]{2,100}?)(?:\s{2,}|$)/i)?.[1];
   const title = clean(titleCandidate || link.text || context.slice(0, 180));
   const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
@@ -712,7 +1029,7 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     awayTeam: clean(teams?.[2] ?? "") || "Unknown",
     status: item.bucket,
     format,
-    startTime: "",
+    startTime: cardDate ? parseDateTime(cardDate) ?? "" : "",
     innings: [],
     updatedAt: now,
     sourceUrl,
@@ -721,7 +1038,95 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
   };
 }
 
-function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRecord, scorecard?: PageRecord, squadsPage?: PageRecord): Match {
+function flightData($?: PageDoc): unknown {
+  if (!$) return undefined;
+  const scripts: string[] = [];
+  $("script").each((_index, element) => {
+    const script = $(element).html() ?? "";
+    if (script.includes("self.__next_f.push")) scripts.push(script);
+  });
+  const decoded = decodeCricbuzzFlightScripts(scripts);
+  return decoded ? { rowCount: decoded.rowCount, rows: decoded.rows, keyedData: decoded.keyedData } : undefined;
+}
+function toLegacyInnings(matchId: string, inningsData: ReturnType<typeof parseCricbuzzMatchData>["innings"]): Match["innings"] {
+  return inningsData.map(item => {
+    const teamName = item.teamName || "Unknown";
+    return {
+      id: `${matchId}:innings:${item.inningsNumber}`, teamId: slug(teamName), teamName,
+      runs: item.runs ?? 0, wickets: item.wickets ?? 0, overs: item.overs ?? "",
+      batters: item.batters.map((batter, position) => ({
+        id: batter.playerSourceId ?? slug(batter.playerName) + ":" + position,
+        name: batter.playerName, runs: batter.runs, balls: batter.balls,
+        fours: batter.fours, sixes: batter.sixes, out: !batter.notOut
+      })),
+      bowlers: item.bowlers.map((bowler, position) => ({
+        id: bowler.playerSourceId ?? slug(bowler.playerName) + ":" + position,
+        name: bowler.playerName, overs: bowler.overs, runs: bowler.runs, wickets: bowler.wickets
+      }))
+    };
+  });
+}
+function toMatchEvents(matchData: Match["matchData"] | undefined, match: Match): MatchEvent[] {
+  if (!matchData) return [];
+  const output = new Map<string, MatchEvent>();
+  const now = new Date().toISOString();
+  const inningsByNumber = new Map<number, { id: string; teamName: string }>();
+  for (let index = 0; index < matchData.innings.length; index++) {
+    const item = matchData.innings[index] as { inningsNumber?: number; teamName?: string };
+    const number = item.inningsNumber ?? index + 1;
+    inningsByNumber.set(number, { id: `${match.id}:innings:${number}`, teamName: item.teamName ?? "" });
+  }
+  const typeFor = (value: string | undefined, runs?: number, wicket = false): EventType => {
+    const text = (value ?? "").toLowerCase();
+    if (wicket || /wicket|dismiss|out|bowled|caught|lbw|run.?out|stumped/.test(text)) return "wicket";
+    if (/six/.test(text) || runs === 6) return "six";
+    if (/four|boundary/.test(text) || runs === 4) return "four";
+    if (/century|100 runs/.test(text)) return "century";
+    if (/fifty|50 runs/.test(text)) return "fifty";
+    if (/five.?wicket|5.?wicket/.test(text)) return "five_wicket_haul";
+    return "other";
+  };
+  for (const raw of matchData.deliveries) {
+    const item = raw as Record<string, unknown>;
+    const id = String(item.sourceEventId ?? "");
+    if (!id) continue;
+    const inningsNumber = Number(item.inningsNumber ?? 1);
+    const innings = inningsByNumber.get(inningsNumber);
+    const summary = String(item.commentary ?? item.description ?? "");
+    const runs = Number(item.totalRuns ?? 0);
+    const wicket = Boolean(item.isWicket);
+    output.set(id, {
+      id, sourceEventId: id, matchId: match.id,
+      inningsId: innings?.id ?? `${match.id}:innings:${inningsNumber}`,
+      type: typeFor(String(item.eventType ?? ""), runs, wicket), teamName: innings?.teamName ?? "",
+      ...(item.batter ? { playerName: String(item.batter) } : {}),
+      summary: summary || (wicket ? "Wicket" : `${runs} run(s)`),
+      ...(item.overNumber !== undefined ? { over: `${item.overNumber}${item.ballNumber !== undefined ? "." + item.ballNumber : ""}` } : {}),
+      occurredAt: now, runs, ...(wicket ? { wickets: 1 } : {})
+    });
+  }
+  for (const raw of matchData.commentary) {
+    const item = raw as Record<string, unknown>;
+    const id = String(item.sourceEventId ?? "");
+    if (!id || output.has(id)) continue;
+    const inningsNumber = Number(item.inningsNumber ?? 1);
+    const innings = inningsByNumber.get(inningsNumber);
+    const summary = String(item.commentary ?? item.description ?? "");
+    output.set(id, {
+      id, sourceEventId: id, matchId: match.id,
+      inningsId: innings?.id ?? `${match.id}:innings:${inningsNumber}`,
+      type: typeFor(String(item.eventType ?? "")), teamName: innings?.teamName ?? "",
+      ...(item.batter ? { playerName: String(item.batter) } : {}), summary,
+      ...(item.overNumber !== undefined ? { over: `${item.overNumber}${item.ballNumber !== undefined ? "." + item.ballNumber : ""}` } : {}),
+      occurredAt: now
+    });
+  }
+  return [...output.values()].sort((left, right) => (left.over ?? "").localeCompare(right.over ?? "", undefined, { numeric: true }));
+}
+function parseMatch(
+  discovered: DiscoveredMatch, base: PageRecord, info?: PageRecord, scorecard?: PageRecord,
+  squadsPage?: PageRecord, commentaryPage?: PageRecord
+): Match {
   const $ = base.$;
   const title = clean($("h1").first().text() || $("title").text()).replace(/\s+-\s+(?:Commentary|Live|Scorecard).*$/i, "");
   const pair = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
@@ -731,115 +1136,161 @@ function parseMatch(discovered: DiscoveredMatch, base: PageRecord, info?: PageRe
   const homeTeam = clean(pair?.[1] ?? "") || "Unknown";
   const awayTeam = clean(pair?.[2] ?? "") || "Unknown";
   const now = new Date().toISOString();
-  const innings = parseScorecard(scorecard?.$, discovered.id, homeTeam, awayTeam);
+  const matchData = parseCricbuzzMatchData(discovered.id, scorecard?.$, commentaryPage?.$, {
+    scorecard: flightData(scorecard?.$), commentary: flightData(commentaryPage?.$)
+  });
+  const innings = toLegacyInnings(discovered.id, matchData.innings);
   const competition = title.split(",").slice(1).join(",").trim().replace(/\s+-\s+.*$/, "") || "Cricket";
   const seriesLink = getLinks($, base.url).find(link => link.path.startsWith("/cricket-series/"));
   const venueLink = getLinks(info?.$ ?? $, info?.url ?? base.url).find(link => /\/venues\/\d+/.test(link.path));
   const venueText = labeledValue(infoText || body, "Venue");
-  const dateTimeText = labeledValue(infoText || body, "Time") || labeledValue(infoText || body, "Date & Time");
+  const dateTimeText = labeledValue(infoText || body, "Date & Time") || labeledValue(infoText || body, "Time") ||
+    $("time[datetime]").first().attr("datetime") || "";
   const toss = labeledValue(infoText || body, "Toss");
   const result = body.match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
   const status: MatchStatus = result || discovered.bucket === "completed" ? "completed" : discovered.bucket;
-  const format = classifyMatchFormat(title);
-  const images = extractImages($);
   return {
     id: `cricbuzz:${discovered.id}`, source: "cricbuzz", sourceMatchId: discovered.id,
-    competition, homeTeam, awayTeam, status, format, startTime: parseDateTime(dateTimeText) ?? "",
+    competition, homeTeam, awayTeam, status, format: classifyMatchFormat(title),
+    startTime: parseDateTime(dateTimeText) ?? "",
     venue: venueLink?.text || venueText || undefined, description: title, innings, updatedAt: now,
     sourceUrl: base.url, infoUrl: info?.url, scorecardUrl: scorecard?.url,
-    squadsUrl: getLinks(base.$, base.url).find(l => l.path.startsWith("/cricket-match-squads/"))?.url,
-    commentaryUrl: getLinks(base.$, base.url).find(l => l.path.startsWith("/live-cricket-full-commentary/"))?.url,
-    toss: toss || undefined, result,
-    stats: { liveSummary: body.slice(0, 5000), scorecardText: scoreText.slice(0, 12000), infoText: infoText.slice(0, 12000), seriesUrl: seriesLink?.url, dateTimeText, seriesName: competition },
-    images,
+    squadsUrl: getLinks(base.$, base.url).find(link => link.path.startsWith("/cricket-match-squads/"))?.url,
+    commentaryUrl: commentaryPage?.url, toss: toss || undefined, result,
+    stats: {
+      liveSummary: body.slice(0, 5000), scorecardText: scoreText.slice(0, 12000),
+      infoText: infoText.slice(0, 12000), seriesUrl: seriesLink?.url, dateTimeText, seriesName: competition,
+      parser: { schemaVersion: matchData.schemaVersion, innings: matchData.innings.length, deliveries: matchData.deliveries.length, commentary: matchData.commentary.length }
+    },
+    matchData, images: extractImages($),
     officials: info ? extractLabels(info.$) : undefined,
     squads: squadsPage ? extractSquadData(squadsPage.$, squadsPage.url) : undefined,
     events: []
   };
 }
 
-function parseScorecard($: PageDoc | undefined, matchId: string, home: string, away: string): Match["innings"] {
-  if (!$) return [];
-  const innings: Match["innings"] = [];
-  const containers = $("div.cb-col-100.cb-scrd-hdr-rw, div.cb-col.cb-col-100.cb-scrd-hdr-rw, div.cb-col-100.cb-scrd-itms, div.cb-col.cb-col-100.cb-scrd-itms, table tr").toArray();
-  let current: Match["innings"][number] | undefined;
-  let index = 0;
-  let mode: "batting" | "bowling" = "batting";
-  for (const node of containers) {
-    const row = $(node);
-    const value = clean(row.text());
-    const cols = row.is("tr")
-      ? row.find("th,td").toArray().map(el => clean($(el).text()))
-      : row.children().toArray().map(el => clean($(el).text()));
-    if (/^Batter\b/i.test(value)) { mode = "batting"; continue; }
-    if (/^Bowler\b/i.test(value)) { mode = "bowling"; continue; }
-    const header = value.match(/^([A-Z0-9]{2,10})\s+(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*(Ov|Overs?|Balls?)/i);
-    if (header) {
-      index += 1;
-      const teamName = index === 1 ? home : index === 2 ? away : header[1]!;
-      current = {
-        id: `${matchId}:innings:${index}`, teamId: slug(teamName), teamName,
-        runs: num(header[2]), wickets: num(header[3]), overs: header[4]!, batters: [], bowlers: []
-      };
-      innings.push(current);
-      mode = "batting";
-      continue;
-    }
-    if (!current || cols.length < 4) continue;
-    const first = cols[0] ?? "";
-    if (/^Total$/i.test(first)) {
-      const total = value.match(/(\d{1,3})[-/](\d{1,2})\s*\((\d+(?:\.\d+)?)\s*(?:Ov|Overs?)/i);
-      if (total) { current.runs = num(total[1]); current.wickets = num(total[2]); current.overs = total[3]!; }
-      continue;
-    }
-    if (/^(Extras|Fall of Wickets|Powerplays|Partnerships|Yet to Bat)$/i.test(first)) continue;
-    if (mode === "bowling" && /^\d+(?:\.\d+)?$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "")) {
-      current.bowlers.push({
-        id: slug(first), name: first, overs: cols[1]!,
-        runs: num(cols[3]), wickets: num(cols[4])
-      });
-    } else if (mode === "batting") {
-      const hasDismissal = /^\d+$/.test(cols[2] ?? "") && /^\d+$/.test(cols[3] ?? "");
-      const simpleRow = /^\d+$/.test(cols[1] ?? "") && /^\d+$/.test(cols[2] ?? "");
-      if (hasDismissal) {
-        current.batters.push({
-          id: slug(first), name: first, runs: num(cols[2]), balls: num(cols[3]),
-          fours: num(cols[4]), sixes: num(cols[5]), out: !/not out|batting/i.test(value)
-        });
-      } else if (simpleRow) {
-        current.batters.push({
-          id: slug(first), name: first, runs: num(cols[1]), balls: num(cols[2]),
-          fours: num(cols[3]), sixes: num(cols[4]), out: !/not out|batting/i.test(value)
-        });
-      }
-    }
-  }
-  return innings;
+
+interface NormalizedNewsArticle {
+  sourceId: string;
+  canonicalUrl: string;
+  title: string;
+  summary?: string;
+  bodyText: string;
+  author?: string;
+  category?: string;
+  publishedAt?: string;
+  modifiedAt?: string;
+  primaryImageUrl?: string;
+  tags: string[];
+  rawMeta: Record<string, string>;
 }
 
-function parseEvents($: PageDoc, match: Match): MatchEvent[] {
-  const candidates = $("div,li,p").toArray().map(el => clean($(el).text()))
-    .filter(text => text.length >= 20 && text.length <= 800 && /\bto\b/i.test(text) &&
-      /\b(FOUR|SIX|out|wicket|no run|no ball|wide)\b/i.test(text));
-  const unique = [...new Set(candidates)];
-  const events: MatchEvent[] = [];
-  for (const text of unique) {
-    let type: EventType | undefined;
-    if (/\b(out|wicket|bowled|lbw|caught|run out|stumped|hit wicket)\b/i.test(text)) type = "wicket";
-    else if (/\bSIX\b/i.test(text)) type = "six";
-    else if (/\bFOUR\b/i.test(text)) type = "four";
-    if (!type) continue;
-    const delivery = text.match(/\b(\d{1,2}\.\d|\d{1,3})\b/)?.[1];
-    const sourceEventId = `${match.id}:${type}:${stableHash(text)}`;
-    events.push({
-      id: sourceEventId, sourceEventId, matchId: match.id,
-      inningsId: match.innings.at(-1)?.id ?? `${match.id}:innings:1`,
-      type, teamName: match.innings.at(-1)?.teamName ?? "",
-      playerName: text.match(/^(.+?)\s+to\s+/i)?.[1]?.trim(),
-      summary: text.slice(0, 300), over: delivery, occurredAt: new Date().toISOString()
-    });
+interface NormalizedScheduleFixture {
+  sourceId: string;
+  matchUrl: string;
+  matchTitle: string;
+  homeTeam?: string;
+  awayTeam?: string;
+  competition: string;
+  format: string;
+  startTime?: string;
+  venue?: string;
+  sourceText: string;
+}
+
+function firstMeta($: PageDoc, selectors: string[]): string | undefined {
+  for (const selector of selectors) {
+    const value = clean($(selector).first().attr("content") ?? "");
+    if (value) return value;
   }
-  return events.slice(0, 250);
+  return undefined;
+}
+
+function extractNewsArticle($: PageDoc, url: string): NormalizedNewsArticle {
+  const identity = classifyCricbuzzEntityUrl(url);
+  const canonicalUrl = $("link[rel='canonical']").attr("href") || url;
+  const title = clean($("h1").first().text() ||
+    firstMeta($, ["meta[property='og:title']", "meta[name='twitter:title']"]) ||
+    $("title").text());
+  const paragraphs = $("article p, .cb-nws-dtl-itms p, .cb-nws-para, .cb-nws-sub-txt, [itemprop='articleBody'] p")
+    .toArray().map(el => clean($(el).text())).filter(text => text.length > 20);
+  const uniqueParagraphs = [...new Set(paragraphs)];
+  const bodyText = uniqueParagraphs.join("\n\n") || getMainText($).slice(title.length).trim();
+  const summary = firstMeta($, ["meta[name='description']", "meta[property='og:description']", "meta[name='twitter:description']"]);
+  const author = firstMeta($, ["meta[name='author']", "meta[property='article:author']", "meta[name='byl']"]) ??
+    (clean($(".cb-nws-auth-ttl,.cb-nws-author,[rel='author'],[itemprop='author']").first().text()) || undefined);
+  const publishedRaw = firstMeta($, [
+    "meta[property='article:published_time']", "meta[itemprop='datePublished']",
+    "meta[name='date']", "meta[name='pubdate']"
+  ]) ?? $("time[datetime]").first().attr("datetime");
+  const modifiedRaw = firstMeta($, ["meta[property='article:modified_time']", "meta[itemprop='dateModified']"]);
+  const section = firstMeta($, ["meta[property='article:section']"]);
+  const image = firstMeta($, ["meta[property='og:image']", "meta[name='twitter:image']"]);
+  const tags = [...new Set($("a[href*='/cricket-series/'],a[href*='/profiles/'],.cb-nws-tags a")
+    .toArray().map(el => clean($(el).text())).filter(Boolean))].slice(0, 40);
+  const publishedAt = publishedRaw ? parseDateTime(publishedRaw) : null;
+  const modifiedAt = modifiedRaw ? parseDateTime(modifiedRaw) : null;
+  return {
+    sourceId: identity?.sourceId ?? "news:" + stableHash(canonicalUrl),
+    canonicalUrl,
+    title,
+    ...(summary ? { summary } : {}),
+    bodyText: bodyText.slice(0, 200_000),
+    ...(author ? { author } : {}),
+    ...(section ? { category: section } : {}),
+    ...(publishedAt ? { publishedAt } : {}),
+    ...(modifiedAt ? { modifiedAt } : {}),
+    ...(image ? { primaryImageUrl: image } : {}),
+    tags,
+    rawMeta: extractMeta($)
+  };
+}
+
+function extractScheduleFixtures($: PageDoc, url: string): NormalizedScheduleFixture[] {
+  const fixtures = new Map<string, NormalizedScheduleFixture>();
+  const pageTitle = clean($("h1").first().text() || $("title").text());
+  $("a[href]").each((_index, element) => {
+    const link = $(element);
+    const href = link.attr("href");
+    if (!href) return;
+    let absolute: URL;
+    try { absolute = new URL(href, url); } catch { return; }
+    const match = absolute.pathname.match(/^\/live-cricket-scores\/(\d+)\/([^/]+)\/?$/);
+    if (!match) return;
+    const sourceId = match[1]!;
+    if (fixtures.has(sourceId)) return;
+    const row = link.closest("tr");
+    const card = row.length ? row : link.parent().parent();
+    const sourceText = clean(card.text() || link.text());
+    const cells = card.find("td").toArray().map(cell => clean($(cell).text()));
+    const table = card.closest("table");
+    const headers = table.find("thead tr").first().find("th").toArray().map(cell => clean($(cell).text()));
+    const valueFor = (patterns: RegExp[]): string | undefined => {
+      for (let index = 0; index < headers.length; index++) {
+        if (patterns.some(pattern => pattern.test(headers[index] ?? "")) && cells[index]) return cells[index];
+      }
+      return undefined;
+    };
+    const matchTitle = clean(link.text()) || sourceText.slice(0, 180);
+    const teamPair = matchTitle.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
+    const dateText = valueFor([/date/i, /time/i]) ??
+      sourceText.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[,]?\s*\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4}(?:[,\s]+\d{1,2}:\d{2}\s*(?:AM|PM))?/i)?.[0];
+    const venue = valueFor([/venue/i]);
+    const startTime = dateText ? parseDateTime(dateText) : null;
+    fixtures.set(sourceId, {
+      sourceId,
+      matchUrl: absolute.toString(),
+      matchTitle,
+      ...(teamPair?.[1] ? { homeTeam: clean(teamPair[1]) } : {}),
+      ...(teamPair?.[2] ? { awayTeam: clean(teamPair[2]) } : {}),
+      competition: pageTitle || "Cricket",
+      format: classifyMatchFormat(pageTitle + " " + sourceText),
+      ...(startTime ? { startTime } : {}),
+      ...(venue ? { venue } : {}),
+      sourceText: sourceText.slice(0, 4000)
+    });
+  });
+  return [...fixtures.values()];
 }
 
 function parseEntityPage($: PageDoc, url: string, expected?: EntityType): CrikoraEntity | undefined {
@@ -853,13 +1304,31 @@ function parseEntityPage($: PageDoc, url: string, expected?: EntityType): Crikor
     (match?.[2] && entityType === "team" ? match[2] : match?.[1] ?? `${entityType}:${stableHash(path)}`);
   const data = extractPageData($, url);
   const contentKind = rule?.kind ?? entityType;
+  const relatedIdentity = (() => {
+    if (contentKind === "player-stats" && match?.[1]) return { type: "player", id: match[1] };
+    if (contentKind === "team-subpage" && match?.[2]) return { type: "team", id: match[2] };
+    if (contentKind === "series-subpage" && match?.[1]) return { type: "series", id: match[1] };
+    if (["match-facts", "match-squads", "match-scorecard", "commentary", "live-stream-page",
+      "match-highlights", "live-graphs", "over-by-over", "match-forecast"].includes(contentKind) && match?.[1]) {
+      return { type: "match", id: match[1] };
+    }
+    if (contentKind === "player-match-performance" && match?.[2]) return { type: "player", id: match[2] };
+    return undefined;
+  })();
   const payload: Record<string, unknown> = {
     ...data,
     entityType,
     pageKind: contentKind,
     name: data.title ?? data.heading ?? new URL(url).pathname.split("/").filter(Boolean).at(-1),
-    profile: entityType === "player" ? extractPlayerDetails($) : undefined,
+    profile: entityType === "player" ? normalizeCricbuzzPlayerProfile($, url, data.serverComponents) : undefined,
+    newsArticle: contentKind === "news" ? extractNewsArticle($, url) : undefined,
+    scheduleFixtures: ["schedule", "series", "series-subpage"].includes(contentKind)
+      ? extractScheduleFixtures($, url) : undefined,
     statistics: data.tables,
+    ...(relatedIdentity ? {
+      relatedEntityType: relatedIdentity.type,
+      relatedSourceId: relatedIdentity.id
+    } : {}),
     associations: getLinks($, url).filter(link => /profiles|cricket-team|cricket-series/.test(link.path))
   };
   return { entityType, sourceId, sourceUrl: url, payload, fetchedAt: new Date().toISOString() };
@@ -885,6 +1354,12 @@ function extractControls($: PageDoc): Array<Record<string, string>> {
 function extractPageData($: PageDoc, url: string): Record<string, unknown> {
   const title = clean($("h1").first().text() || $("title").text());
   const mainText = getMainText($);
+  const scripts: string[] = [];
+  $("script").each((_i, script) => {
+    const content = $(script).html() ?? "";
+    if (content.includes("self.__next_f.push")) scripts.push(content);
+  });
+  const serverComponents = decodeCricbuzzFlightScripts(scripts);
   return {
     title,
     canonicalUrl: $("link[rel='canonical']").attr("href") || url,
@@ -896,6 +1371,9 @@ function extractPageData($: PageDoc, url: string): Record<string, unknown> {
     tables: extractTables($),
     sections: extractSections($),
     structuredData: extractStructuredData($),
+    serverComponents: serverComponents
+      ? { rowCount: serverComponents.rowCount, rows: serverComponents.rows, keyedData: serverComponents.keyedData }
+      : undefined,
     controls: extractControls($),
     text: mainText.slice(0, 30000)
   };
@@ -1089,20 +1567,6 @@ function extractSquadData($: PageDoc, baseUrl: string): Record<string, unknown> 
   };
 }
 
-function extractPlayerDetails($: PageDoc): Record<string, unknown> {
-  const labels = extractLabels($);
-  const text = getMainText($);
-  const personal: Record<string, string> = {};
-  const known = ["Born", "Birth Place", "Role", "Batting Style", "Bowling Style", "Height"];
-  for (const label of known) {
-    const value = labeledValue(text, label);
-    if (value) personal[label] = value;
-  }
-  const teams = labeledValue(text, "Teams");
-  const summary = $("h2,h3").filter((_i, el) => /summary/i.test($(el).text())).first().next().text();
-  return { ...personal, labels, teams: teams ? teams.split(/,\s*/) : [], summary: clean(summary) };
-}
-
 function collectRelatedLinks($: PageDoc, baseUrl: string): {
   profiles: LinkRecord[]; teams: LinkRecord[]; series: LinkRecord[]; venues: LinkRecord[]; content: LinkRecord[];
 } {
@@ -1149,14 +1613,54 @@ function getMainText($: PageDoc): string {
   const candidate = $("main").text() || $("#page-wrapper").text() || $(".container").first().text() || $("body").text();
   return clean(candidate);
 }
-function labeledValue(text: string, label: string): string {
+export function labeledValue(text: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(`(?:^|\s)${escaped}\s+([^\\n]{1,250}?)(?=\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\s|$)`, "i");
+  const regex = new RegExp("(?:^|\\s)" + escaped + "\\s+([^\\n]{1,250}?)(?=\\s+(?:Born|Birth Place|Role|Batting Style|Bowling Style|Teams|Date|Time|Toss|Venue|Umpires|3rd Umpire|Referee|Capacity|Location|Time Zone|Ends|Home To|Floodlights)\\s|$)", "i");
   return clean(text.match(regex)?.[1] ?? "");
 }
 function parseDateTime(value: string): string | null {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  if (!value.trim()) return null;
+  const normalized = value
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Parse Cricbuzz's common schedule-card form explicitly. Those clock times
+  // are India-local even when the page omits "IST".
+  const localIndia = normalized.match(
+    /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})(?:,?\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?$/i
+  );
+  if (localIndia) {
+    const months: Record<string, number> = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+    };
+    const month = months[localIndia[2]!.slice(0, 3).toLowerCase()];
+    if (month !== undefined) {
+      const day = Number(localIndia[1]);
+      const year = Number(localIndia[3]);
+      let hour = Number(localIndia[4] ?? 0);
+      const minute = Number(localIndia[5] ?? 0);
+      const meridiem = localIndia[6]?.toUpperCase();
+      if (meridiem === "PM" && hour < 12) hour += 12;
+      if (meridiem === "AM" && hour === 12) hour = 0;
+      const utcMillis = Date.UTC(year, month, day, hour, minute) - 330 * 60_000;
+      const date = new Date(utcMillis);
+      if (date.getUTCFullYear() === year && date.getUTCMonth() === month && date.getUTCDate() === day) {
+        return date.toISOString();
+      }
+    }
+  }
+
+  const withExplicitZone = normalized
+    .replace(/\bIST\b/gi, "+05:30")
+    .replace(/\bUTC\b/gi, "+00:00");
+  const parsed = new Date(withExplicitZone);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+
+  const withoutWeekday = withExplicitZone.replace(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+/i, "");
+  const fallback = new Date(withoutWeekday);
+  return Number.isNaN(fallback.getTime()) ? null : fallback.toISOString();
 }
 function num(value: string | undefined): number {
   const parsed = Number.parseFloat((value ?? "").replace(/[^\d.-]/g, ""));

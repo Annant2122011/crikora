@@ -28,7 +28,6 @@ let repository: PostgresEntityRepository | undefined;
 let poller: Poller | undefined;
 let provider: CricbuzzProvider | undefined;
 let durableCrawl: DurableCrawlService | undefined;
-let sitemapUrls: string[] | undefined;
 
 function getDatabaseUrl(): string {
   const value = process.env.DATABASE_URL;
@@ -79,7 +78,7 @@ function getDurableCrawl(): DurableCrawlService {
       getPool(),
       getProvider(),
       getRepository(),
-      Number(process.env.CRIKORA_CRAWL_BATCH_SIZE ?? 2),
+      Number(process.env.CRIKORA_CRAWL_BATCH_SIZE ?? 1),
       Number(process.env.CRIKORA_CRAWL_MAX_ATTEMPTS ?? 4),
       75
     );
@@ -87,16 +86,16 @@ function getDurableCrawl(): DurableCrawlService {
   return durableCrawl;
 }
 
-function getSitemapUrls(): string[] {
-  if (sitemapUrls) return sitemapUrls;
+
+
+function getSavedProfileAndNewsInventory(): string[] {
   const path = join(process.cwd(), "docs", "cricbuzz-sitemap-inventory.json");
   const parsed = JSON.parse(readFileSync(path, "utf8")) as { urls?: Array<string | { url?: string }> };
-  if (!Array.isArray(parsed.urls)) throw new Error("The Crikora sitemap inventory has no URL list.");
-  sitemapUrls = parsed.urls
+  if (!Array.isArray(parsed.urls)) throw new Error("The saved Crikbuzz inventory has no URL list.");
+  return [...new Set(parsed.urls
     .map(item => typeof item === "string" ? item : item.url ?? "")
-    .filter(value => Boolean(value) && getProvider().isAllowedCrawlUrl(value));
-  if (!sitemapUrls.length) throw new Error("No sitemap URLs passed the Crikora crawler allowlist.");
-  return sitemapUrls;
+    .filter(value => /^https:\/\/www\.cricbuzz\.com\/(?:profiles\/\d+\/|cricket-news\/\d+\/)/i.test(value))
+    .filter(value => getProvider().isAllowedCrawlUrl(value)))];
 }
 
 function sendJson(response: ApiResponse, status: number, data: unknown): void {
@@ -162,6 +161,13 @@ function parseLimit(value: string | null, fallback: number, maximum: number): nu
   return parsed;
 }
 
+function parseOffset(value: string | null): number | undefined {
+  if (value === null || value === "") return 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1_000_000) return undefined;
+  return parsed;
+}
+
 async function getSettings(): Promise<CrawlerSettings> {
   const result = await getPool().query<CrawlerSettings>(
     `SELECT refresh_interval_seconds, enabled, last_started_at, last_completed_at,
@@ -183,6 +189,9 @@ async function health(response: ApiResponse): Promise<void> {
       service: "crikora-crawler-api",
       source: "cricbuzz",
       storage: "postgres",
+      archiveObjectStorage: Boolean(process.env.AWS_ENDPOINT_URL_S3 && process.env.AWS_REGION &&
+        process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && process.env.CRIKORA_ARCHIVE_BUCKET)
+        ? "configured" : "not-configured",
       retentionPolicy: RETENTION_POLICY,
       refreshIntervalSeconds: settings.refresh_interval_seconds,
       enabled: settings.enabled,
@@ -263,7 +272,7 @@ async function updateSettings(request: ApiRequest, response: ApiResponse): Promi
   });
 }
 
-async function refresh(request: ApiRequest, response: ApiResponse): Promise<void> {
+async function refresh(request: ApiRequest, response: ApiResponse, indexOnly = false): Promise<void> {
   const expected = process.env.CRIKORA_REFRESH_SECRET;
   if (!expected) {
     sendJson(response, 503, { error: "CRIKORA_REFRESH_SECRET is not configured." });
@@ -318,7 +327,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
 
   try {
     // Leave ten seconds inside Vercel's 60-second function limit for Neon writes and error cleanup.
-    await getPoller().tick(AbortSignal.timeout(50_000));
+    await getPoller().tick(AbortSignal.timeout(50_000), indexOnly);
     const queuedFollowups = await getDurableCrawl().enqueueDiscoveredUrls(getProvider().getPendingRelatedUrls());
     await pool.query(
       `UPDATE public.crikora_crawler_settings
@@ -372,7 +381,7 @@ async function refresh(request: ApiRequest, response: ApiResponse): Promise<void
   }
 }
 
-async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promise<void> {
+async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): Promise<void> {
   const expected = process.env.CRIKORA_ADMIN_SECRET;
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
   if (!safeEqual(bearer(request), expected)) return sendJson(response, 401, { error: "Unauthorized" });
@@ -380,53 +389,58 @@ async function startFullCrawl(request: ApiRequest, response: ApiResponse): Promi
     return sendJson(response, 403, { error: "Collection is disabled by the CRIKORA_COLLECTION_ENABLED server switch." });
   }
 
-  // Keep the saved inventory as a backstop, then merge the current public sitemap URLs.
-  // Sitemap XML requests use the same source allowlist, spacing, timeout and denial handling.
-  const savedInventoryUrls = getSitemapUrls();
-  let liveSitemap = { sitemapUrls: [] as string[], pageUrls: [] as string[] };
-  try {
-    liveSitemap = await getProvider().discoverSitemapUrls(AbortSignal.timeout(45_000));
-  } catch (error) {
-    const status = error && typeof error === "object" && "sourceStatus" in error
-      ? Number((error as { sourceStatus?: unknown }).sourceStatus)
-      : undefined;
-    if (
-      status === 401 || status === 403 ||
-      (status !== undefined && status >= 300 && status < 400) ||
-      (status !== undefined && status >= 400 && status < 500 && status !== 429)
-    ) {
-      console.warn(
-        "Crikora could not refresh one or more live sitemap documents; continuing with the saved cricket-only inventory.",
-        { status, message: error instanceof Error ? error.message : String(error) }
-      );
-    } else {
-      // Preserve 429 Retry-After and transient 5xx/network failures.
-      throw error;
+  const provider = getProvider();
+  const savedProfileAndNewsUrls = getSavedProfileAndNewsInventory();
+  const savedNewsUrls = savedProfileAndNewsUrls.filter(value => value.includes("/cricket-news/"));
+  const savedPlayerUrls = savedProfileAndNewsUrls.filter(value => value.includes("/profiles/"));
+  let newsUrls: string[] = [];
+  let playerUrls: string[] = [];
+  const discoveryErrors: string[] = [];
+
+  for (const [label, discover] of [
+    ["news", () => provider.discoverNewsSitemapUrls(AbortSignal.timeout(25_000))],
+    ["players", () => provider.discoverPlayerSitemapUrls(AbortSignal.timeout(25_000))]
+  ] as const) {
+    try {
+      const found = await discover();
+      if (label === "news") newsUrls = found;
+      else playerUrls = found;
+    } catch (error) {
+      const status = error && typeof error === "object" && "sourceStatus" in error
+        ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+        : undefined;
+      if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
+      discoveryErrors.push(`${label} sitemap unavailable (HTTP ${status}); using the saved targeted inventory.`);
     }
   }
-  // Current sitemap URLs take precedence over saved aliases with stale or malformed slugs.
-  // Individual non-cricket and source-denied pages are filtered or skipped by the provider.
-  const mergedCandidateUrls = [...new Set([...liveSitemap.pageUrls, ...savedInventoryUrls])];
-  const crawlUrls = dedupeCricbuzzPageUrls(mergedCandidateUrls);
-  const result = await getDurableCrawl().startFullCrawl(crawlUrls);
+
+  const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
+  const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
+  const crawlUrls = dedupeCricbuzzPageUrls([
+    ...provider.getTargetedCollectionSeedUrls(),
+    ...selectedNewsUrls,
+    ...selectedPlayerUrls
+  ]);
+  const result = await getDurableCrawl().startTargetedCrawl(crawlUrls);
   sendJson(response, result.created ? 202 : 200, {
     ok: true,
+    scope: "targeted-product",
     created: result.created,
     resumed: result.resumed,
     data: result.run,
     meta: {
-      savedInventoryUrlCount: savedInventoryUrls.length,
-      liveSitemapDocumentCount: liveSitemap.sitemapUrls.length,
-      liveSitemapUrlCount: liveSitemap.pageUrls.length,
-      rawInventoryUrlCount: mergedCandidateUrls.length,
-      inventoryUrlCount: crawlUrls.length,
-      dedupeRemovedUrlCount: mergedCandidateUrls.length - crawlUrls.length,
-      queueTotalCount: result.run.totalCount,
+      matchIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-match\/live-scores/.test(value)).length,
+      scheduleIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-schedule/.test(value)).length,
+      newsArticleSeedCount: selectedNewsUrls.length,
+      playerProfileSeedCount: selectedPlayerUrls.length,
+      savedProfileAndNewsUrlCount: savedProfileAndNewsUrls.length,
+      discoveryErrors,
+      crawlUrlCount: crawlUrls.length,
+      collectionStartDate: process.env.CRIKORA_MATCH_DETAILS_FROM ?? "2026-11-04",
       retentionPolicy: RETENTION_POLICY
     }
   });
 }
-
 async function crawlStatus(request: ApiRequest, response: ApiResponse): Promise<void> {
   const expected = process.env.CRIKORA_ADMIN_SECRET;
   if (!expected) return sendJson(response, 503, { error: "CRIKORA_ADMIN_SECRET is not configured." });
@@ -459,14 +473,19 @@ async function cleanupCache(request: ApiRequest, response: ApiResponse): Promise
 
 async function listMatches(url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
+  const offset = parseOffset(url.searchParams.get("offset"));
   const status = url.searchParams.get("status");
-  if (limit === undefined || (status && !["live", "upcoming", "completed"].includes(status))) {
+  if (limit === undefined || offset === undefined || (status && !["live", "upcoming", "completed"].includes(status))) {
     sendJson(response, 400, { error: "Invalid match query." });
     return;
   }
-  const rows = await getRepository().list("match", limit);
+  const rows = await getRepository().list("match", limit, offset);
   const data = rows.filter(row => !status || row.payload.status === status).map(present);
-  sendJson(response, 200, { data, meta: { count: data.length, retentionPolicy: RETENTION_POLICY, source: "cricbuzz" } });
+  sendJson(response, 200, {
+    data,
+    meta: { count: data.length, limit, offset, nextOffset: rows.length === limit ? offset + limit : null,
+      retentionPolicy: RETENTION_POLICY, source: "cricbuzz" }
+  });
 }
 
 async function getMatch(matchId: string, response: ApiResponse, eventsOnly = false): Promise<void> {
@@ -491,12 +510,71 @@ function validEntityType(value: string | undefined): EntityType | undefined {
 
 async function listEntities(type: EntityType, url: URL, response: ApiResponse): Promise<void> {
   const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
-  if (limit === undefined) {
+  const offset = parseOffset(url.searchParams.get("offset"));
+  if (limit === undefined || offset === undefined) {
     sendJson(response, 400, { error: "Invalid limit." });
     return;
   }
-  const rows = await getRepository().list(type, limit);
-  sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } });
+  const rows = await getRepository().list(type, limit, offset);
+  sendJson(response, 200, {
+    data: rows.map(present),
+    meta: { count: rows.length, limit, offset, nextOffset: rows.length === limit ? offset + limit : null,
+      retentionPolicy: RETENTION_POLICY }
+  });
+}
+
+async function comparePlayers(url: URL, response: ApiResponse): Promise<void> {
+  const rawIds = (url.searchParams.get("ids") ?? "").split(",").map(value => value.trim()).filter(Boolean);
+  const ids = [...new Set(rawIds)];
+  if (ids.length < 2 || ids.length > 4 || ids.some(id => !/^\d{1,12}$/.test(id))) {
+    return sendJson(response, 400, { error: "Provide 2 to 4 comma-separated numeric Cricbuzz player IDs." });
+  }
+
+  const rows = await Promise.all(ids.map(id => getRepository().get("player", id)));
+  const missing = ids.filter((_id, index) => !rows[index]);
+  if (missing.length) {
+    return sendJson(response, 404, {
+      error: "One or more player profiles have not been collected yet.",
+      missingPlayerIds: missing
+    });
+  }
+
+  const players = rows.map((row, index) => {
+    const entity = row!;
+    const profile = entity.payload.profile && typeof entity.payload.profile === "object"
+      ? entity.payload.profile as Record<string, unknown>
+      : {};
+    const fields = profile.allFields && typeof profile.allFields === "object"
+      ? profile.allFields as Record<string, unknown>
+      : {};
+    const common = [
+      "fullName", "country", "role", "battingStyle", "bowlingStyle",
+      "birthDate", "birthPlace", "heightCm", "teams"
+    ];
+    for (const key of common) {
+      if (profile[key] !== undefined && fields[key] === undefined) fields[key] = profile[key];
+    }
+    return {
+      player: present(entity),
+      playerId: ids[index],
+      displayName: String(profile.fullName ?? entity.payload.title ?? entity.payload.name ?? ids[index]),
+      comparisonFields: fields,
+      careerStatistics: profile.statistics ?? entity.payload.statistics ?? []
+    };
+  });
+
+  const fieldNames = [...new Set(players.flatMap(player => Object.keys(player.comparisonFields)))].sort((a,b) => a.localeCompare(b));
+  const comparison = fieldNames.map(label => ({
+    label,
+    values: Object.fromEntries(players.map(player => [
+      player.playerId,
+      player.comparisonFields[label] ?? null
+    ]))
+  }));
+  sendJson(response, 200, {
+    data: { players, comparison },
+    meta: { count: players.length, source: "cricbuzz", comparisonMode: "source-labelled-profile-fields" }
+  });
 }
 
 async function getEntity(type: EntityType, sourceId: string, response: ApiResponse): Promise<void> {
@@ -527,6 +605,73 @@ async function listContent(url: URL, response: ApiResponse): Promise<void> {
 }
 
 
+
+async function listNews(url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 100, 500);
+  const offset = parseOffset(url.searchParams.get("offset"));
+  if (limit === undefined || offset === undefined) return sendJson(response, 400, { error: "Invalid news pagination." });
+  const beforeRaw = url.searchParams.get("before");
+  const before = beforeRaw ? new Date(beforeRaw) : undefined;
+  if (before && Number.isNaN(before.getTime())) return sendJson(response, 400, { error: "before must be a valid timestamp." });
+  const result = await getPool().query(
+    `SELECT source_id AS id, source_url AS "sourceUrl", canonical_url AS "canonicalUrl",
+            title, summary, body_text AS "bodyText", author, category,
+            published_at AS "publishedAt", modified_at AS "modifiedAt",
+            primary_image_url AS "primaryImageUrl", tags, raw_meta AS "rawMeta",
+            observed_at AS "observedAt"
+       FROM public.crikora_news_articles
+      WHERE ($2::timestamptz IS NULL OR published_at < $2)
+      ORDER BY published_at DESC NULLS LAST, source_id DESC
+      LIMIT $1 OFFSET $3`,
+    [limit, before?.toISOString() ?? null, offset]
+  );
+  sendJson(response, 200, {
+    data: result.rows,
+    meta: { count: result.rows.length, limit, offset, nextOffset: result.rows.length === limit ? offset + limit : null,
+      before: before?.toISOString() ?? null, source: "cricbuzz" }
+  });
+}
+
+async function getNews(sourceId: string, response: ApiResponse): Promise<void> {
+  const result = await getPool().query(
+    `SELECT source_id AS id, source_url AS "sourceUrl", canonical_url AS "canonicalUrl",
+            title, summary, body_text AS "bodyText", author, category,
+            published_at AS "publishedAt", modified_at AS "modifiedAt",
+            primary_image_url AS "primaryImageUrl", tags, raw_meta AS "rawMeta",
+            observed_at AS "observedAt"
+       FROM public.crikora_news_articles WHERE source_id=$1`,
+    [sourceId.startsWith("news:") ? sourceId : `news:${sourceId}`]
+  );
+  if (!result.rows[0]) return sendJson(response, 404, { error: "News article not found." });
+  sendJson(response, 200, { data: result.rows[0], meta: { source: "cricbuzz" } });
+}
+
+async function listSchedule(url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 200, 500);
+  const offset = parseOffset(url.searchParams.get("offset"));
+  if (limit === undefined || offset === undefined) return sendJson(response, 400, { error: "Invalid schedule pagination." });
+  const fromRaw = url.searchParams.get("from");
+  const from = fromRaw ? new Date(fromRaw) : undefined;
+  if (from && Number.isNaN(from.getTime())) return sendJson(response, 400, { error: "from must be a valid timestamp." });
+  const result = await getPool().query(
+    `SELECT fixture_source_id AS id, match_source_id AS "matchSourceId",
+            source_page_url AS "sourcePageUrl", match_url AS "matchUrl",
+            match_title AS "matchTitle", home_team AS "homeTeam", away_team AS "awayTeam",
+            competition, format, start_time AS "startTime", venue, source_text AS "sourceText",
+            observed_at AS "observedAt"
+       FROM public.crikora_schedule_fixtures
+      WHERE ($2::timestamptz IS NULL OR start_time >= $2)
+      ORDER BY start_time ASC NULLS LAST, fixture_source_id
+      LIMIT $1 OFFSET $3`,
+    [limit, from?.toISOString() ?? null, offset]
+  );
+  sendJson(response, 200, {
+    data: result.rows,
+    meta: { count: result.rows.length, limit, offset, nextOffset: result.rows.length === limit ? offset + limit : null,
+      from: from?.toISOString() ?? null, source: "cricbuzz" }
+  });
+}
+
 async function search(url: URL, response: ApiResponse): Promise<void> {
   const query = url.searchParams.get("q")?.trim() ?? "";
   const limit = parseLimit(url.searchParams.get("limit"), 30, 100);
@@ -536,6 +681,65 @@ async function search(url: URL, response: ApiResponse): Promise<void> {
   }
   const rows = await getRepository().search(query, limit);
   sendJson(response, 200, { data: rows.map(present), meta: { count: rows.length, retentionPolicy: RETENTION_POLICY } });
+}
+
+async function archiveCoverage(response: ApiResponse): Promise<void> {
+  const data = await getRepository().getArchiveCoverage();
+  sendJson(response, 200, { data, meta: { retention: "permanent", appendOnly: true } });
+}
+
+async function entityDetails(type: EntityType, sourceId: string, url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 100, 200);
+  if (limit === undefined) {
+    sendJson(response, 400, { error: "Invalid entity detail limit." });
+    return;
+  }
+  const repo = getRepository();
+  const current = await repo.get(type, sourceId);
+  const history = current ? [] : await repo.listEntityHistory(type, sourceId, 1);
+  const related = await repo.listRelatedEntityPages(type, sourceId, limit);
+  const entity = current ? present(current) : history[0] ?? null;
+  if (!entity && !related.length) {
+    sendJson(response, 404, { error: "Entity and its archived detail pages were not found." });
+    return;
+  }
+  sendJson(response, 200, {
+    data: { entity, related },
+    meta: { relatedCount: related.length, retention: "permanent", source: "cricbuzz" }
+  });
+}
+
+async function archiveEntities(type: EntityType, url: URL, response: ApiResponse): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
+  const before = url.searchParams.get("before") ?? undefined;
+  if (limit === undefined || (before && !/^[0-9]+$/.test(before))) {
+    sendJson(response, 400, { error: "Invalid archive entity pagination." });
+    return;
+  }
+  const data = await getRepository().listArchivedEntities(type, limit, before);
+  sendJson(response, 200, {
+    data,
+    meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true }
+  });
+}
+
+async function archiveEntityHistory(
+  type: EntityType,
+  sourceId: string,
+  url: URL,
+  response: ApiResponse
+): Promise<void> {
+  const limit = parseLimit(url.searchParams.get("limit"), 50, 200);
+  const before = url.searchParams.get("before") ?? undefined;
+  if (limit === undefined || (before && !/^[0-9]+$/.test(before))) {
+    sendJson(response, 400, { error: "Invalid archive history pagination." });
+    return;
+  }
+  const data = await getRepository().listEntityHistory(type, sourceId, limit, before);
+  sendJson(response, 200, {
+    data,
+    meta: { count: data.length, nextBefore: data.at(-1)?.id ?? null, retention: "permanent", appendOnly: true }
+  });
 }
 
 function applyCors(request: ApiRequest, response: ApiResponse): boolean {
@@ -752,7 +956,8 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   }
   if (path === "settings" && method === "PUT") return updateSettings(request, response);
   if (path === "refresh" && method === "POST") return refresh(request, response);
-  if (path === "crawl/start" && method === "POST") return startFullCrawl(request, response);
+  if (path === "refresh/index" && method === "POST") return refresh(request, response, true);
+  if (path === "crawl/start" && method === "POST") return startTargetedCrawl(request, response);
   if (path === "crawl/status" && method === "GET") return crawlStatus(request, response);
   if (path === "crawl/step" && method === "POST") return crawlStep(request, response);
   if (path === "cleanup" && method === "POST") return cleanupCache(request, response);
@@ -760,6 +965,25 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   if (parts[0] !== "v1") {
     sendJson(response, 404, { error: "Route not found." });
     return;
+  }
+  if (parts[1] === "archive" && parts[2] === "coverage" && parts.length === 3 && method === "GET") {
+    return archiveCoverage(response);
+  }
+  if (parts[1] === "archive" && parts[2] === "entities" && parts.length === 4 && method === "GET") {
+    const type = validEntityType(parts[3]);
+    if (!type) {
+      sendJson(response, 400, { error: "Unsupported archive entity type." });
+      return;
+    }
+    return archiveEntities(type, url, response);
+  }
+  if (parts[1] === "archive" && parts[2] === "entities" && parts.length === 6 && parts[5] === "history" && method === "GET") {
+    const type = validEntityType(parts[3]);
+    if (!type) {
+      sendJson(response, 400, { error: "Unsupported archive entity type." });
+      return;
+    }
+    return archiveEntityHistory(type, parts[4]!, url, response);
   }
   if (parts[1] === "matches" && parts.length === 2 && method === "GET") {
     return listMatches(url, response);
@@ -769,6 +993,14 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   }
   if (parts[1] === "matches" && parts.length === 4 && parts[3] === "events" && method === "GET") {
     return getMatch(parts[2]!, response, true);
+  }
+  if (parts[1] === "entities" && parts.length === 5 && parts[4] === "details" && method === "GET") {
+    const type = validEntityType(parts[2]);
+    if (!type) {
+      sendJson(response, 400, { error: "Unsupported entity type." });
+      return;
+    }
+    return entityDetails(type, parts[3]!, url, response);
   }
   if (parts[1] === "entities" && parts.length === 3 && method === "GET") {
     const type = validEntityType(parts[2]);
@@ -789,6 +1021,12 @@ async function route(request: ApiRequest, response: ApiResponse): Promise<void> 
   if (parts[1] === "content" && parts.length === 2 && method === "GET") {
     return listContent(url, response);
   }
+  if (parts[1] === "players" && parts[2] === "compare" && parts.length === 3 && method === "GET") {
+    return comparePlayers(url, response);
+  }
+  if (parts[1] === "news" && parts.length === 2 && method === "GET") return listNews(url, response);
+  if (parts[1] === "news" && parts.length === 3 && method === "GET") return getNews(parts[2]!, response);
+  if (parts[1] === "schedule" && parts.length === 2 && method === "GET") return listSchedule(url, response);
   if (parts[1] === "search" && parts.length === 2 && method === "GET") {
     return search(url, response);
   }

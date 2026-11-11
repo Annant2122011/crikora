@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { classifyCricbuzzEntityUrl, classifyMatchFormat, parseCricbuzzEntityHtml } from "./cricbuzz-provider.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  CricbuzzProvider, classifyCricbuzzEntityUrl, classifyMatchFormat, getCricbuzzDiscoverySeedUrls,
+  isAllowedCricbuzzPageUrl, isTargetedCricbuzzCollectionUrl,
+  labeledValue, parseCricbuzzEntityHtml, shouldFollowTargetedPageLink
+} from "./cricbuzz-provider.js";
 
 describe("Crikora cricket scope and format classification", () => {
   it("keeps The Hundred, T10 and Sixes distinct from T20", () => {
@@ -10,6 +14,111 @@ describe("Crikora cricket scope and format classification", () => {
   });
 
 });
+describe("Cricbuzz player detail extraction", () => {
+  it("extracts all labelled profile fields, not only a fixed handful", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><main><h1>Example Player</h1><table>
+        <tr><th>Born</th><td>22 May 1987</td></tr>
+        <tr><th>Role</th><td>All-rounder</td></tr>
+        <tr><th>Batting Style</th><td>Right hand bat</td></tr>
+        <tr><th>Test Debut</th><td>1 January 2008</td></tr>
+        <tr><th>IPL Debut</th><td>2009</td></tr>
+      </table><h2>Summary</h2><p>Example career summary.</p></main></html>`,
+      "https://www.cricbuzz.com/profiles/999999/example-player"
+    );
+    const profile = entity?.payload.profile as Record<string, unknown>;
+    const allFields = profile.allFields as Record<string, string>;
+    expect(allFields).toMatchObject({
+      Born: "22 May 1987",
+      Role: "All-rounder",
+      "Batting Style": "Right hand bat",
+      "Test Debut": "1 January 2008",
+      "IPL Debut": "2009"
+    });
+    expect(profile.biographySections).toEqual(
+      expect.arrayContaining([expect.objectContaining({ heading: "Summary", text: "Example career summary." })])
+    );
+  });
+
+  it("links player statistics tabs back to the parent player identity", () => {
+    const entity = parseCricbuzzEntityHtml(
+      "<html><main><h1>Example Player Batting</h1><table><thead><tr><th>Matches</th></tr></thead><tbody><tr><td>20</td></tr></tbody></table></main></html>",
+      "https://www.cricbuzz.com/profiles/999999/example-player/all-matches/batting"
+    );
+    expect(entity?.entityType).toBe("metadata");
+    expect(entity?.payload).toMatchObject({
+      pageKind: "player-stats",
+      relatedEntityType: "player",
+      relatedSourceId: "999999",
+      statistics: [{ headers: ["Matches"], rows: [["20"]] }]
+    });
+  });
+
+  it("extracts flattened label/value pairs without truncating at whitespace", () => {
+    const text = "Born 22 May 1987 Birth Place Durban Role All-rounder Batting Style Right hand bat Teams South Africa, Titans";
+    expect(labeledValue(text, "Born")).toBe("22 May 1987");
+    expect(labeledValue(text, "Birth Place")).toBe("Durban");
+    expect(labeledValue(text, "Teams")).toBe("South Africa, Titans");
+  });
+});
+
+describe("Cricbuzz targeted discovery seeds", () => {
+  it("seeds only match, schedule and news indexes, not unrelated directories or historical archive routes", () => {
+    const seeds = getCricbuzzDiscoverySeedUrls();
+    expect(seeds).toEqual(expect.arrayContaining([
+      "https://www.cricbuzz.com/cricket-match/live-scores",
+      "https://www.cricbuzz.com/cricket-match/live-scores/upcoming-matches",
+      "https://www.cricbuzz.com/cricket-match/live-scores/recent-matches",
+      "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
+      "https://www.cricbuzz.com/cricket-schedule/upcoming-series/international",
+      "https://www.cricbuzz.com/cricket-schedule/series/all",
+      "https://www.cricbuzz.com/cricket-news",
+      "https://www.cricbuzz.com/cricket-news/latest-news"
+    ]));
+    expect(seeds.some(value => /profiles|cricket-team|scorecard-archives|cricket-videos|cricket-stats/.test(value))).toBe(false);
+    expect(seeds.every(isTargetedCricbuzzCollectionUrl)).toBe(true);
+  });
+
+  it("accepts both men's and women's data, while rejecting unused page families", () => {
+    const allowed = [
+      "https://www.cricbuzz.com/live-cricket-scores/555/example-women-vs-women",
+      "https://www.cricbuzz.com/cricket-series/555/womens-league",
+      "https://www.cricbuzz.com/profiles/777/women-player",
+      "https://www.cricbuzz.com/profiles/777/women-player/batting",
+      "https://www.cricbuzz.com/cricket-news/140765/example-story",
+      "https://www.cricbuzz.com/cricket-schedule/series/all"
+    ];
+    for (const value of allowed) expect(isTargetedCricbuzzCollectionUrl(value)).toBe(true);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-scorecard-archives/1877")).toBe(false);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-videos/217038/example")).toBe(false);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(false);
+  });
+});
+
+describe("targeted link following", () => {
+  const matchIndex = "https://www.cricbuzz.com/cricket-match/live-scores";
+  const matchPage = "https://www.cricbuzz.com/live-cricket-scores/176500/teams-match";
+  const squadsPage = "https://www.cricbuzz.com/cricket-match-squads/176500/teams-match";
+  const player = "https://www.cricbuzz.com/profiles/777/sample-player";
+  const batting = "https://www.cricbuzz.com/profiles/777/sample-player/all-matches/batting";
+  const otherPlayer = "https://www.cricbuzz.com/profiles/778/another-player";
+  const newsIndex = "https://www.cricbuzz.com/cricket-news";
+  const newsA = "https://www.cricbuzz.com/cricket-news/140765/story-a";
+  const newsB = "https://www.cricbuzz.com/cricket-news/140766/story-b";
+  const schedule = "https://www.cricbuzz.com/cricket-schedule/series/all";
+
+  it("follows match indexes, match participants, player statistics, schedules and news indexes without page-family fanout", () => {
+    expect(shouldFollowTargetedPageLink(matchIndex, matchPage)).toBe(true);
+    expect(shouldFollowTargetedPageLink(matchPage, squadsPage)).toBe(false);
+    expect(shouldFollowTargetedPageLink(squadsPage, player)).toBe(true);
+    expect(shouldFollowTargetedPageLink(player, batting)).toBe(true);
+    expect(shouldFollowTargetedPageLink(player, otherPlayer)).toBe(false);
+    expect(shouldFollowTargetedPageLink(newsIndex, newsA)).toBe(true);
+    expect(shouldFollowTargetedPageLink(newsA, newsB)).toBe(false);
+    expect(shouldFollowTargetedPageLink(schedule, matchPage)).toBe(true);
+  });
+});
+
 describe("Cricbuzz source URL classification", () => {
   it("identifies player profiles by their stable numeric ID", () => {
     expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/11527/paul-walter"))
@@ -88,8 +197,19 @@ describe("Cricbuzz source URL classification", () => {
     expect(seriesStats?.sourceId).not.toBe(seriesSquads?.sourceId);
   });
 
-  it("includes women-only ranking URLs in Crikora cricket data", () => {
-    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBeDefined();
+  it("includes men's and women's match, series, player and ranking routes", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting"))
+      .toMatchObject({ entityType: "metadata", sourceId: expect.stringContaining("ranking-or-statistics:") });
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/live-cricket-scores/555/example-women-vs-women")).toBe(true);
+    expect(isAllowedCricbuzzPageUrl("https://www.cricbuzz.com/cricket-series/555/womens-league")).toBe(true);
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/profiles/777/women-player"))
+      .toEqual({ entityType: "player", sourceId: "777" });
+  });
+
+  it("classifies the 1877 historical archive year page", () => {
+    expect(classifyCricbuzzEntityUrl("https://www.cricbuzz.com/cricket-scorecard-archives/1877"))
+      .toEqual({ entityType: "metadata", sourceId: "scorecard-archives:1877" });
   });
   it("rejects URLs that are not known entity routes", () => {
     expect(classifyCricbuzzEntityUrl("https://example.com/profiles/11527/paul-walter")).toBeUndefined();
@@ -172,5 +292,139 @@ describe("Cricbuzz HTML entity extraction", () => {
     expect(entity?.payload.associations).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "/cricket-team/england/1" })
     ]));
+  });
+});
+
+describe("targeted news sitemap discovery", () => {
+  it("continues when an optional archive feed is absent but still respects other source failures", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.endsWith("cricket-news-archive.xml")) {
+        return new Response("Not found", { status: 404 });
+      }
+      const slug = url.endsWith("cricket-news.xml") ? "current" : "editorial";
+      const xml = `<urlset><url><loc>https://www.cricbuzz.com/cricket-news/${slug === "current" ? "140901/current-story" : "140902/editorial-story"}</loc></url></urlset>`;
+      return new Response(xml, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const provider = new CricbuzzProvider({
+        minRequestIntervalMs: 0, maxMatchesPerPoll: 1, maxProfilesPerPoll: 1,
+        maxTeamsPerPoll: 1, maxSeriesPerPoll: 1, maxVenuesPerPoll: 1,
+        maxContentPagesPerPoll: 1, timeoutMs: 2_000, maxResponseBytes: 1_000_000,
+        userAgent: "Crikora-Test/1.0"
+      });
+      const urls = await provider.discoverNewsSitemapUrls();
+      expect(urls).toEqual(expect.arrayContaining([
+        "https://www.cricbuzz.com/cricket-news/140901/current-story",
+        "https://www.cricbuzz.com/cricket-news/140902/editorial-story"
+      ]));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("combines current, archived and editorial feeds without crawling other sitemap families", async () => {
+    const feeds: Record<string, string[]> = {
+      "https://www.cricbuzz.com/sitemap/cricket-news.xml": [
+        "https://www.cricbuzz.com/cricket-news/140900/current-story"
+      ],
+      "https://www.cricbuzz.com/sitemap/cricket-news-archive.xml": [
+        "https://www.cricbuzz.com/cricket-news/120000/archive-story"
+      ],
+      "https://www.cricbuzz.com/sitemap/cricket-news-editorials.xml": [
+        "https://www.cricbuzz.com/cricket-news/130000/editorial-story"
+      ]
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const key = input.toString();
+      const urls = feeds[key] ?? [];
+      const xml = `<?xml version="1.0"?><urlset>${urls.map(url => `<url><loc>${url}</loc></url>`).join("")}</urlset>`;
+      return new Response(xml, { status: 200, headers: { "content-type": "application/xml" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const provider = new CricbuzzProvider({
+        minRequestIntervalMs: 0,
+        maxMatchesPerPoll: 1,
+        maxProfilesPerPoll: 1,
+        maxTeamsPerPoll: 1,
+        maxSeriesPerPoll: 1,
+        maxVenuesPerPoll: 1,
+        maxContentPagesPerPoll: 1,
+        timeoutMs: 2_000,
+        maxResponseBytes: 1_000_000,
+        userAgent: "Crikora-Test/1.0"
+      });
+      const urls = await provider.discoverNewsSitemapUrls();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock.mock.calls.map(call => call[0].toString())).toEqual([
+        "https://www.cricbuzz.com/sitemap/cricket-news.xml",
+        "https://www.cricbuzz.com/sitemap/cricket-news-archive.xml",
+        "https://www.cricbuzz.com/sitemap/cricket-news-editorials.xml"
+      ]);
+      expect(urls).toEqual(expect.arrayContaining(Object.values(feeds).flat()));
+      expect(new Set(urls).size).toBe(3);
+      expect(urls.some(url => /cricket-videos|cricket-photo-gallery/.test(url))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("targeted news and schedule normalization", () => {
+  it("extracts complete news article metadata and body text", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><head>
+        <meta property="og:title" content="A cricket report">
+        <meta name="description" content="The short summary">
+        <meta property="article:published_time" content="2026-11-05T09:00:00+05:30">
+        <meta name="author" content="Cricbuzz Staff">
+        <meta property="og:image" content="https://static.cricbuzz.com/news.jpg">
+      </head><body><main><article><h1>A cricket report</h1>
+        <div class="cb-nws-dtl-itms"><p>The first full article paragraph with meaningful detail.</p>
+          <p>The second full article paragraph continues the report.</p></div>
+      </article></main></body></html>`,
+      "https://www.cricbuzz.com/cricket-news/140765/a-cricket-report"
+    );
+    expect(entity?.payload).toMatchObject({
+      pageKind: "news",
+      newsArticle: {
+        sourceId: "news:140765",
+        title: "A cricket report",
+        summary: "The short summary",
+        author: "Cricbuzz Staff",
+        publishedAt: "2026-11-05T03:30:00.000Z",
+        primaryImageUrl: "https://static.cricbuzz.com/news.jpg",
+        bodyText: expect.stringContaining("The second full article paragraph")
+      }
+    });
+  });
+
+  it("extracts scheduled fixtures and links them to match source IDs", () => {
+    const entity = parseCricbuzzEntityHtml(
+      `<html><main><h1>Upcoming International Schedule</h1>
+        <table><thead><tr><th>Date</th><th>Match</th><th>Venue</th></tr></thead><tbody>
+          <tr><td>07 Nov 2026, 7:00 PM</td>
+            <td><a href="/live-cricket-scores/176501/ind-vs-aus-1st-odi">India vs Australia, 1st ODI</a></td>
+            <td>Wankhede Stadium</td></tr>
+        </tbody></table>
+      </main></html>`,
+      "https://www.cricbuzz.com/cricket-schedule/series/all"
+    );
+    expect(entity?.payload).toMatchObject({
+      pageKind: "schedule",
+      scheduleFixtures: [expect.objectContaining({
+        sourceId: "176501",
+        matchUrl: "https://www.cricbuzz.com/live-cricket-scores/176501/ind-vs-aus-1st-odi",
+        matchTitle: "India vs Australia, 1st ODI",
+        homeTeam: "India",
+        awayTeam: "Australia",
+        format: "ODI",
+        startTime: "2026-11-07T13:30:00.000Z",
+        venue: "Wankhede Stadium"
+      })]
+    });
   });
 });

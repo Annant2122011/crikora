@@ -4,53 +4,57 @@ This is the Vercel-hosted scheduler for the Crikora Cricbuzz HTML collector. It 
 
 ## Architecture
 
-- The worker runs a durable loop and sleeps for the configured 10, 15, 20 or 30 seconds.
-- The loop reads persistent settings from the core Crikora API before each cycle.
-- When a durable sitemap crawl is active, it calls authenticated `POST /crawl/step` and drains the Neon-backed URL queue in small, bounded batches.
-- After the initial queue completes, it calls authenticated `POST /refresh` on the configured cadence for live/upcoming/recent match monitoring.
-- URL/job metadata is durable in Neon; scraped entity payloads are written to `crikora_cache` and retain the normal ten-minute TTL.
-- Neon holds a singleton lease so concurrent start requests cannot create overlapping durable loops.
-- The refresh API serializes scraper cycles using `crikora_crawler_settings`.
-- A page-level 401/403/404/redirect/access challenge is recorded as a skipped URL and does not stop the durable run. HTTP 429 honors `Retry-After`; transient 5xx/network failures retry with backoff. Authentication failures for the worker's own protected API routes still stop the workflow.
+- Vercel is the **primary** core API and durable scheduler. The core API lives at the repository root; the Vercel Workflow scheduler is the separate `crawler-worker/` project.
+- Railway hosts the same core API and worker adapters as the **backup**. Both engines use the same Neon PostgreSQL production database, schemas, queue and data contracts.
+- The API owns source requests, parsing, normalized projections, cache writes and private Neon Object Storage. The worker only schedules API calls and maintains the singleton Neon worker lease.
+- The workflow performs one bounded durable crawl step, then a lightweight `POST /refresh/index` call for live/upcoming/recent match indexes. It sleeps according to the configured 10, 15, 20 or 30-second cadence.
+- No broad root-sitemap or full-site crawl is used. Collection is limited to match details from 4 November 2026 onward, player profiles and their statistics tabs, schedule/series fixtures, and cricket-news articles. Both men's and women's cricket are included.
+- Earlier ball-by-ball matches are provided separately from Cricsheet and are not crawled from Cricbuzz.
+- Match overview pages fetch same-match facts, scorecard, squads and commentary pages directly. Squad/player links feed player profile enrichment. Each profile may link only to that player's own statistics tabs. News indexes lead to articles but articles do not recurse through related story links.
+- Neon stores durable queue state, current entities, normalized delivery/profile/news/schedule projections and append-only history. Private Object Storage holds gzip-compressed source HTML and embedded React flight data.
+- The singleton worker lease prevents the Vercel scheduler and Railway standby worker from collecting simultaneously. Keep Railway's worker disabled while Vercel is primary.
 
 ## Vercel project setup
 
-Create a separate Vercel project connected to `Annant2122011/crikora` with:
+Connect the GitHub repository `Annant2122011/crikora` as a separate Vercel project:
 
 - Project name: `crikora-crawler`
 - Root Directory: `crawler-worker`
 - Framework: Nitro
 - Install command: `npm install`
 - Build command: `npm run build`
+- Production branch: `main`
 
-The repository has a dedicated `crawler-worker/` Vercel application. The Vercel account connection currently exposes no linked project for this repository, so project linking/deployment still needs to be completed in the intended Vercel team.
+The core API is a second Vercel project with repository root as its Root Directory. The repository's two GitHub Vercel checks (`Vercel – crikora` and `Vercel – crikora-crawler`) are already attached to this source. If the Vercel build-rate limit is active, pushes still update the source and GitHub Actions validates both project build paths; Vercel automatically builds the production branch once its limit clears.
 
 ## Required server-side environment variables
 
-Set these only in the Vercel project. Never expose them in a browser extension:
+Set these only on the Vercel worker project:
 
-- `CRIKORA_API_BASE_URL`: the deployed core API base ending in `/api`
-- `DATABASE_URL`: Neon pooled connection string for the Crikora database
-- `CRIKORA_REFRESH_SECRET`: the same secret configured on the core API
-- `CRIKORA_ADMIN_SECRET`: the same secret configured on the core API
-- `CRIKORA_WORKER_ADMIN_SECRET`: a separate random secret used to manage the workflow
+- `CRIKORA_API_BASE_URL`: Vercel core API base ending in `/api`
+- `DATABASE_URL`: Neon pooled connection string for Crikora production
+- `CRIKORA_REFRESH_SECRET`: same secret as the core API
+- `CRIKORA_ADMIN_SECRET`: same secret as the core API
+- `CRIKORA_WORKER_ADMIN_SECRET`: separate random secret for worker management endpoints
 
-Run migration `migrations/003_crikora_worker_state.sql` once against the Crikora Neon database before starting the worker.
+The Vercel core API project additionally requires `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `CRIKORA_ARCHIVE_BUCKET`, `CRIKORA_MATCH_DETAILS_FROM=2026-11-04`, `DATABASE_URL`, `CRIKORA_ADMIN_SECRET`, `CRIKORA_REFRESH_SECRET` and `CRIKORA_COLLECTION_ENABLED`. The five object-storage variables must never be added to the worker project, website or extension.
+
+Run migration `003_crikora_worker_state.sql` once and migrations `004`–`011` for the durable crawl and typed data projections before starting the worker.
 
 ## Operations
 
-All management endpoints require `Authorization: Bearer <CRIKORA_WORKER_ADMIN_SECRET>`.
+All worker-management endpoints require `Authorization: Bearer <CRIKORA_WORKER_ADMIN_SECRET>`.
 
-- `POST /v1/crawl/start` seeds/resumes the complete allowlisted sitemap crawl and starts the durable workflow.
+- `POST /v1/crawl/start` seeds/resumes the targeted product queue through the core API, then launches the durable workflow.
 - `GET /health`
 - `GET /v1/settings`
 - `PUT /v1/settings` with `{"refreshIntervalSeconds":10}`, `15`, `20` or `30`
-- `PUT /v1/settings` with `{"enabled":true}` to enable and start the workflow
-- `PUT /v1/settings` with `{"enabled":false}` to stop after the current cycle
-- `POST /v1/loop/start`
-- `POST /v1/loop/stop`
+- `PUT /v1/settings` with `{"enabled":true}` to start the primary scheduler after the core API is configured.
+- `PUT /v1/settings` with `{"enabled":false}` to stop after the current cycle.
+- `POST /v1/loop/start` and `POST /v1/loop/stop`
 
-The default persistent cadence is 10 seconds. The interval is measured from the start of one refresh cycle; if a cycle takes longer than the configured period, the next cycle starts as soon as the refresh lock permits. Source-side 429 responses are always honored. Page-level denials are skipped independently.
+The worker does not start automatically from a web page or extension. First validate core API health and Neon Object Storage, then enable the crawler and call `POST /v1/crawl/start`. Do not run the Vercel and Railway workers concurrently.
+
 
 ## Important
 

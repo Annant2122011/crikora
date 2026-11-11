@@ -1,4 +1,5 @@
 import type { CrikoraEntity, EntityRepository } from "../domain/entities.js";
+import { isArchiveRepository } from "../storage/archive-repository.js";
 import type { Match, MatchEvent } from "../domain/types.js";
 import { detectMilestoneEvents } from "../engine/events.js";
 import type { CricketProvider } from "../providers/provider.js";
@@ -91,11 +92,13 @@ export class Poller {
     private readonly onError: (error: unknown) => void = () => undefined
   ) {}
 
-  async tick(signal?: AbortSignal): Promise<void> {
+  async tick(signal?: AbortSignal, indexOnly = false): Promise<void> {
     if (this.running || this.sourceDenied || Date.now() < this.blockedUntilMs) return;
     this.running = true;
     try {
-      const snapshot = await this.provider.fetchSnapshot(signal);
+      const snapshot = indexOnly && this.provider.fetchMatchIndexSnapshot
+        ? await this.provider.fetchMatchIndexSnapshot(signal)
+        : await this.provider.fetchSnapshot(signal);
       const records = new Map<string, CrikoraEntity>();
 
       // Index-page stubs keep every discovered live/upcoming/recent match in the API.
@@ -145,6 +148,9 @@ export class Poller {
       }
 
       await this.repository.upsertMany([...records.values()]);
+      if (snapshot.sourcePages?.length && isArchiveRepository(this.repository)) {
+        await this.repository.recordSourcePages(snapshot.sourcePages);
+      }
       const removed = await this.repository.cleanupExpired();
       if (removed) this.onError({ level: "info", message: "Expired Crikora cache records removed", count: removed });
     } catch (error) {

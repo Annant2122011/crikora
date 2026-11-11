@@ -4,4 +4,5 @@ import type { ProviderSnapshot } from "../domain/types.js";
 export interface CricketProvider {
   readonly id: string;
   fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot>;
+  fetchMatchIndexSnapshot?(signal?: AbortSignal): Promise<ProviderSnapshot>;
 }
