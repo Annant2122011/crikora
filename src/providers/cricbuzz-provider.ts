@@ -85,7 +85,7 @@ function hasMatchPageIdentity(path: string): boolean {
   return /^\/(?:live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary)\/\d+\//i.test(path);
 }
 
-function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boolean {
+export function shouldFollowTargetedPageLink(sourceUrl: string, targetUrl: string): boolean {
   if (!isTargetedCricbuzzCollectionUrl(targetUrl)) return false;
   try {
     const sourcePath = new URL(sourceUrl).pathname;
