@@ -1,4 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Pool } from "pg";
 import { ENTITY_TYPES, RETENTION_POLICY, type EntityType, type StoredEntity } from "../src/domain/entities.js";
@@ -382,6 +384,8 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
 
   const provider = getProvider();
   const savedProfileAndNewsUrls = getSavedProfileAndNewsInventory();
+  const savedNewsUrls = savedProfileAndNewsUrls.filter(value => value.includes("/cricket-news/"));
+  const savedPlayerUrls = savedProfileAndNewsUrls.filter(value => value.includes("/profiles/"));
   let newsUrls: string[] = [];
   let playerUrls: string[] = [];
   const discoveryErrors: string[] = [];
@@ -403,10 +407,12 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
     }
   }
 
-  const liveProfileAndNews = [...newsUrls, ...playerUrls];
+  const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
+  const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
   const crawlUrls = dedupeCricbuzzPageUrls([
     ...provider.getTargetedCollectionSeedUrls(),
-    ...(liveProfileAndNews.length ? liveProfileAndNews : savedProfileAndNewsUrls)
+    ...selectedNewsUrls,
+    ...selectedPlayerUrls
   ]);
   const result = await getDurableCrawl().startTargetedCrawl(crawlUrls);
   sendJson(response, result.created ? 202 : 200, {
@@ -418,8 +424,8 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
     meta: {
       matchIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-match\/live-scores/.test(value)).length,
       scheduleIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-schedule/.test(value)).length,
-      newsArticleSeedCount: newsUrls.length || savedProfileAndNewsUrls.filter(value => /cricket-news\/\d+\//.test(value)).length,
-      playerProfileSeedCount: playerUrls.length || savedProfileAndNewsUrls.filter(value => /\/profiles\/\d+\//.test(value)).length,
+      newsArticleSeedCount: selectedNewsUrls.length,
+      playerProfileSeedCount: selectedPlayerUrls.length,
       savedProfileAndNewsUrlCount: savedProfileAndNewsUrls.length,
       discoveryErrors,
       crawlUrlCount: crawlUrls.length,
