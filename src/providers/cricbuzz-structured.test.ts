@@ -391,6 +391,32 @@ describe("deeply structured profile and match fields", () => {
     });
   });
 
+
+  it("does not convert a boundary event kind into a dismissal", () => {
+    const data = parseCricbuzzMatchData("9999", undefined, undefined, {
+      commentary: { matchPreviewFullComm: { commentary: [{
+        inningsId: 1,
+        commentaryList: [{
+          eventId: "four-1",
+          ballNbr: 1,
+          kind: "FOUR",
+          batsmanStriker: { batId: 1, batName: "Batter", batRuns: 4 },
+          bowlerStriker: { bowlId: 2, bowlName: "Bowler" },
+          extrasData: { total: 0 },
+          description: "Punched through extra cover",
+          commText: "FOUR, lovely timing."
+        }]
+      }] } }
+    });
+    expect(data.deliveries[0]).toMatchObject({
+      eventType: "FOUR",
+      batRuns: 4,
+      totalRuns: 4,
+      isWicket: false
+    });
+    expect(data.deliveries[0]?.dismissalType).toBeUndefined();
+  });
+
   it("parses extras, fall-of-wickets and partnership tables by their actual header labels", () => {
     const scorecard = load(`
       <main><h2>2nd Innings</h2>
