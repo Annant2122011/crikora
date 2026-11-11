@@ -150,8 +150,9 @@ describe("Cricbuzz live React Server Component schema compatibility", () => {
             scoreDetails: { ballNbr: 120, overs: 20, runRate: 6.9, runs: 139, wickets: 6 },
             extrasData: { byes: 2, legByes: 3, noBalls: 0, penalty: 0, total: 14, wides: 9 },
             partnershipsData: {
-              pat_1: { bat1Id: 9653, bat1Name: "Lizelle Lee", bat2Id: 9149,
-                bat2Name: "Chamari Athapaththu", totalRuns: 21, totalBalls: 23 }
+              pat_1: { bat1Id: 9653, bat1Name: "Lizelle Lee", bat1Runs: 12, bat1Balls: 14,
+                bat2Id: 9149, bat2Name: "Chamari Athapaththu", bat2Runs: 9, bat2Balls: 9,
+                totalRuns: 21, totalBalls: 23 }
             },
             wicketsData: {
               wkt_1: { batId: 9653, batName: "Lizelle Lee", wktOver: 3.5, wktRuns: 21, ballNbr: 23, wktNbr: 1 }
@@ -177,8 +178,10 @@ describe("Cricbuzz live React Server Component schema compatibility", () => {
         overs: "2", runs: 13, wickets: 0, economy: 6.5, wides: 1
       })],
       partnerships: [expect.objectContaining({
-        partnershipNumber: 1, batterOne: "Lizelle Lee",
-        batterTwo: "Chamari Athapaththu", runs: 21, balls: 23
+        partnershipNumber: 1, batterOne: "Lizelle Lee", batterOneSourceId: "9653",
+        batterOneRuns: 12, batterOneBalls: 14,
+        batterTwo: "Chamari Athapaththu", batterTwoSourceId: "9149",
+        batterTwoRuns: 9, batterTwoBalls: 9, runs: 21, balls: 23
       })],
       fallOfWickets: [expect.objectContaining({
         wicketNumber: 1, batterName: "Lizelle Lee", score: 21, over: "3.5"
@@ -196,6 +199,8 @@ describe("Cricbuzz live React Server Component schema compatibility", () => {
             inningsId: 0,
             commentaryList: [{
               commText: "B0$",
+              batsmanStriker: { batId: 555, batName: "Toss note" },
+              bowlerStriker: { bowlId: 666, bowlName: "Not a bowler" },
               timestamp: 1000,
               ballNbr: 0,
               event: "NONE",
@@ -206,6 +211,7 @@ describe("Cricbuzz live React Server Component schema compatibility", () => {
             commentaryList: [{
               commText: "FOUR,OVER-BREAK",
               timestamp: 2000,
+              overNumber: 2,
               ballNbr: 14,
               event: "FOUR,OVER-BREAK",
               batTeamName: "ADSW",
