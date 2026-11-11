@@ -319,8 +319,11 @@ describe("deeply structured profile and match fields", () => {
     });
     expect(profile.biography).toContain("A complete player profile.");
     expect(profile.attributes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ fieldPath: "teams", valueType: "json" }),
-      expect.objectContaining({ fieldPath: "careerStats.ODI.batting.runs", value: 450, valueType: "numeric" })
+      expect.objectContaining({ fieldPath: expect.stringMatching(/playerData\.teams$/), valueType: "json" }),
+      expect.objectContaining({
+        fieldPath: expect.stringContaining("careerStats.ODI.batting.runs"),
+        value: 450, valueType: "numeric"
+      })
     ]));
     expect(profile.statistics).toEqual(expect.arrayContaining([
       expect.objectContaining({ section: "ODI", metricKey: "runs", valueNumeric: 450, sourcePath: expect.stringContaining("careerStats.ODI") }),
