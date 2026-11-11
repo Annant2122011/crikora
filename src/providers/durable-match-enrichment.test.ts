@@ -23,7 +23,7 @@ describe("durable match extraction", () => {
         <a href="/cricket-match-squads/161256/sample-match">Squads</a>
         <a href="/live-cricket-full-commentary/161256/sample-match">Commentary</a>
       </main></body></html>`],
-      [companionUrls[0]!, "<html><body><main><h1>Match Facts</h1><p>Date &amp; Time 10 Nov 2026, 7:00 PM</p><p>Venue Trent Bridge</p><p>Toss India elected to bat</p></main></body></html>"],
+      [companionUrls[0]!, "<html><body><main><h1>Match Facts</h1><p> Date &amp; Time 10 Nov 2026, 7:00 PM</p><p>Venue Trent Bridge</p><p>Toss India elected to bat</p></main></body></html>"],
       [companionUrls[1]!, "<html><body><main><h1>Full Scorecard</h1><p>India 200/3 (20 Ov)</p></main></body></html>"],
       [companionUrls[2]!, "<html><body><main><h1>Match Squads</h1><p>Selected players</p></main></body></html>"],
       [companionUrls[3]!, "<html><body><main><h1>Live Commentary</h1><p>Ball-by-ball commentary page</p></main></body></html>"]
@@ -87,7 +87,7 @@ describe("durable match extraction", () => {
     ];
     const pages = new Map<string, string>([
       [baseUrl, "<html><body><main><h1>India vs New Zealand, 1st ODI</h1><p>Live</p></main></body></html>"],
-      [factsUrl, "<html><body><main><h1>Verified Match Facts</h1><p>Date &amp; Time 10 Nov 2026, 1:00 PM</p><p>Venue Eden Gardens</p></main></body></html>"]
+      [factsUrl, "<html><body><main><h1>Verified Match Facts</h1><p> Date &amp; Time 10 Nov 2026, 1:00 PM</p><p>Venue Eden Gardens</p></main></body></html>"]
     ]);
     const requested: string[] = [];
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -126,7 +126,7 @@ describe("durable match extraction", () => {
     const requested: string[] = [];
     const pages = new Map<string, string>([
       [baseUrl, "<html><body><main><h1>Team A vs Team B, 1st ODI</h1><p>Upcoming match scheduled</p></main></body></html>"],
-      [factsUrl, "<html><body><main><h1>Match Facts</h1><p>Date &amp; Time 03 Nov 2026, 7:00 PM</p></main></body></html>"]
+      [factsUrl, "<html><body><main><h1>Match Facts</h1><p> Date &amp; Time 03 Nov 2026, 7:00 PM</p></main></body></html>"]
     ]);
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
