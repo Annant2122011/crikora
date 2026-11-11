@@ -712,8 +712,8 @@ function flattenProfileAttributes(value: unknown, path: string, section: string 
 }
 
 function plausiblePlayerName(value?: string): string | undefined {
-  const candidate = clean(value ?? "").replace(/\\s+/g, " ");
-  if (!candidate || candidate.length > 100 || /\\d/.test(candidate)) return undefined;
+  const candidate = clean(value ?? "").replace(/\s+/g, " ");
+  if (!candidate || candidate.length > 100 || /\d/.test(candidate)) return undefined;
   const normalized = keyOf(candidate);
   if (/^(?:t20|twenty20|odi|test|firstclass|lista|format|statistics|stats|playerprofile|cricket|batter|bowler|allrounder|wicketkeeper)$/.test(normalized)) {
     return undefined;
@@ -724,8 +724,10 @@ function plausiblePlayerName(value?: string): string | undefined {
 
 function playerNameFromProfileUrl(pageUrl: string): string | undefined {
   try {
-    const slug = new URL(pageUrl).pathname.match(/^\\/profiles\\/\\d+\\/([^/]+)/i)?.[1];
-    if (!slug) return undefined;
+    const segments = new URL(pageUrl).pathname.split("/").filter(Boolean);
+    const playerId = segments[1];
+    const slug = segments[2];
+    if (segments[0] !== "profiles" || !playerId || !/^[0-9]+$/.test(playerId) || !slug) return undefined;
     return slug.split("-").filter(Boolean).map(part =>
       part.length <= 3 && /^[a-z]+$/i.test(part)
         ? part[0]!.toUpperCase() + part.slice(1).toLowerCase()
