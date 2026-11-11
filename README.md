@@ -232,6 +232,6 @@ To seed or resume the targeted matches/players/schedule/news collection and drai
 npm run worker:local -- --start-crawl
 ```
 
-`worker:local -- --once` performs one scheduler pass and exits. The standalone worker reads the enabled flag and refresh cadence from the API/Neon, follows API `Retry-After` responses, refreshes its Neon lease while sleeping, and stops cleanly on Ctrl+C. It does not start source collection while crawler settings are disabled.
+`worker:local -- --once` performs one scheduler pass and exits. The standalone worker reads the enabled flag and refresh cadence from the API/Neon, follows API `Retry-After` responses, refreshes its Neon lease while sleeping, and stops cleanly on Ctrl+C. `CRIKORA_WORKER_STEP_TIMEOUT_MS` controls the API crawl-step request timeout (60–300 seconds, default 180 seconds) because a full player profile may require several source fetches and an optional ESPNcricinfo fallback. It does not start source collection while crawler settings are disabled.
 
 The machine running this process must stay online for continuous scraping. It requires `DATABASE_URL`, `CRIKORA_API_BASE_URL`, `CRIKORA_ADMIN_SECRET` and `CRIKORA_REFRESH_SECRET` in the local server-only `.env` file. Never put these values in the browser extension or commit `.env`.
