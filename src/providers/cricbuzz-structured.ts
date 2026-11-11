@@ -758,6 +758,11 @@ export function normalizeCricbuzzPlayerProfile(
     const node = $(element);
     addLabel(clean(node.attr("data-label") ?? ""), clean(node.text()), node.attr("data-section"));
   });
+  $("div.cb-col-100.cb-col,div.cb-col.cb-col-100,.cb-col-100.cb-col").each((_i, element) => {
+    const node = $(element);
+    const children = node.children().toArray().map(child => clean($(child).text())).filter(Boolean);
+    if (children.length === 2 && children[0]!.length < 100) addLabel(children[0]!, children[1]!, "cricbuzz-label");
+  });
   const structuredRoots: unknown[] = [];
   if (serverComponents !== undefined) structuredRoots.push(serverComponents);
   $("script[type='application/ld+json']").each((_i, element) => {
@@ -925,7 +930,7 @@ function normalizeStructuredDelivery(record: DataRecord, matchId: string): Norma
     total: Math.max(rawExtras.total, extraRuns)
   };
   const eventType = stringField(record, ["eventType", "event", "type", "kind"]);
-  const wicketCode = stringField(record, ["wicketCode", "dismissalType", "wicketType", "dismissal", "howOut", "kind"]) ??
+  const wicketCode = stringField(record, ["wicketCode", "dismissalType", "wicketType", "dismissal", "howOut"]) ??
     nestedString(record, ["batsmanStriker"], ["wicketCode", "dismissalType"]);
   const strikerDismissal = nestedString(record, ["batsmanStriker"], ["outDesc", "dismissal", "howOut"]);
   const dismissalContainer = asRecord(scalar(record, ["wicketInfo", "wicketDetails", "dismissalDetails", "wicketData"])) ?? {};
@@ -962,9 +967,11 @@ function normalizeStructuredDelivery(record: DataRecord, matchId: string): Norma
     structuredPlayerId(dismissalContainer, ["playerOutId", "dismissedPlayerId", "batId", "playerId", "id"]) ??
     (isWicket ? batterSourceId : undefined);
   const fielder = stringField(record, ["fielder", "fielderName", "catcher"]) ??
-    nestedString(record, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["name", "playerName", "fieldingName"]);
+    nestedString(record, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["name", "playerName", "fieldingName"]) ??
+    nestedString(dismissalContainer, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["name", "playerName", "fieldingName"]);
   const fielderSourceId = structuredPlayerId(record, ["fielderId", "catcherId", "fieldingPlayerId"]) ??
-    nestedPlayerId(record, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["id", "playerId", "fielderId"]);
+    nestedPlayerId(record, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["id", "playerId", "fielderId"]) ??
+    nestedPlayerId(dismissalContainer, ["fielderDetails", "fieldingPlayer", "fielderInfo", "fieldersInvolved"], ["id", "playerId", "fielderId"]);
   const description = descriptionText(record) ?? stringField(dismissalContainer, ["description", "text"]);
   const explicitExtraType = stringField(record, ["extraType", "extrasType", "extraTypeName"]);
   const inferredExtraType = [
