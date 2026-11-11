@@ -100,6 +100,7 @@ Public read routes include:
 - `GET /v1/matches/:matchId`
 - `GET /v1/matches/:matchId/events`
 - `GET /v1/players?limit=100&offset=0` and `GET /v1/players/:id`
+- `GET /v1/players/compare?ids=11527,10012` (compare 2–4 players by available source-labelled fields)
 - `GET /v1/teams?limit=100` and `GET /v1/teams/:id`
 - `GET /v1/series?limit=100` and `GET /v1/series/:id`
 - `GET /v1/venues?limit=100` and `GET /v1/venues/:id`
@@ -189,7 +190,7 @@ The default refresh interval is **10 seconds**, the fastest supported option. Th
 
 Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` controls the local long-running server. On Vercel, the durable worker reads `refresh_interval_seconds` from Neon. `CRICBUZZ_MIN_REQUEST_INTERVAL_MS` controls spacing between individual source requests. A page-level 401/403/404, redirect or access challenge marks only that URL as skipped; it does not stop the whole crawl. HTTP 429 honours `Retry-After`, while transient 5xx/network failures retry with bounded backoff.
 
-**Vercel hosting note:** deploy the core API from the repository root and the durable scheduler as a separate Vercel project with root directory `crawler-worker`. A durable Vercel Workflow handles the 10/15/20/30-second schedule; a minute-based Cron job is not used as a substitute for a ten-second scheduler. The connected Vercel account currently exposes no linked Crikora project in the available deployment integration, so the intended Vercel project link and deployment still need verification in the dashboard. See [`crawler-worker/README.md`](./crawler-worker/README.md).
+**Vercel hosting note:** deploy the core API from the repository root and the durable scheduler as a separate Vercel project with root directory `crawler-worker`. A durable Vercel Workflow handles the 10/15/20/30-second schedule; a minute-based Cron job is not used as a substitute for a ten-second scheduler. The Vercel management connector currently returns no project records, so project settings and encrypted environment values cannot be edited through that connector. However, GitHub confirms the existing `Vercel – crikora` and `Vercel – crikora-crawler` deployment checks are attached to this repository. Both currently report the account build-rate limit; GitHub Actions independently builds and tests the root API and the separate Nitro worker. See [`crawler-worker/README.md`](./crawler-worker/README.md).
 
 ## Technical safety and known limits
 
@@ -205,7 +206,7 @@ Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` 
 
 GitHub Actions runs typecheck, build and tests on pushes and pull requests to `main`.
 
-## Durable full-site crawl
+## Targeted durable collection
 
 The initial product crawl fetches only the player-profile and cricket-news sitemaps, the live/upcoming/recent match indexes, and the selected schedule indexes. It never merges the root sitemap or the full 4,721-URL audit into the queue. The durable Neon queue uses leases and bounded retries. The worker calls the lightweight `POST /api/refresh/index` route between crawl batches so live/upcoming/recent match summaries stay current.
 
