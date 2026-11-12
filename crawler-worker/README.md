@@ -8,10 +8,10 @@ This is the Vercel-hosted scheduler for the Crikora Cricbuzz HTML collector. It 
 - Railway hosts the same core API and worker adapters as the **backup**. Both engines use the same Neon PostgreSQL production database, schemas, queue and data contracts.
 - The API owns source requests, parsing, normalized projections, cache writes and private Neon Object Storage. The worker only schedules API calls and maintains the singleton Neon worker lease.
 - The workflow performs one bounded durable crawl step, then a lightweight `POST /refresh/index` call for live/upcoming/recent match indexes. It sleeps according to the configured 10, 15, 20 or 30-second cadence.
-- No broad root-sitemap or full-site crawl is used. Collection is limited to match details from 4 November 2026 onward, player profiles and their statistics tabs, schedule/series fixtures, and cricket-news articles. Both men's and women's cricket are included.
+- No broad root-sitemap or full-site crawl is used. Collection is limited to match details from 4 November 2026 onward, player profiles and their statistics tabs, and schedule/series fixtures. News is excluded. Both men's and women's cricket are included.
 - Earlier ball-by-ball matches are provided separately from Cricsheet and are not crawled from Cricbuzz.
-- Match overview pages fetch same-match facts, scorecard, squads and commentary pages directly. Squad/player links feed player profile enrichment. Each profile may link only to that player's own statistics tabs. News indexes lead to articles but articles do not recurse through related story links.
-- Neon stores durable queue state, current entities, normalized delivery/profile/news/schedule projections and append-only history. Private Object Storage holds gzip-compressed source HTML and embedded React flight data.
+- Match overview pages fetch same-match facts, scorecard, squads and commentary pages directly. Squad/player links feed player profile enrichment. Each profile may link only to that player's own statistics tabs. News indexes and article links are not fetched.
+- Neon stores durable queue state, current entities, normalized delivery/profile/schedule projections and append-only history. Legacy news rows from the earlier run remain stored but are not crawled. Private Object Storage holds gzip-compressed source HTML and embedded React flight data.
 - The singleton worker lease prevents the Vercel scheduler and Railway standby worker from collecting simultaneously. Keep Railway's worker disabled while Vercel is primary.
 
 ## Vercel project setup
