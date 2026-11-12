@@ -4,7 +4,7 @@ Crikora is a cricket data collector and JSON API for the Crikora browser extensi
 
 ## Production collection scope
 
-Crikora reads Cricbuzz's public cricket indexes and sitemaps but applies a strict filter for three data families only: match details from 4 November 2026 onward, men's and women's player profiles, and the complete available series/fixture schedule. News URLs are explicitly excluded from collection. Relevant series context and standings are retained where they support the schedule and match centre. The saved 4,721-URL inventory is an audit snapshot, not an instruction to crawl every listed page.
+Crikora reads Cricbuzz's public cricket indexes and sitemaps but applies a strict filter for three data families only: match details from 4 November 2026 onward, men's and women's player profiles, and the complete available series/fixture schedule. News URLs are explicitly excluded from collection. Relevant series context and standings are retained where they support the schedule and match centre. The saved 4,721-URL inventory is an audit snapshot, not an instruction to crawl every listed page. It is below the requested 6,000–7,000-URL audit target, so the inventory still needs a fresh expansion and deduplicated coverage report.
 
 | Data family | Collection scope |
 | --- | --- |
@@ -50,11 +50,13 @@ All successful data endpoints return JSON with a `data` field and small `meta` o
 | `GET /api/v1/players?limit=100&offset=0` | Paginated player directory; profiles contain all extracted source fields |
 | `GET /api/v1/players/:id` | Full player profile |
 | `GET /api/v1/players/compare?ids=11527,10012` | Compare 2–4 players by source-labelled profile fields and career stats |
-| `GET /api/v1/news?limit=100&offset=0` and `GET /api/v1/news/:id` | Full article feed and article detail |
+| `GET /api/v1/news?limit=100&offset=0` and `GET /api/v1/news/:id` | Legacy read-only access to articles already stored; the Cricbuzz news collector is disabled |
 | `GET /api/v1/schedule?limit=200&offset=0` | Paginated normalized fixture schedule |
 | `GET /api/v1/teams`, `/series`, `/venues` | Supporting entities used by match and profile pages |
 | `GET /api/v1/search?q=india` | Search cached JSON payloads |
 
+
+The news endpoints are currently read-only. The AI news generation and publishing workflow is not part of this scraper; it will need a separate authenticated, idempotent article-ingestion endpoint before automated publishing is enabled.
 
 Match IDs in the API can be passed with or without the `cricbuzz:` prefix. Use the numeric Cricbuzz source ID for player/team/series/venue entity routes.
 
