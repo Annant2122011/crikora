@@ -44,12 +44,12 @@ const INDEXES: Array<{ path: string; bucket: MatchBucket }> = [
   { path: "/cricket-match/live-scores/recent-matches", bucket: "completed" }
 ];
 
-// Only the two upcoming schedule indexes and latest-news index are sampled.
-// The historical series catalogue and broad news index are intentionally omitted.
+// Rotate through upcoming fixtures and the complete current-series catalogue.
+// News is intentionally outside the Crikora collection scope.
 const SECTION_INDEXES = [
   "/cricket-schedule/upcoming-series/all",
   "/cricket-schedule/upcoming-series/international",
-  "/cricket-news/latest-news"
+  "/cricket-schedule/series/all"
 ];
 
 const TARGETED_PAGE_KINDS = new Set([
@@ -57,7 +57,7 @@ const TARGETED_PAGE_KINDS = new Set([
   "match-highlights", "live-graphs", "over-by-over", "match-forecast", "wicket-zone",
   "player", "player-stats", "player-match-performance", "player-match-highlights",
   "team", "team-subpage", "series", "series-subpage", "series-auction", "schedule",
-  "ranking-or-statistics", "news", "news-index", "news-category"
+  "ranking-or-statistics"
 ]);
 
 export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
@@ -65,6 +65,9 @@ export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.hostname !== "www.cricbuzz.com" || url.username || url.password) return false;
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    // News collection is intentionally disabled. Keep any legacy news rows
+    // readable through the API, but never admit news URLs to the crawl queue.
+    if (/^\/cricket-news(?:\/|$)/i.test(path)) return false;
     if (INDEXES.some(index => index.path === path) || SECTION_INDEXES.includes(path)) return true;
     const rule = PATH_RULES.find(item => item.pattern.test(path));
     if (!rule) return false;
