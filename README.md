@@ -197,7 +197,7 @@ Refresh cadence and source-request pacing are separate. `POLL_INTERVAL_SECONDS` 
 
 - All page requests are sequential, same-host HTTPS, timeout bounded, and response-size bounded.
 - Individual page 401/403/404 responses, redirects and CAPTCHA/anti-bot challenge pages are recorded as skipped URLs. 429 honours `Retry-After`; transient 5xx/network failures use bounded backoff. The scraper does not attempt to evade a challenge.
-- Links are host-checked and constrained to known Cricbuzz match, profile, team, series, news, video, gallery, statistics, schedule, commentary and special-content route families.
+- Links are host-checked and constrained to known Cricbuzz match, profile, team, series, video, gallery, statistics, schedule, commentary and special-content route families.
 - Images are exposed as external URLs. They are not copied to Crikora object storage.
 - HTML schemas can change. Keep representative fixtures and re-run the parser tests when Cricbuzz changes markup.
 - This is a static-HTML collector, not a full browser automation engine. It does not execute Cricbuzz client-side JavaScript, trigger interactive tabs, or retrieve data that only appears after browser-side hydration. Some profile tabs, charts, or statistics may therefore be absent. The collector archives the complete fetched HTML, including embedded React Server Component flight scripts, and exposes decoded keyed page data beside normalized tables, labels and sections. This preserves source evidence for later parser upgrades, but it still cannot capture data that Cricbuzz only returns after client-side interactions or from inaccessible/authenticated app services. It does not fabricate missing values.
@@ -209,7 +209,7 @@ GitHub Actions runs typecheck, build and tests on pushes and pull requests to `m
 
 ## Targeted durable collection
 
-The initial product crawl fetches only the player-profile and cricket-news sitemaps, the live/upcoming/recent match indexes, and the selected schedule indexes. It never merges the root sitemap or the full 4,721-URL audit into the queue. The durable Neon queue uses leases and bounded retries. The worker calls the lightweight `POST /api/refresh/index` route between crawl batches so live/upcoming/recent match summaries stay current.
+The initial product crawl fetches the player-profile sitemap, the live/upcoming/recent match indexes, and the selected schedule indexes. News is excluded from sitemap discovery, queue seeding and page fetching. It never merges the root sitemap or the full 4,721-URL audit into the queue. The durable Neon queue uses leases and bounded retries. The worker calls the lightweight `POST /api/refresh/index` route between crawl batches so live/upcoming/recent match summaries stay current.
 
 - Core API: `POST /api/crawl/start`, `GET /api/crawl/status`, `POST /api/crawl/step`, `POST /api/cleanup`.
 - Worker: `POST /v1/crawl/start` (requires the worker admin bearer token).
@@ -227,7 +227,7 @@ npm ci
 npm run worker:local
 ```
 
-To seed or resume the targeted matches/players/schedule/news collection and drain its durable queue:
+To seed or resume the targeted matches/players/schedule collection and drain its durable queue:
 
 ```bash
 npm run worker:local -- --start-crawl
