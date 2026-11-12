@@ -5,7 +5,7 @@ import { MemoryEntityRepository } from "../storage/memory-entity-repository.js";
 import { DurableCrawlService } from "./durable-crawl.js";
 
 const RUN_ID = "00000000-0000-4000-8000-000000000001";
-const PAGE_URL = "https://www.cricbuzz.com/cricket-news/140765/sample-story";
+const PAGE_URL = "https://www.cricbuzz.com/profiles/11527/paul-walter";
 
 function makeProvider(): CricbuzzProvider {
   return new CricbuzzProvider({
@@ -32,6 +32,8 @@ describe("DurableCrawlService page-level failure isolation", () => {
     const updates: Array<{ sql: string; values: unknown[] }> = [];
     let queueCountsRead = 0;
     let completed = false;
+    let candidateSql = "";
+    const queueCountSqls: string[] = [];
 
     const pool = {
       async query(sql: string, values: unknown[] = []) {
@@ -39,6 +41,7 @@ describe("DurableCrawlService page-level failure isolation", () => {
           return { rows: [{ id: RUN_ID, status: "running" }], rowCount: 1 };
         }
         if (sql.includes("WITH candidates AS")) {
+          candidateSql = sql;
           return {
             rows: [{ id: 7, canonical_url: PAGE_URL, attempts: 1 }],
             rowCount: 1
@@ -62,6 +65,7 @@ describe("DurableCrawlService page-level failure isolation", () => {
           };
         }
         if (sql.includes("SELECT count(*) AS total_count")) {
+          queueCountSqls.push(sql);
           queueCountsRead += 1;
           return {
             rows: [{
@@ -105,6 +109,10 @@ describe("DurableCrawlService page-level failure isolation", () => {
       expect(updates.some(item => item.sql.includes("SET status = 'paused'"))).toBe(false);
       expect(updates.some(item => item.sql.includes("SET enabled = false"))).toBe(false);
       expect(queueCountsRead).toBeGreaterThanOrEqual(2);
+      expect(candidateSql).toContain("page_kind NOT IN ('news', 'news-category', 'news-index')");
+      expect(queueCountSqls.every(sql =>
+        sql.includes("page_kind NOT IN ('news', 'news-category', 'news-index')")
+      )).toBe(true);
     } finally {
       await repository.close();
       vi.restoreAllMocks();

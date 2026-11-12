@@ -4,16 +4,16 @@ Crikora is a cricket data collector and JSON API for the Crikora browser extensi
 
 ## Production collection scope
 
-Crikora reads the live Cricbuzz sitemaps but applies a strict initial-seed filter so it collects only the website and extension data families: match overviews, player profiles, the full schedule and news. Relevant series context and standings are retained where they support those sections. The saved 4,721-URL audit in `docs/cricbuzz-sitemap-inventory.json` is a fallback source, not an instruction to crawl every listed page.
+Crikora reads Cricbuzz's public cricket indexes and sitemaps but applies a strict filter for three data families only: match details from 4 November 2026 onward, men's and women's player profiles, and the complete available series/fixture schedule. News URLs are explicitly excluded from collection. Relevant series context and standings are retained where they support the schedule and match centre. The saved 4,721-URL inventory is an audit snapshot, not an instruction to crawl every listed page. It is below the requested 6,000–7,000-URL audit target, so the inventory still needs a fresh expansion and deduplicated coverage report.
 
 | Data family | Collection scope |
 | --- | --- |
 | Match centre | Match overviews from **4 November 2026 onward**, plus facts, scorecards, squads, innings, extras, partnerships, fall of wickets and commentary only after the parent match passes the date gate |
 | Player profiles | Every source-labelled field exposed by Cricbuzz, biography, photos, RSC/JSON-LD data, career-stat tabs and profile links; ESPNcricinfo supplements missing photos/URLs when a player match is unambiguous |
 | Schedule | Upcoming fixture indexes, active series context, dates, teams, formats, venues and points tables where exposed |
-| News | Cricket-news articles, full available text, author, category, timestamps, images, tags and source metadata |
 
-Both men's and women's cricket are included. There is no product-wide men's-only filter. The 4 November cutoff applies only to match details, not to player profiles, schedule or news. Standalone historical scorecards and player-match snippets are not seeded; match companion pages are fetched only after their parent match passes the cutoff. Older ball-by-ball history is reserved for the separate Cricsheet import.
+
+Both men's and women's cricket are included. There is no product-wide men's-only filter. The 4 November cutoff applies to match details only; player profiles and schedule pages are not restricted by that date. News collection is disabled and existing stored articles are left untouched. Standalone historical scorecards and player-match snippets are not seeded; match companion pages are fetched only after their parent match passes the cutoff. Older ball-by-ball history is reserved for the separate Cricsheet import.
 
 The sitemap audit contains 4,721 distinct URLs, but the initial queue deliberately excludes broad team directories, auction subtrees, standalone historical scorecards, old player-match records, video collections, photo galleries and account/contact pages. The exact queue is the deduplicated set of eligible source pages, not a target number.
 
@@ -21,7 +21,7 @@ If a Cricbuzz player profile has no usable photo, including the site-wide `c5820
 
 ## What the collector reads
 
-The backend discovers **both men's and women's** cricket from Cricbuzz's live, upcoming and recent indexes, the player sitemap, the cricket-news sitemap and the schedule indexes. Match details are collected from 4 November 2026 onward; older ball-by-ball history is reserved for the separate Cricsheet import. The format classifier keeps Test, ODI, T20, T10, Sixes and The Hundred distinct. Match facts, scorecards, squads, innings, commentary and participant profiles are enriched only after their parent match passes the date gate. Player, schedule and news pages use a durable, rate-limited queue. It follows public same-host links and does not guess private Cricbuzz APIs:
+The backend discovers **both men's and women's** cricket from Cricbuzz's live, upcoming and recent match indexes, player profiles and statistics pages, and upcoming/full-series schedule indexes. Match details are collected from 4 November 2026 onward; older ball-by-ball history is reserved for the separate Cricsheet import. The format classifier keeps Test, ODI, T20, T10, Sixes and The Hundred distinct. Match facts, scorecards, squads, innings, commentary and participant profiles are enriched only after their parent match passes the date gate. Player and schedule pages use a durable, rate-limited queue. News URLs are denied by the collection allowlist. The collector follows public same-host cricket links and does not guess private Cricbuzz APIs:
 
 - Match page: live score summary, match identity, competition, teams, format, result and match navigation.
 - Info/facts: date/time text, venue, toss, officials, match facts and related venue/series links.
@@ -31,9 +31,8 @@ The backend discovers **both men's and women's** cricket from Cricbuzz's live, u
 - Player profiles: profile images, every source-labelled detail field, biography sections, teams, debut/role/style/date/height, career-stat tables, JSON-LD and decoded React Server Component flight data. Common attributes are normalized; additional source fields remain in the typed attribute table and immutable original HTML evidence. The player-detail endpoint also returns linked batting/bowling/all-matches tabs where exposed.
 - Schedule and series pages: fixtures, participant teams, competition, format, India-local start time and venue are normalized into a dedicated schedule read model. Linked match pages are fed into the match-detail collector.
 
-- News articles: full available article text, title, summary, byline, published/modified timestamps, category, image URL, tags and original page metadata are stored in a dedicated article projection. Source HTML and RSC scripts remain in the private archive for parser upgrades.
 
-The prototype's distinctive client-facing sections are a rich player profile with source-labelled fields and career stats, a player comparison view, a match centre with the structured innings/commentary timeline, a full fixture calendar and a searchable article feed. Image assets remain external Cricbuzz-hosted HTTPS URLs; video streams are not downloaded. Collection does not bypass login, anti-bot checks or source access controls.
+The intended client-facing sections are rich player profiles with source-labelled fields and career statistics, player comparison, a match centre with structured innings/commentary, and a complete fixture calendar. Existing article records remain readable through the legacy news API, but the Cricbuzz news crawler is disabled. Image assets remain external HTTPS URLs; video streams are not downloaded. Collection does not bypass login, anti-bot checks or source access controls.
 
 ## JSON API
 
@@ -51,11 +50,13 @@ All successful data endpoints return JSON with a `data` field and small `meta` o
 | `GET /api/v1/players?limit=100&offset=0` | Paginated player directory; profiles contain all extracted source fields |
 | `GET /api/v1/players/:id` | Full player profile |
 | `GET /api/v1/players/compare?ids=11527,10012` | Compare 2–4 players by source-labelled profile fields and career stats |
-| `GET /api/v1/news?limit=100&offset=0` and `GET /api/v1/news/:id` | Full article feed and article detail |
+| `GET /api/v1/news?limit=100&offset=0` and `GET /api/v1/news/:id` | Legacy read-only access to articles already stored; the Cricbuzz news collector is disabled |
 | `GET /api/v1/schedule?limit=200&offset=0` | Paginated normalized fixture schedule |
 | `GET /api/v1/teams`, `/series`, `/venues` | Supporting entities used by match and profile pages |
 | `GET /api/v1/search?q=india` | Search cached JSON payloads |
 
+
+The news endpoints are currently read-only. The AI news generation and publishing workflow is not part of this scraper; it will need a separate authenticated, idempotent article-ingestion endpoint before automated publishing is enabled.
 
 Match IDs in the API can be passed with or without the `cricbuzz:` prefix. Use the numeric Cricbuzz source ID for player/team/series/venue entity routes.
 
@@ -125,7 +126,7 @@ PostgreSQL cleanup still deletes only expired cache rows. It never touches the p
 
 ## Permanent historical archive
 
-The permanent archive is an evidence-backed history layer separate from the current cache. It stores only the selected product families: matches from 4 November 2026 onward, player profiles and their statistics tabs, schedule/series fixture pages, and all articles exposed by the news sitemap. The prior broad sitemap queue is paused and retained as an audit record; it is not processed by the new worker. Earlier ball-by-ball matches are left to the Cricsheet import.
+The permanent archive is an evidence-backed history layer separate from the current cache. The active collection scope is limited to matches from 4 November 2026 onward, player profiles/statistics tabs, and schedule/series fixture pages. Existing news records are preserved but no new news URLs are queued or fetched. Earlier ball-by-ball matches are left to the Cricsheet import.
 
 - `crikora_entity_snapshots` stores every observed distinct normalized entity version. A later return to an earlier payload is stored as a new observation.
 - `crikora_source_page_snapshots` stores source URL, page kind, SHA-256, original/compressed byte counts and an object key. The compressed HTML (including embedded React flight scripts) is stored in the private Neon Object Storage bucket `crikora-raw-archive`, not in PostgreSQL. Existing legacy `body_gzip` rows remain readable during migration. Low-churn pages are captured whenever content changes; high-churn match/live-analysis/index URLs are captured at most once per hour per URL. This does not throttle normalized entity snapshots.
@@ -136,7 +137,7 @@ The permanent archive is an evidence-backed history layer separate from the curr
 
 Use `CrikoraApiClient.getArchiveCoverage()`, `listArchivedEntities()` and `getEntityHistory()` from the website or extension. Browser clients receive normalized JSON only. They never receive database credentials or raw HTML storage access.
 
-The targeted crawl continuously refreshes match indexes, enriches eligible match pages from the configured start date, refreshes stable player profiles and career tabs daily, schedule/news indexes every 30 minutes and article details daily. The queue is DB-backed in Neon and is independent of the Railway/Vercel process lifetime. A coverage status of "captured" means a public page was fetched and archived, not that Cricbuzz exposed every possible field in that page. Check skipped/failed counts and profile field coverage before treating a page family as complete.
+The targeted crawl is designed to refresh match indexes, enrich eligible match pages from the configured start date, refresh stable player profiles and career tabs, and refresh schedule/series indexes. The queue is DB-backed in Neon and is independent of the Railway/Vercel process lifetime. A coverage status of "captured" means a public page was fetched and archived, not that Cricbuzz exposed every possible field in that page. Check skipped/failed counts and profile field coverage before treating a page family as complete.
 
 ## Backend-only Neon archive storage environment
 

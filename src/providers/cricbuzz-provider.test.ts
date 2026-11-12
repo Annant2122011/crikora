@@ -102,12 +102,11 @@ describe("Cricbuzz player detail extraction", () => {
 });
 
 describe("Crikora initial collection seed scope", () => {
-  it("seeds matches, full player profiles, news, schedules and relevant series context", () => {
+  it("seeds matches, full player profiles and relevant schedules, but not news", () => {
     const included = [
       "https://www.cricbuzz.com/live-cricket-scores/176154/yl-vs-ut-9th-match-t10-2026",
       "https://www.cricbuzz.com/profiles/10012/smriti-mandhana",
       "https://www.cricbuzz.com/profiles/10012/smriti-mandhana/batting",
-      "https://www.cricbuzz.com/cricket-news/140543/example-story",
       "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
       "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026",
       "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/matches",
@@ -134,7 +133,7 @@ describe("Crikora initial collection seed scope", () => {
 });
 
 describe("Cricbuzz targeted discovery seeds", () => {
-  it("seeds match indexes and focused schedule/news indexes, not unrelated directories or historical archive routes", () => {
+  it("seeds match indexes and schedule indexes, never news or unrelated directories", () => {
     const seeds = getCricbuzzDiscoverySeedUrls();
     expect(seeds).toEqual(expect.arrayContaining([
       "https://www.cricbuzz.com/cricket-match/live-scores",
@@ -142,7 +141,7 @@ describe("Cricbuzz targeted discovery seeds", () => {
       "https://www.cricbuzz.com/cricket-match/live-scores/recent-matches",
       "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
       "https://www.cricbuzz.com/cricket-schedule/upcoming-series/international",
-      "https://www.cricbuzz.com/cricket-news/latest-news"
+      "https://www.cricbuzz.com/cricket-schedule/series/all"
     ]));
     expect(seeds.some(value => /profiles|cricket-team|scorecard-archives|cricket-videos|cricket-stats/.test(value))).toBe(false);
     expect(seeds.every(isTargetedCricbuzzCollectionUrl)).toBe(true);
@@ -154,10 +153,11 @@ describe("Cricbuzz targeted discovery seeds", () => {
       "https://www.cricbuzz.com/cricket-series/555/womens-league",
       "https://www.cricbuzz.com/profiles/777/women-player",
       "https://www.cricbuzz.com/profiles/777/women-player/batting",
-      "https://www.cricbuzz.com/cricket-news/140765/example-story",
       "https://www.cricbuzz.com/cricket-schedule/series/all"
     ];
     for (const value of allowed) expect(isTargetedCricbuzzCollectionUrl(value)).toBe(true);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-news/140765/example-story")).toBe(false);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-news/latest-news")).toBe(false);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-scorecard-archives/1877")).toBe(false);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-videos/217038/example")).toBe(false);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting")).toBe(true);
@@ -180,7 +180,7 @@ describe("targeted link following", () => {
   const newsB = "https://www.cricbuzz.com/cricket-news/140766/story-b";
   const schedule = "https://www.cricbuzz.com/cricket-schedule/series/all";
 
-  it("follows match indexes, match participants, player statistics, schedules and news indexes without page-family fanout", () => {
+  it("follows matches, player statistics and schedules, while excluding all news links", () => {
     expect(shouldFollowTargetedPageLink(matchIndex, matchPage)).toBe(true);
     expect(shouldFollowTargetedPageLink(matchIndex, squadsPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(matchIndex, factsPage)).toBe(false);
@@ -194,7 +194,7 @@ describe("targeted link following", () => {
     expect(shouldFollowTargetedPageLink(squadsPage, player)).toBe(true);
     expect(shouldFollowTargetedPageLink(player, batting)).toBe(true);
     expect(shouldFollowTargetedPageLink(player, otherPlayer)).toBe(false);
-    expect(shouldFollowTargetedPageLink(newsIndex, newsA)).toBe(true);
+    expect(shouldFollowTargetedPageLink(newsIndex, newsA)).toBe(false);
     expect(shouldFollowTargetedPageLink(newsA, newsB)).toBe(false);
     expect(shouldFollowTargetedPageLink(schedule, matchPage)).toBe(true);
   });
