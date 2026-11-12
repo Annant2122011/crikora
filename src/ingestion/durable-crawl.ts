@@ -324,12 +324,9 @@ export class DurableCrawlService {
              OR
              (coverage.page_kind IN ('player', 'player-stats', 'player-match-performance', 'team', 'team-subpage', 'series', 'series-subpage', 'ranking')
                AND coverage.last_fetched_at <= now() - interval '24 hours')
-             OR
-             (coverage.page_kind IN ('schedule', 'news-index', 'news-category')
-               AND coverage.last_fetched_at <= now() - interval '30 minutes')
-             OR
-             (coverage.page_kind = 'news'
-               AND coverage.last_fetched_at <= now() - interval '24 hours')
+              OR
+              (coverage.page_kind = 'schedule'
+                AND coverage.last_fetched_at <= now() - interval '30 minutes')
            )
          ORDER BY coverage.last_fetched_at ASC, queue.id ASC
          LIMIT 10
@@ -378,6 +375,7 @@ export class DurableCrawlService {
          SELECT id
          FROM public.crikora_crawl_queue
          WHERE run_id = $1
+            AND page_kind NOT IN ('news', 'news-category', 'news-index')
            AND ((status = 'pending' AND next_attempt_at <= now())
              OR (status = 'processing' AND lease_until <= now()))
          ORDER BY CASE
@@ -387,8 +385,7 @@ export class DurableCrawlService {
            WHEN page_kind = 'schedule' THEN 3
            WHEN page_kind IN ('series', 'series-subpage') THEN 4
            WHEN page_kind = 'ranking' THEN 5
-           WHEN page_kind = 'news' THEN 6
-           ELSE 7
+           ELSE 6
          END, id
          LIMIT $2
          FOR UPDATE SKIP LOCKED
@@ -551,7 +548,7 @@ export class DurableCrawlService {
     let retryAfterSeconds: number | undefined;
     if (run.pendingCount > 0 && run.processingCount === 0) {
       const next = await this.pool.query<{ seconds: number | string | null }>(
-        "SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now())))) AS seconds FROM public.crikora_crawl_queue WHERE run_id = $1 AND status = 'pending'",
+        "SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now())))) AS seconds FROM public.crikora_crawl_queue WHERE run_id = $1 AND status = 'pending' AND page_kind NOT IN ('news', 'news-category', 'news-index')",
         [active.id]
       );
       retryAfterSeconds = count(next.rows[0]?.seconds) || undefined;
@@ -586,7 +583,7 @@ export class DurableCrawlService {
     const row = result.rows[0];
     if (!row) throw new Error("Crikora crawl run was not found.");
     const counts = await this.pool.query<QueueCounts>(
-      "SELECT count(*) AS total_count, count(*) FILTER (WHERE status = 'pending') AS pending_count, count(*) FILTER (WHERE status = 'processing') AS processing_count, count(*) FILTER (WHERE status = 'completed') AS completed_count, count(*) FILTER (WHERE status = 'failed') AS failed_count, count(*) FILTER (WHERE status = 'skipped') AS skipped_count, min(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at FROM public.crikora_crawl_queue WHERE run_id = $1",
+      "SELECT count(*) AS total_count, count(*) FILTER (WHERE status = 'pending') AS pending_count, count(*) FILTER (WHERE status = 'processing') AS processing_count, count(*) FILTER (WHERE status = 'completed') AS completed_count, count(*) FILTER (WHERE status = 'failed') AS failed_count, count(*) FILTER (WHERE status = 'skipped') AS skipped_count, min(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at FROM public.crikora_crawl_queue WHERE run_id = $1 AND page_kind NOT IN ('news', 'news-category', 'news-index')",
       [runId]
     );
     const c = counts.rows[0]!;
