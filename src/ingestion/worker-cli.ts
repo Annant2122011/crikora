@@ -287,7 +287,7 @@ async function processCrawlStep(config: Config): Promise<{ active: boolean; retr
 
 async function runRefresh(config: Config): Promise<number> {
   // Only refresh the compact live/upcoming/recent match indexes here.
-  // The durable crawl owns player, news, schedule and match-detail enrichment.
+  // The durable crawl owns player-profile, schedule and match-detail enrichment.
   const result = await requestApi(config, "refresh/index", "POST", "refresh", 55_000);
   if (result.status === 401 || result.status === 403 || result.status === 409) {
     throw new ApiError(

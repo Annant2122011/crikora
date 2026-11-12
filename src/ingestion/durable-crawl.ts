@@ -138,7 +138,7 @@ export class DurableCrawlService {
     );
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     const kinds = urls.map(pageKind);
-    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match, schedule, player or news seed URLs.");
+    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match, schedule or player seed URLs.");
     await this.recordCoverageTargets(urls);
 
     const client = await this.pool.connect();

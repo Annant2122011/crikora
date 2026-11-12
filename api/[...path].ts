@@ -392,29 +392,20 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
 
   const provider = getProvider();
   const savedTargetedUrls = getSavedTargetedCricketInventory();
-  const savedNewsUrls = savedTargetedUrls.filter(value => value.includes("/cricket-news/"));
   const savedPlayerUrls = savedTargetedUrls.filter(value => value.includes("/profiles/"));
-  let newsUrls: string[] = [];
   let playerUrls: string[] = [];
   let sitemapPageUrls: string[] = [];
   let sitemapDocumentCount = 0;
   const discoveryErrors: string[] = [];
 
-  for (const [label, discover] of [
-    ["news", () => provider.discoverNewsSitemapUrls(AbortSignal.timeout(25_000))],
-    ["players", () => provider.discoverPlayerSitemapUrls(AbortSignal.timeout(25_000))]
-  ] as const) {
-    try {
-      const found = await discover();
-      if (label === "news") newsUrls = found;
-      else playerUrls = found;
-    } catch (error) {
-      const status = error && typeof error === "object" && "sourceStatus" in error
-        ? Number((error as { sourceStatus?: unknown }).sourceStatus)
-        : undefined;
-      if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
-      discoveryErrors.push(label + " sitemap unavailable (HTTP " + status + "); using the saved targeted inventory.");
-    }
+  try {
+    playerUrls = await provider.discoverPlayerSitemapUrls(AbortSignal.timeout(25_000));
+  } catch (error) {
+    const status = error && typeof error === "object" && "sourceStatus" in error
+      ? Number((error as { sourceStatus?: unknown }).sourceStatus)
+      : undefined;
+    if (status === 429 || (status !== undefined && status >= 500) || status === undefined) throw error;
+    discoveryErrors.push("Player sitemap unavailable (HTTP " + status + "); using the saved targeted inventory.");
   }
 
   try {
@@ -429,13 +420,11 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
     discoveryErrors.push("Cricbuzz sitemap index unavailable (HTTP " + status + "); using the saved targeted inventory and focused sitemaps.");
   }
 
-  const selectedNewsUrls = newsUrls.length ? newsUrls : savedNewsUrls;
   const selectedPlayerUrls = playerUrls.length ? playerUrls : savedPlayerUrls;
   const crawlUrls = dedupeCricbuzzPageUrls([
     ...provider.getTargetedCollectionSeedUrls().filter(value => isTargetedCricbuzzSeedUrl(value)),
     ...sitemapPageUrls,
     ...savedTargetedUrls,
-    ...selectedNewsUrls,
     ...selectedPlayerUrls
   ]);
   const result = await getDurableCrawl().startTargetedCrawl(crawlUrls);
@@ -448,7 +437,6 @@ async function startTargetedCrawl(request: ApiRequest, response: ApiResponse): P
     meta: {
       matchIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-match\/live-scores/.test(value)).length,
       scheduleIndexSeedCount: provider.getTargetedCollectionSeedUrls().filter(value => /cricket-schedule/.test(value)).length,
-      newsArticleSeedCount: selectedNewsUrls.length,
       playerProfileSeedCount: selectedPlayerUrls.length,
       savedTargetedUrlCount: savedTargetedUrls.length,
       sitemapDocumentCount,
