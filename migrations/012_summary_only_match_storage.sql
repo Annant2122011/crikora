@@ -128,6 +128,7 @@ SELECT
   payload->>'toss',
   CASE
     WHEN COALESCE(payload->>'toss','') ~* 'won the toss' THEN substring(payload->>'toss' FROM '^(.+?)\\s+(won|wins)\\s+the\\s+toss')
+    WHEN COALESCE(payload->>'toss','') ~* '(elected|opted|chose|decided)\\s+to\\s+(bat|bowl|field)' THEN substring(payload->>'toss' FROM '^(.+?)\\s+(elected|opted|chose|decided)\\s+to')
     ELSE NULL
   END,
   CASE
