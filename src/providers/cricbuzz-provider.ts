@@ -1000,6 +1000,8 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
   const teams = title.match(/^(.+?)\s+vs\s+(.+?)(?:,|$)/i);
   const now = new Date().toISOString();
   const format = classifyMatchFormat(context);
+  const toss = labeledValue(context, "Toss");
+  const result = context.match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
   const sourceUrl = link.url;
   return {
     id: `cricbuzz:${item.id}`,
@@ -1015,6 +1017,8 @@ function parseMatchIndexStub(item: DiscoveredMatch, page: PageRecord, link: Link
     updatedAt: now,
     sourceUrl,
     description: title,
+    ...(toss ? { toss } : {}),
+    ...(result ? { result } : {}),
     stats: { indexCardText: context.slice(0, 2500), discoveredFrom: item.bucket }
   };
 }
