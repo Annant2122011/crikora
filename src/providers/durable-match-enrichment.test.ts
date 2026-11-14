@@ -170,7 +170,7 @@ describe("durable match extraction", () => {
       scorecardUrl: "https://www.cricbuzz.com/live-cricket-scorecard/181001/south-africa-vs-england"
     });
     expect(result.entity?.payload).not.toHaveProperty("scorecardPage");
-    expect(result.entity?.payload).not.toHaveProperty("matchData.deliveries");
+    expect(result.entity?.payload.matchData).toMatchObject({ deliveries: [], commentary: [] });
   });
 
   it("skips a live or upcoming match before the 4 November 2026 cutoff", async () => {
