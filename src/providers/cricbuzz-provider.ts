@@ -1130,7 +1130,16 @@ function parseMatch(
     info?.$("meta[property='article:published_time']").first().attr("content") ||
     $("time[datetime]").first().attr("datetime") || "";
   const tossSource = infoText || body;
-  const toss = labeledValue(tossSource, "Toss") ||
+  const structuredToss = info
+    ? Object.entries(extractLabels(info.$)).find(([label]) => /^toss$/i.test(label.trim()))?.[1]
+    : undefined;
+  const paragraphToss = info
+    ? info.$("p, li").toArray()
+        .map(element => clean(info.$(element).text()))
+        .find(line => /^toss(?:\s*[:\-]|\s+)/i.test(line))
+        ?.replace(/^toss\s*[:\-]?\s*/i, "")
+    : undefined;
+  const toss = structuredToss || paragraphToss || labeledValue(tossSource, "Toss") ||
     clean(tossSource.match(/\bToss\s*:?\s+(.+?)(?=\s+(?:Venue|Date|Time|Umpires|3rd Umpire|Referee)\b|$)/i)?.[1] ?? "");
   const result = [body, infoText, scoreText].join("\n")
     .match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
