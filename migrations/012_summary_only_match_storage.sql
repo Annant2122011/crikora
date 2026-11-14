@@ -91,7 +91,7 @@ FROM (
   SELECT source_id, source_url FROM public.crikora_source_page_snapshots WHERE entity_type='player'
 ) AS known_player_urls
 WHERE source_id ~ '^[0-9]+$'
-  AND source_url ~ '^https://www\\.cricbuzz\\.com/profiles/[0-9]+/[^?#]+/?$'
+  AND source_url ~ '^https://www\.cricbuzz\.com/profiles/[0-9]+/[^?#]+/?$'
 ON CONFLICT (source_id) DO UPDATE SET
   profile_url=EXCLUDED.profile_url,
   last_seen_at=now();
@@ -108,37 +108,37 @@ SELECT
   source_url,
   COALESCE(payload->>'competition','Cricket'),
   CASE
-    WHEN COALESCE(payload->>'competition','') ~* 'women|womens|\\mWPL\\M|\\mWBBL\\M' THEN 'women'
-    WHEN COALESCE(payload->>'competition','') ~* '\\mmen\\M|mens' THEN 'men'
+    WHEN COALESCE(payload->>'competition','') ~* 'women|womens|\mWPL\M|\mWBBL\M' THEN 'women'
+    WHEN COALESCE(payload->>'competition','') ~* '\mmen\M|mens' THEN 'men'
     ELSE 'unknown'
   END,
   CASE
-    WHEN COALESCE(payload->>'competition','') ~* '\\m(?:u|under)[ -]?(11|13|15|16|17|19|21|23)\\M'
-      THEN 'u' || (regexp_match(lower(COALESCE(payload->>'competition','')), '\\m(?:u|under)[ -]?(11|13|15|16|17|19|21|23)\\M'))[1]
-    WHEN COALESCE(payload->>'competition','') ~* '\\memerging\\M' THEN 'emerging'
-    WHEN COALESCE(payload->>'competition','') ~* '\\myouth\\M' THEN 'youth'
+    WHEN COALESCE(payload->>'competition','') ~* '\m(?:u|under)[ -]?(11|13|15|16|17|19|21|23)\M'
+      THEN 'u' || (regexp_match(lower(COALESCE(payload->>'competition','')), '\m(?:u|under)[ -]?(11|13|15|16|17|19|21|23)\M'))[1]
+    WHEN COALESCE(payload->>'competition','') ~* '\memerging\M' THEN 'emerging'
+    WHEN COALESCE(payload->>'competition','') ~* '\myouth\M' THEN 'youth'
     ELSE 'senior'
   END,
   COALESCE(payload->>'format','Unknown'),
   COALESCE(payload->>'homeTeam','Unknown'),
   COALESCE(payload->>'awayTeam','Unknown'),
   payload->>'status',
-  CASE WHEN COALESCE(payload->>'startTime','') ~ '^\\d{4}-\\d{2}-\\d{2}' THEN (payload->>'startTime')::timestamptz ELSE NULL END,
+  CASE WHEN COALESCE(payload->>'startTime','') ~ '^\d{4}-\d{2}-\d{2}' THEN (payload->>'startTime')::timestamptz ELSE NULL END,
   payload->>'venue',
   payload->>'toss',
   CASE
-    WHEN COALESCE(payload->>'toss','') ~* 'won the toss' THEN substring(payload->>'toss' FROM '^(.+?)\\s+(won|wins)\\s+the\\s+toss')
-    WHEN COALESCE(payload->>'toss','') ~* '(elected|opted|chose|decided)\\s+to\\s+(bat|bowl|field)' THEN substring(payload->>'toss' FROM '^(.+?)\\s+(elected|opted|chose|decided)\\s+to')
+    WHEN COALESCE(payload->>'toss','') ~* 'won the toss' THEN substring(payload->>'toss' FROM '^(.+?)\s+(won|wins)\s+the\s+toss')
+    WHEN COALESCE(payload->>'toss','') ~* '(elected|opted|chose|decided)\s+to\s+(bat|bowl|field)' THEN substring(payload->>'toss' FROM '^(.+?)\s+(elected|opted|chose|decided)\s+to')
     ELSE NULL
   END,
   CASE
-    WHEN COALESCE(payload->>'toss','') ~* '(elected|opted|chose|decided)\\s+to\\s+bat' THEN 'bat'
-    WHEN COALESCE(payload->>'toss','') ~* '(elected|opted|chose|decided)\\s+to\\s+(bowl|field)' THEN 'bowl'
+    WHEN COALESCE(payload->>'toss','') ~* '(elected|opted|chose|decided)\s+to\s+bat' THEN 'bat'
+    WHEN COALESCE(payload->>'toss','') ~* '(elected|opted|chose|decided)\s+to\s+(bowl|field)' THEN 'bowl'
     ELSE NULL
   END,
   payload->>'result',
-  CASE WHEN COALESCE(payload->>'result','') ~* 'won by' THEN substring(payload->>'result' FROM '^(.+?)\\s+won\\s+by') ELSE NULL END,
-  CASE WHEN COALESCE(payload->>'result','') ~* 'won by' THEN substring(payload->>'result' FROM 'won\\s+by\\s+(.+)$') ELSE NULL END,
+  CASE WHEN COALESCE(payload->>'result','') ~* 'won by' THEN substring(payload->>'result' FROM '^(.+?)\s+won\s+by') ELSE NULL END,
+  CASE WHEN COALESCE(payload->>'result','') ~* 'won by' THEN substring(payload->>'result' FROM 'won\s+by\s+(.+)$') ELSE NULL END,
   COALESCE(payload->>'playerOfMatch',payload->>'playerOfTheMatch'),
   fetched_at,
   CASE WHEN payload->>'status'='completed' THEN fetched_at ELSE NULL END,
@@ -148,7 +148,7 @@ WHERE entity_type='match'
   AND payload->>'status' IN ('upcoming','live','completed')
   AND COALESCE(payload->>'homeTeam','') <> ''
   AND COALESCE(payload->>'awayTeam','') <> ''
-  AND COALESCE(payload->>'startTime','') ~ '^\\d{4}-\\d{2}-\\d{2}'
+  AND COALESCE(payload->>'startTime','') ~ '^\d{4}-\d{2}-\d{2}'
   AND substring(payload->>'startTime' FROM 1 FOR 10)::date >= DATE '2026-11-04'
 ON CONFLICT (match_source_id) DO NOTHING;
 
@@ -158,8 +158,8 @@ SELECT
   cache.source_id,
   innings.ordinality::smallint,
   innings.value->>'teamName',
-  CASE WHEN COALESCE(innings.value->>'runs','') ~ '^\\d+$' THEN (innings.value->>'runs')::integer ELSE NULL END,
-  CASE WHEN COALESCE(innings.value->>'wickets','') ~ '^\\d+$' THEN (innings.value->>'wickets')::smallint ELSE NULL END,
+  CASE WHEN COALESCE(innings.value->>'runs','') ~ '^\d+$' THEN (innings.value->>'runs')::integer ELSE NULL END,
+  CASE WHEN COALESCE(innings.value->>'wickets','') ~ '^\d+$' THEN (innings.value->>'wickets')::smallint ELSE NULL END,
   innings.value->>'overs',
   COALESCE(innings.value->>'wickets','')='10' OR COALESCE(innings.value->>'allOut','false')='true',
   COALESCE(innings.value->>'declared','false')='true'
@@ -171,6 +171,6 @@ JOIN public.crikora_match_summaries AS summary
   ON summary.match_source_id=cache.source_id AND summary.status='completed'
 WHERE cache.entity_type='match'
   AND cache.payload->>'status'='completed'
-  AND COALESCE(cache.payload->>'startTime','') ~ '^\\d{4}-\\d{2}-\\d{2}'
+  AND COALESCE(cache.payload->>'startTime','') ~ '^\d{4}-\d{2}-\d{2}'
   AND substring(cache.payload->>'startTime' FROM 1 FOR 10)::date >= DATE '2026-11-04'
 ON CONFLICT (match_source_id,innings_number) DO NOTHING;
