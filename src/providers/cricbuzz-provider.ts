@@ -53,11 +53,11 @@ const SECTION_INDEXES = [
 ];
 
 const TARGETED_PAGE_KINDS = new Set([
-  "match", "match-facts", "match-squads", "match-scorecard", "commentary",
-  "match-highlights", "live-graphs", "over-by-over", "match-forecast", "wicket-zone",
-  "player", "player-stats", "player-match-performance", "player-match-highlights",
-  "team", "team-subpage", "series", "series-subpage", "series-auction", "schedule",
-  "ranking-or-statistics"
+  // Background collection is limited to match cards and competition structure.
+  // Match facts are requested only as a small toss/date supplement by the parent match.
+  // Scorecards, squads, commentary, player profiles and analytics are deferred until click.
+  "match", "player", "team", "team-subpage", "series", "series-subpage",
+  "series-auction", "schedule", "ranking-or-statistics"
 ]);
 
 export function isTargetedCricbuzzCollectionUrl(value: string): boolean {
@@ -253,164 +253,9 @@ export class CricbuzzProvider implements CricketProvider {
   }
 
   async fetchSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
-    const discovered = new Map<string, DiscoveredMatch>();
-    const indexRecords = new Map<string, Match>();
-    const capturedPages = new Map<string, PageRecord>();
-    for (const index of INDEXES) {
-      const page = await this.tryFetchPage(new URL(index.path, ORIGIN), `index:${index.bucket}`, signal);
-      if (!page) continue;
-      capturedPages.set(page.url, page);
-      for (const link of getLinks(page.$, page.url)) {
-        const match = link.path.match(/^\/live-cricket-scores\/(\d+)(?:\/|$)/);
-        if (match?.[1] && !discovered.has(match[1])) {
-          const item: DiscoveredMatch = {
-            id: match[1],
-            path: link.path,
-            bucket: index.bucket,
-            ...(link.matchStartTime ? { startTime: link.matchStartTime } : {})
-          };
-          const stub = parseMatchIndexStub(item, page, link);
-          // A match must have a known start date on or after the configured
-          // cutoff, regardless of whether Cricbuzz labels it live, upcoming
-          // or completed. Unknown dates fail closed instead of entering queue.
-          if (!isAtOrAfterConfiguredMatchStart(stub.startTime)) continue;
-          discovered.set(match[1], item);
-          indexRecords.set(match[1], stub);
-        }
-      }
-    }
-
-    const sectionTick = Math.floor(Date.now() / 10_000);
-    const sectionStart = (sectionTick * 2) % SECTION_INDEXES.length;
-    const sectionPaths = rotate(SECTION_INDEXES, sectionStart, 2);
-    const sectionPages: PageRecord[] = [];
-    for (const path of sectionPaths) {
-      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      const page = await this.tryFetchPage(new URL(path, ORIGIN), "section-index", signal);
-      if (page) {
-        sectionPages.push(page);
-        capturedPages.set(page.url, page);
-      }
-    }
-
-    const allMatches = [...discovered.values()];
-    // Persist every match URL into the targeted durable queue. Completed index
-    // stubs are withheld until their detail page proves the configured date.
-    // Persist every match URL into the durable crawl queue, not only the small
-    // per-poll deep-enrichment slice. This prevents cold starts from repeatedly
-    // enriching only the first few matches in the index.
-    let pendingMatches = this.pendingRelatedLinks.get("match");
-    if (!pendingMatches) {
-      pendingMatches = new Map<string, LinkRecord>();
-      this.pendingRelatedLinks.set("match", pendingMatches);
-    }
-    for (const item of allMatches) {
-      const url = new URL(item.path, ORIGIN).toString();
-      if (!pendingMatches.has(url)) pendingMatches.set(url, {
-        url,
-        path: item.path,
-        text: "match index",
-        ...(item.startTime ? { matchStartTime: item.startTime } : {})
-      });
-    }
-    while (pendingMatches.size > 2_000) {
-      const oldest = pendingMatches.keys().next().value as string | undefined;
-      if (!oldest) break;
-      pendingMatches.delete(oldest);
-    }
-
-    const selected = rotate(allMatches, this.matchCursor, this.options.maxMatchesPerPoll);
-    if (allMatches.length) this.matchCursor = (this.matchCursor + selected.length) % allMatches.length;
-
-    const matches: Match[] = [...indexRecords.values()];
-    const events: MatchEvent[] = [];
-    const entities = new Map<string, CrikoraEntity>();
-    for (const [sourceId, stub] of indexRecords) {
-      addEntity(
-        entities,
-        "match",
-        sourceId,
-        stub.sourceUrl ?? `https://www.cricbuzz.com/live-cricket-scores/${sourceId}`,
-        stub as unknown as Record<string, unknown>
-      );
-    }
-    const profileLinks = new Map<string, LinkRecord>();
-    const teamLinks = new Map<string, LinkRecord>();
-    const seriesLinks = new Map<string, LinkRecord>();
-    const venueLinks = new Map<string, LinkRecord>();
-    const contentLinks = new Map<string, LinkRecord>();
-
-    for (const discoveredMatch of selected) {
-      if (signal?.aborted) throw signal.reason ?? new Error("Cricbuzz collection aborted.");
-      const base = await this.tryFetchPage(new URL(discoveredMatch.path, ORIGIN), "match", signal);
-      if (!base) continue;
-      const navigation = collectMatchNavigation(base.$, base.url, discoveredMatch.id);
-      const info = navigation.info
-        ? await this.tryFetchPage(new URL(navigation.info, ORIGIN), "match-facts", signal)
-        : undefined;
-      const scorecard = navigation.scorecard
-        ? await this.tryFetchPage(new URL(navigation.scorecard, ORIGIN), "scorecard", signal)
-        : undefined;
-      const squads = navigation.squads
-        ? await this.tryFetchPage(new URL(navigation.squads, ORIGIN), "squads", signal)
-        : undefined;
-      const commentary = navigation.commentary
-        ? await this.tryFetchPage(new URL(navigation.commentary, ORIGIN), "commentary", signal)
-        : undefined;
-
-      const match = parseMatch(discoveredMatch, base, info, scorecard, squads, commentary);
-      const matchEvents = toMatchEvents(match.matchData, match);
-      match.events = matchEvents;
-      const existingIndex = matches.findIndex(existing => existing.sourceMatchId === match.sourceMatchId);
-      if (existingIndex >= 0) matches[existingIndex] = match;
-      else matches.push(match);
-      events.push(...matchEvents);
-
-      const combinedPages = [base, info, scorecard, squads, commentary].filter((p): p is PageRecord => Boolean(p));
-      const payload = {
-        ...match,
-        matchFacts: info ? extractPageData(info.$, info.url) : null,
-        scorecard: scorecard ? extractPageData(scorecard.$, scorecard.url) : null,
-        squadPage: squads ? extractPageData(squads.$, squads.url) : null,
-        commentary: commentary ? extractPageData(commentary.$, commentary.url) : null,
-        sourcePages: combinedPages.map(page => page.url)
-      };
-      addEntity(entities, "match", discoveredMatch.id, base.url, payload);
-
-      for (const page of combinedPages) {
-        capturedPages.set(page.url, page);
-        this.queueRelatedPageLinks(page.$, page.url);
-        const related = collectRelatedLinks(page.$, page.url);
-        mergeLinks(profileLinks, related.profiles);
-        mergeLinks(teamLinks, related.teams);
-        mergeLinks(seriesLinks, related.series);
-        mergeLinks(venueLinks, related.venues);
-        mergeLinks(contentLinks, related.content);
-        const generic = parseEntityPage(page.$, page.url);
-        if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
-      }
-    }
-
-    for (const page of sectionPages) {
-      this.queueRelatedPageLinks(page.$, page.url);
-      const related = collectRelatedLinks(page.$, page.url);
-      mergeLinks(profileLinks, related.profiles);
-      mergeLinks(teamLinks, related.teams);
-      mergeLinks(seriesLinks, related.series);
-      mergeLinks(venueLinks, related.venues);
-      mergeLinks(contentLinks, related.content);
-      const generic = parseEntityPage(page.$, page.url);
-      if (generic) addEntity(entities, generic.entityType, generic.sourceId, generic.sourceUrl, generic.payload);
-    }
-
-    await this.fetchRelatedEntities(profileLinks, this.options.maxProfilesPerPoll, "player", entities, capturedPages, signal);
-    await this.fetchRelatedEntities(teamLinks, this.options.maxTeamsPerPoll, "team", entities, capturedPages, signal);
-    await this.fetchRelatedEntities(seriesLinks, this.options.maxSeriesPerPoll, "series", entities, capturedPages, signal);
-    await this.fetchRelatedEntities(venueLinks, this.options.maxVenuesPerPoll, "venue", entities, capturedPages, signal);
-    await this.fetchRelatedEntities(contentLinks, this.options.maxContentPagesPerPoll, "metadata", entities, capturedPages, signal);
-
-    const fetchedAt = new Date().toISOString();
-    return { matches, events, entities: [...entities.values()], fetchedAt, sourcePages: [...capturedPages.values()].map(toSourcePageCapture) };
+    // Normal refreshes are intentionally summary-only. Deep match pages,
+    // commentary and player profiles are requested only by an opened detail view.
+    return this.fetchMatchIndexSnapshot(signal);
   }
 
   async fetchMatchIndexSnapshot(signal?: AbortSignal): Promise<ProviderSnapshot> {
