@@ -65,47 +65,65 @@ function inferAgeGroup(value: string): string {
 }
 
 function extractTextInnings(sourceText: string, teams: string[]): MatchSummaryInnings[] {
-  const output: MatchSummaryInnings[] = [];
-  for (const team of teams) {
-    if (!team || /^unknown$/i.test(team)) continue;
-    const loweredText = sourceText.toLowerCase();
-    const index = loweredText.indexOf(team.toLowerCase());
-    if (index < 0) continue;
-    // Stop at the next opponent label. Otherwise the first team's text window
-    // can accidentally consume the second team's score from the same match card.
-    const nextTeamIndexes = teams
-      .filter(candidate => candidate && candidate.toLowerCase() !== team.toLowerCase())
-      .map(candidate => loweredText.indexOf(candidate.toLowerCase(), index + team.length))
-      .filter(position => position > index);
-    const nextTeamIndex = nextTeamIndexes.length ? Math.min(...nextTeamIndexes) : -1;
-    const segmentEnd = nextTeamIndex > index
-      ? Math.min(nextTeamIndex, index + 220)
-      : Math.min(sourceText.length, index + 220);
-    const segment = sourceText.slice(index, segmentEnd);
+  const loweredText = sourceText.toLowerCase();
+  const uniqueTeams = [...new Set(teams.filter(team => team && !/^unknown$/i.test(team)))];
+  const candidates: Array<{ position: number; innings: Omit<MatchSummaryInnings, "inningsNumber"> }> = [];
 
-    const slashScore = segment.match(/\b(\d{1,3})\s*\/\s*(\d{1,2})\s*(?:\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\))?/i);
-    const allOutScore = segment.match(/\b(\d{1,3})\s*(?:all[ -]?out)\b(?:\s*(?:in)?\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\b)?/i);
-    const runsWithOvers = segment.match(/\b(\d{1,3})\s*\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\)/i);
-    const inningsScore = slashScore ?? allOutScore ?? runsWithOvers;
-    if (!inningsScore) continue;
+  for (const team of uniqueTeams) {
+    const normalizedTeam = team.toLowerCase();
+    let searchFrom = 0;
+    let selected: { position: number; innings: Omit<MatchSummaryInnings, "inningsNumber"> } | undefined;
 
-    const allOut = inningsScore === allOutScore || /\ball[ -]?out\b/i.test(segment.slice(0, 110));
-    const runs = number(inningsScore[1]);
-    const wickets = slashScore ? number(slashScore[2]) : allOut ? 10 : null;
-    const overs = slashScore ? slashScore[3] ?? null
-      : allOutScore ? allOutScore[2] ?? runsWithOvers?.[2] ?? null
-      : runsWithOvers ? runsWithOvers[2] ?? null : null;
-    output.push({
-      inningsNumber: output.length + 1,
-      teamName: team,
-      runs,
-      wickets,
-      overs,
-      allOut: allOut || wickets === 10,
-      declared: /\bdeclared\b/i.test(segment.slice(0, 110))
-    });
+    while (!selected) {
+      const position = loweredText.indexOf(normalizedTeam, searchFrom);
+      if (position < 0) break;
+      searchFrom = position + normalizedTeam.length;
+
+      // A team name in the headline is not its score. Continue until this
+      // occurrence is followed by an innings score before the opponent label.
+      const nextOpponentPositions = uniqueTeams
+        .filter(candidate => candidate.toLowerCase() !== normalizedTeam)
+        .map(candidate => loweredText.indexOf(candidate.toLowerCase(), position + normalizedTeam.length))
+        .filter(candidatePosition => candidatePosition > position);
+      const nextOpponent = nextOpponentPositions.length ? Math.min(...nextOpponentPositions) : -1;
+      const segmentEnd = nextOpponent > position
+        ? Math.min(nextOpponent, position + 260)
+        : Math.min(sourceText.length, position + 260);
+      const segment = sourceText.slice(position, segmentEnd);
+
+      const slashScore = segment.match(/\b(\d{1,3})\s*\/\s*(\d{1,2})\s*(?:\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\))?/i);
+      const allOutBeforeRuns = segment.match(/\b(\d{1,3})\s+all[ -]?out\b(?:\s*(?:in)?\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\b)?/i);
+      const allOutAfterRuns = segment.match(/\ball[ -]?out\s+(?:for\s+)?(\d{1,3})(?:\s*runs?)?\b(?:\s+in\s+(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\b)?/i);
+      const allOutScore = allOutBeforeRuns ?? allOutAfterRuns;
+      const runsWithOvers = segment.match(/\b(\d{1,3})\s*\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\)/i);
+      const inningsScore = slashScore ?? allOutScore ?? runsWithOvers;
+      if (!inningsScore) continue;
+
+      const allOut = Boolean(allOutScore);
+      const runs = number(inningsScore[1]);
+      const wickets = slashScore ? number(slashScore[2]) : allOut ? 10 : null;
+      const overs = slashScore ? slashScore[3] ?? null
+        : allOutScore ? allOutScore[2] ?? runsWithOvers?.[2] ?? null
+        : runsWithOvers ? runsWithOvers[2] ?? null : null;
+      selected = {
+        position,
+        innings: {
+          teamName: team,
+          runs,
+          wickets,
+          overs,
+          allOut: allOut || wickets === 10,
+          declared: /\bdeclared\b/i.test(segment.slice(0, 140))
+        }
+      };
+    }
+
+    if (selected) candidates.push(selected);
   }
-  return output;
+
+  return candidates
+    .sort((left, right) => left.position - right.position)
+    .map((candidate, index) => ({ inningsNumber: index + 1, ...candidate.innings }));
 }
 
 /**
