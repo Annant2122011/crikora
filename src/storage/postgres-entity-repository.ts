@@ -187,13 +187,26 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
         const entity = sourceEntity.entityType === "match"
           ? { ...sourceEntity, payload: toCompactMatchPayload(sourceEntity) }
           : sourceEntity;
+
         await client.query(
           "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
           [`entity:${entity.entityType}:${entity.sourceId}`]
         );
 
+        // Serialize first, then reject any stale observation after a final result.
+        if (entity.entityType === "match" && entity.payload.status !== "completed") {
+          const finalRow = await client.query(
+            "SELECT 1 FROM public.crikora_match_summaries WHERE match_source_id=$1 AND status='completed' LIMIT 1",
+            [entity.sourceId]
+          );
+          if (finalRow.rowCount) continue;
+        }
 
-
+        const retentionClass = getEntityRetentionClass(entity);
+        const expiresAt = retentionClass === "ephemeral"
+          ? new Date(fetchedAt.getTime() + DATA_TTL_SECONDS * 1000).toISOString()
+          : null;
+        const payloadHash = hashEntityPayload(entity.payload);
 
         // Live scores are transient. Never append their changing values to the
         // permanent entity-snapshot table; only the final compact score is archived.
