@@ -1,3 +1,7 @@
+## Revised storage contract
+
+The Stage 1 architecture replaces the earlier broad archive design. See [`docs/STAGE_1_SUMMARY_ONLY_STORAGE.md`](./docs/STAGE_1_SUMMARY_ONLY_STORAGE.md) for the authoritative storage, live-to-history, player on-demand, and detail-priority rules. Historical matches retain compact score/toss summaries only; player rows retain IDs and profile URLs only; the Cricbuzz news collector does not ingest or persist news. The old sections below describe legacy behavior and are superseded wherever they conflict with this Stage 1 contract. Production cleanup of already-stored legacy rows and raw objects is a separate, explicitly authorized operation.
+
 # Crikora
 
 Crikora is a cricket data collector and JSON API for the Crikora browser extension and website.
