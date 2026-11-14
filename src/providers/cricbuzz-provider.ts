@@ -1129,7 +1129,9 @@ function parseMatch(
     info?.$("time[datetime]").first().attr("datetime") ||
     info?.$("meta[property='article:published_time']").first().attr("content") ||
     $("time[datetime]").first().attr("datetime") || "";
-  const toss = labeledValue(infoText || body, "Toss");
+  const tossSource = infoText || body;
+  const toss = labeledValue(tossSource, "Toss") ||
+    clean(tossSource.match(/\\bToss\\s*:?\\s+(.+?)(?=\\s+(?:Venue|Date|Time|Umpires|3rd Umpire|Referee)\\b|$)/i)?.[1] ?? "");
   const result = [body, infoText, scoreText].join("\n")
     .match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
   const status: MatchStatus = result || discovered.bucket === "completed" ? "completed" : discovered.bucket;
