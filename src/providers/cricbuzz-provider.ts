@@ -435,44 +435,26 @@ export class CricbuzzProvider implements CricketProvider {
           : "live";
       const navigation = collectMatchNavigation(page.$, page.url, identity.sourceId);
       const fallback = matchCompanionUrls(page.url, identity.sourceId);
-      // Prefer links published by the page; only synthesize same-ID companion paths
-      // when the page omits a tab link. Requests remain sequential and same-host.
+      // Fetch only the compact facts page needed for date, venue and toss.
+      // Scorecards, squads and commentary wait until a user opens the match.
       const infoUrl = navigation.info ?? fallback.info;
-      const scorecardUrl = navigation.scorecard ?? fallback.scorecard;
-      const squadsUrl = navigation.squads ?? fallback.squads;
-      const commentaryUrl = navigation.commentary ?? fallback.commentary;
-      const info = infoUrl ? await this.tryFetchPage(new URL(infoUrl), "durable:match-facts", signal) : undefined;
+      const info = infoUrl ? await this.tryFetchPage(new URL(infoUrl), "summary:match-facts", signal) : undefined;
       const dateCheck = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info);
-      // Fail closed for every match status. Live/upcoming labels are not proof
-      // that the fixture is after the requested historical cutoff.
       if (!isAtOrAfterConfiguredMatchStart(dateCheck.startTime)) {
-        const datedPages = [page, info].filter((item): item is PageRecord => Boolean(item));
-        // The date-check request is transient metadata only. Never archive
-        // pre-cutoff match pages or persist their source HTML.
         return { discoveredUrls: [], skipped: true };
       }
-      const scorecard = scorecardUrl ? await this.tryFetchPage(new URL(scorecardUrl), "durable:scorecard", signal) : undefined;
-      const squadsPage = squadsUrl ? await this.tryFetchPage(new URL(squadsUrl), "durable:squads", signal) : undefined;
-      const commentary = commentaryUrl ? await this.tryFetchPage(new URL(commentaryUrl), "durable:commentary", signal) : undefined;
-      pages = [page, info, scorecard, squadsPage, commentary].filter((item): item is PageRecord => Boolean(item));
-      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard, squadsPage, commentary);
+
+      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info);
       match.infoUrl = info?.url;
-      match.scorecardUrl = scorecard?.url;
-      match.squadsUrl = squadsPage?.url;
-      match.commentaryUrl = commentary?.url;
+      match.scorecardUrl = navigation.scorecard ?? fallback.scorecard;
+      match.squadsUrl = navigation.squads ?? fallback.squads;
+      match.commentaryUrl = navigation.commentary ?? fallback.commentary;
+      pages = [page, info].filter((item): item is PageRecord => Boolean(item));
       entity = {
         entityType: "match",
         sourceId: identity.sourceId,
         sourceUrl: page.url,
-        payload: {
-          ...match,
-          pageKind: "match-overview",
-          matchFacts: info ? extractPageData(info.$, info.url) : null,
-          scorecardPage: scorecard ? extractPageData(scorecard.$, scorecard.url) : null,
-          squadPage: squadsPage ? extractPageData(squadsPage.$, squadsPage.url) : null,
-          commentaryPage: commentary ? extractPageData(commentary.$, commentary.url) : null,
-          sourcePages: pages.map(item => item.url)
-        },
+        payload: { ...match, pageKind: "match-summary" },
         fetchedAt: new Date().toISOString()
       };
     } else if (identity) {
