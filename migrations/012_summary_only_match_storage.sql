@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.crikora_player_urls (
   first_seen_at timestamptz NOT NULL DEFAULT now(),
   last_seen_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT crikora_player_urls_profile_url_check
-    CHECK (profile_url ~ '^https://www\\.cricbuzz\\.com/profiles/[0-9]+/[^?#]+/?$')
+    CHECK (profile_url ~ '^https://www\.cricbuzz\.com/profiles/[0-9]+/[^?#]+/?$')
 );
 
 CREATE INDEX IF NOT EXISTS crikora_player_urls_last_seen_idx
