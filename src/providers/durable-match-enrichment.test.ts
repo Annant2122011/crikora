@@ -122,6 +122,57 @@ describe("durable match extraction", () => {
     expect(result.entity?.payload).not.toHaveProperty("sourcePages");
   });
 
+  it("stores only final scores from the overview and facts without downloading the scorecard", async () => {
+    const baseUrl = "https://www.cricbuzz.com/live-cricket-scores/181001/south-africa-vs-england";
+    const factsUrl = "https://www.cricbuzz.com/cricket-match-facts/181001/south-africa-vs-england";
+    const pages = new Map<string, string>([
+      [baseUrl, `<html><body><main>
+        <h1>South Africa vs England, 1st T20</h1>
+        <p>South Africa 190 all out in 19.3 overs</p>
+        <p>England 191/3 (19.4 Ov)</p>
+        <p>England won by 7 wickets</p>
+        <a href="/cricket-match-facts/181001/south-africa-vs-england">Info</a>
+        <a href="/live-cricket-scorecard/181001/south-africa-vs-england">Scorecard</a>
+      </main></body></html>`],
+      [factsUrl, "<html><body><main><h1>Match Facts</h1><time datetime='2026-11-10T19:00:00+05:30'>10 Nov 2026</time><p>Toss: England chose to bowl</p><p>Venue: Newlands</p></main></body></html>"]
+    ]);
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      requested.push(requestUrl);
+      const html = pages.get(requestUrl);
+      return new Response(html ?? "not found", {
+        status: html ? 200 : 404,
+        headers: { "content-type": "text/html; charset=utf-8" }
+      });
+    }));
+
+    const provider = new CricbuzzProvider({
+      minRequestIntervalMs: 0,
+      maxMatchesPerPoll: 1,
+      maxProfilesPerPoll: 0,
+      maxTeamsPerPoll: 0,
+      maxSeriesPerPoll: 0,
+      maxVenuesPerPoll: 0,
+      maxContentPagesPerPoll: 0,
+      timeoutMs: 15_000,
+      maxResponseBytes: 1_000_000,
+      userAgent: "Crikora test runner (authorized test)"
+    });
+
+    const result = await provider.fetchCrawlPage(baseUrl);
+    expect(result.skipped).toBe(false);
+    expect(requested).toEqual([baseUrl, factsUrl]);
+    expect(result.entity?.payload).toMatchObject({
+      status: "completed",
+      toss: "England chose to bowl",
+      result: "England won by 7 wickets",
+      scorecardUrl: "https://www.cricbuzz.com/live-cricket-scorecard/181001/south-africa-vs-england"
+    });
+    expect(result.entity?.payload).not.toHaveProperty("scorecardPage");
+    expect(result.entity?.payload).not.toHaveProperty("matchData.deliveries");
+  });
+
   it("skips a live or upcoming match before the 4 November 2026 cutoff", async () => {
     const baseUrl = "https://www.cricbuzz.com/live-cricket-scores/160001/older-match";
     const factsUrl = "https://www.cricbuzz.com/cricket-match-facts/160001/older-match";
