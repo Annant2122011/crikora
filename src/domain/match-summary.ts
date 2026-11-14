@@ -82,7 +82,7 @@ function extractTextInnings(sourceText: string, teams: string[]): MatchSummaryIn
     const runs = number(inningsScore[1]);
     const wickets = slashScore ? number(slashScore[2]) : allOut ? 10 : null;
     const overs = slashScore ? slashScore[3] ?? null
-      : allOutScore ? allOutScore[2] ?? null
+      : allOutScore ? allOutScore[2] ?? runsWithOvers?.[2] ?? null
       : runsWithOvers ? runsWithOvers[2] ?? null : null;
     output.push({
       inningsNumber: output.length + 1,
