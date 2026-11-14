@@ -33,10 +33,12 @@ function rows(value: unknown): Record<string, unknown>[] {
 
 function parseToss(tossText: string | null): { tossWinner: string | null; tossDecision: "bat" | "bowl" | "unknown" | null } {
   if (!tossText) return { tossWinner: null, tossDecision: null };
-  const winner = tossText.match(/^(.+?)\s+(?:won|wins)\s+the\s+toss\b/i)?.[1]?.trim() ?? null;
-  const choice = tossText.match(/\b(?:elected|opted|chose|choose|decided)\s+to\s+(bat|bowl|field)\b/i)?.[1]?.toLowerCase();
+  const decisionMatch = tossText.match(/\\b(?:elected|opted|chose|choose|decided)\\s+to\\s+(bat|bowl|field)\\b/i);
+  const tossWinner = tossText.match(/^(.+?)\\s+(?:won|wins)\\s+the\\s+toss\\b/i)?.[1]?.trim()
+    ?? (decisionMatch ? tossText.slice(0, decisionMatch.index).replace(/[,:;\\s]+$/, "").trim() : null);
+  const choice = decisionMatch?.[1]?.toLowerCase();
   const tossDecision = choice === "bat" ? "bat" : choice === "bowl" || choice === "field" ? "bowl" : "unknown";
-  return { tossWinner: winner, tossDecision };
+  return { tossWinner: tossWinner || null, tossDecision };
 }
 
 function parseResult(result: string | null): { winner: string | null; victoryMargin: string | null } {
@@ -68,24 +70,20 @@ function extractTextInnings(sourceText: string, teams: string[]): MatchSummaryIn
     if (!team || /^unknown$/i.test(team)) continue;
     const index = sourceText.toLowerCase().indexOf(team.toLowerCase());
     if (index < 0) continue;
-    const segment = sourceText.slice(index, index + 180);
-    let score = segment.match(/\b(\d{1,3})\s*\/\s*(\d{1,2})\s*(?:\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\))?/i);
-    let allOut = false;
-    let overs: string | null = score?.[3] ?? null;
-    if (!score) {
-      score = segment.match(/\b(\d{1,3})\s*(?:all[ -]?out)\s*(?:in\s*)?(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\b/i);
-      if (score) {
-        allOut = true;
-        overs = score[2] ?? null;
-      }
-    }
-    if (!score) {
-      score = segment.match(/\b(\d{1,3})\s*\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\)/i);
-      if (score) overs = score[2] ?? null;
-    }
-    if (!score) continue;
-    const runs = number(score[1]);
-    const wickets = allOut ? 10 : number(score[2]);
+    const segment = sourceText.slice(index, index + 220);
+
+    const slashScore = segment.match(/\\b(\\d{1,3})\\s*\\/\\s*(\\d{1,2})\\s*(?:\\(\\s*(\\d{1,2}(?:\\.\\d)?)\\s*(?:ov|overs?)\\s*\\))?/i);
+    const allOutScore = segment.match(/\\b(\\d{1,3})\\s*(?:all[ -]?out)\\b(?:\\s*(?:in)?\\s*(\\d{1,2}(?:\\.\\d)?)\\s*(?:ov|overs?)\\b)?/i);
+    const runsWithOvers = segment.match(/\\b(\\d{1,3})\\s*\\(\\s*(\\d{1,2}(?:\\.\\d)?)\\s*(?:ov|overs?)\\s*\\)/i);
+    const inningsScore = slashScore ?? allOutScore ?? runsWithOvers;
+    if (!inningsScore) continue;
+
+    const allOut = inningsScore === allOutScore || /\\ball[ -]?out\\b/i.test(segment.slice(0, 110));
+    const runs = number(inningsScore[1]);
+    const wickets = slashScore ? number(slashScore[2]) : allOut ? 10 : null;
+    const overs = slashScore ? slashScore[3] ?? null
+      : allOutScore ? allOutScore[2] ?? null
+      : runsWithOvers ? runsWithOvers[2] ?? null : null;
     output.push({
       inningsNumber: output.length + 1,
       teamName: team,
@@ -93,7 +91,7 @@ function extractTextInnings(sourceText: string, teams: string[]): MatchSummaryIn
       wickets,
       overs,
       allOut: allOut || wickets === 10,
-      declared: /declared/i.test(segment.slice(0, 100))
+      declared: /\\bdeclared\\b/i.test(segment.slice(0, 110))
     });
   }
   return output;
