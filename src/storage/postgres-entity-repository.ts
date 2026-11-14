@@ -3,6 +3,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { createArchiveObjectStoreFromEnv, type ArchiveObjectStore } from "./neon-s3-archive-object-store.js";
 import { Pool, type PoolClient } from "pg";
 import type { SourcePageCapture } from "../domain/types.js";
+import { toCompactMatchPayload } from "../domain/match-summary.js";
 import type { ArchivedSourcePage, ArchiveCoverageRow, ArchiveRepository, EntityHistoryRecord } from "./archive-repository.js";
 import {
   DATA_TTL_SECONDS,
@@ -105,6 +106,31 @@ function dateOnly(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
 }
 
+function isNewsEntity(entity: CrikoraEntity): boolean {
+  const pageKind = String(entity.payload.pageKind ?? "").toLowerCase();
+  let path = "";
+  try { path = new URL(entity.sourceUrl).pathname; } catch { /* URL is validated elsewhere */ }
+  return Boolean(entity.payload.newsArticle) ||
+    pageKind === "news" || pageKind.startsWith("news-") ||
+    /^\/cricket-news(?:\/|$)/i.test(path);
+}
+
+function isPlayerDetailEntity(entity: CrikoraEntity): boolean {
+  const pageKind = String(entity.payload.pageKind ?? "").toLowerCase();
+  let path = "";
+  try { path = new URL(entity.sourceUrl).pathname; } catch { /* URL is validated elsewhere */ }
+  return pageKind === "player-stats" || pageKind === "player-directory" ||
+    pageKind === "player-match-performance" ||
+    /^\/profiles\/\d+\//i.test(path) && entity.entityType !== "player";
+}
+
+function shouldPersistSourcePage(page: SourcePageCapture): boolean {
+  let path = "";
+  try { path = new URL(page.url).pathname; } catch { return false; }
+  if (/^\/(?:profiles|cricket-news|live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary|player-match-performance)(?:\/|$)/i.test(path)) return false;
+  return !/^(?:player|player-stats|news|news-index|news-category|match|match-facts|match-squads|match-scorecard|commentary)$/i.test(page.pageKind);
+}
+
 /** PostgreSQL JSON store with per-entity volatile or persistent retention. */
 export class PostgresEntityRepository implements EntityRepository, ArchiveRepository {
   private readonly pool: Pool;
@@ -130,37 +156,77 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
   }
 
   async upsertMany(entities: CrikoraEntity[]): Promise<void> {
-    if (!entities.length) return;
+    const accepted = entities.filter(entity => !isNewsEntity(entity) && !isPlayerDetailEntity(entity));
+    if (!accepted.length) return;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const orderedEntities = [...entities].sort((left, right) => `${left.entityType}:${left.sourceId}`.localeCompare(`${right.entityType}:${right.sourceId}`));
-      for (const entity of orderedEntities) {
-        const fetchedAt = new Date(entity.fetchedAt);
+      const orderedEntities = [...accepted].sort((left, right) =>
+        `${left.entityType}:${left.sourceId}`.localeCompare(`${right.entityType}:${right.sourceId}`)
+      );
+      const projectedEntities: CrikoraEntity[] = [];
+      for (const sourceEntity of orderedEntities) {
+        const fetchedAt = new Date(sourceEntity.fetchedAt);
         if (Number.isNaN(fetchedAt.getTime())) throw new Error("Entity fetchedAt must be a valid ISO timestamp.");
+
+        if (sourceEntity.entityType === "player") {
+          const url = new URL(sourceEntity.sourceUrl);
+          const match = url.pathname.match(/^\/profiles\/(\d+)\/[^/]+\/?$/i);
+          if (!match || match[1] !== sourceEntity.sourceId || !validSourcePageUrl(sourceEntity.sourceUrl)) continue;
+          await client.query(
+            `INSERT INTO public.crikora_player_urls (source_id, profile_url, first_seen_at, last_seen_at)
+             VALUES ($1, $2, $3::timestamptz, $3::timestamptz)
+             ON CONFLICT (source_id) DO UPDATE SET
+               profile_url = EXCLUDED.profile_url,
+               last_seen_at = EXCLUDED.last_seen_at`,
+            [sourceEntity.sourceId, sourceEntity.sourceUrl, fetchedAt.toISOString()]
+          );
+          continue;
+        }
+
+        const entity = sourceEntity.entityType === "match"
+          ? { ...sourceEntity, payload: toCompactMatchPayload(sourceEntity) }
+          : sourceEntity;
+
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`entity:${entity.entityType}:${entity.sourceId}`]
+        );
+
+        // Serialize first, then reject any stale observation after a final result.
+        if (entity.entityType === "match" && entity.payload.status !== "completed") {
+          const finalRow = await client.query(
+            "SELECT 1 FROM public.crikora_match_summaries WHERE match_source_id=$1 AND status='completed' LIMIT 1",
+            [entity.sourceId]
+          );
+          if (finalRow.rowCount) continue;
+        }
+
         const retentionClass = getEntityRetentionClass(entity);
         const expiresAt = retentionClass === "ephemeral"
           ? new Date(fetchedAt.getTime() + DATA_TTL_SECONDS * 1000).toISOString()
           : null;
         const payloadHash = hashEntityPayload(entity.payload);
-        await client.query(
-          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-          [`entity:${entity.entityType}:${entity.sourceId}`]
-        );
-        const latestSnapshot = await client.query<{ payload_hash: string }>(
-          `SELECT payload_hash FROM public.crikora_entity_snapshots
-           WHERE entity_type = $1 AND source_id = $2
-           ORDER BY id DESC LIMIT 1`,
-          [entity.entityType, entity.sourceId]
-        );
-        if (latestSnapshot.rows[0]?.payload_hash.trim() !== payloadHash) {
-          await client.query(
-            `INSERT INTO public.crikora_entity_snapshots
-              (entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at)
-             VALUES ($1, $2, $3, $4, 1, $5::jsonb, $6::timestamptz)`,
-            [entity.entityType, entity.sourceId, entity.sourceUrl, payloadHash, JSON.stringify(entity.payload), fetchedAt.toISOString()]
+
+        // Live scores are transient. Never append their changing values to the
+        // permanent entity-snapshot table; only the final compact score is archived.
+        if (!(entity.entityType === "match" && entity.payload.status === "live")) {
+          const latestSnapshot = await client.query<{ payload_hash: string }>(
+            `SELECT payload_hash FROM public.crikora_entity_snapshots
+             WHERE entity_type = $1 AND source_id = $2
+             ORDER BY id DESC LIMIT 1`,
+            [entity.entityType, entity.sourceId]
           );
+          if (latestSnapshot.rows[0]?.payload_hash.trim() !== payloadHash) {
+            await client.query(
+              `INSERT INTO public.crikora_entity_snapshots
+                (entity_type, source_id, source_url, payload_hash, schema_version, payload, observed_at)
+               VALUES ($1, $2, $3, $4, 1, $5::jsonb, $6::timestamptz)`,
+              [entity.entityType, entity.sourceId, entity.sourceUrl, payloadHash, JSON.stringify(entity.payload), fetchedAt.toISOString()]
+            );
+          }
         }
+
         await client.query(
           `INSERT INTO public.crikora_cache
             (entity_type, source_id, source_url, payload, fetched_at, expires_at, retention_class, updated_at)
@@ -178,8 +244,13 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
             expiresAt, retentionClass
           ]
         );
+
+        if (entity.entityType === "match") {
+          await this.persistCompactMatchSummary(client, entity, fetchedAt.toISOString());
+        }
+        projectedEntities.push(entity);
       }
-      for (const entity of orderedEntities) {
+      for (const entity of projectedEntities) {
         await this.persistTypedProjection(client, entity, new Date(entity.fetchedAt).toISOString());
       }
       await client.query("COMMIT");
@@ -190,6 +261,84 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
       client.release();
     }
   }
+
+  private async persistCompactMatchSummary(client: PoolClient, entity: CrikoraEntity, observedAt: string): Promise<void> {
+    const payload = entity.payload;
+    const incomingStatus = ["live", "upcoming", "completed"].includes(String(payload.status))
+      ? String(payload.status) : "upcoming";
+    const startTime = nullableString(payload.startTime);
+    const completedAt = incomingStatus === "completed" ? observedAt : null;
+    const upserted = await client.query<{ status: string }>(
+      `INSERT INTO public.crikora_match_summaries
+        (match_source_id,source_url,competition,season,gender,age_group,format,home_team,away_team,
+         status,start_time,venue,toss_text,toss_winner,toss_decision,result,winner,victory_margin,
+         player_of_match,observed_at,completed_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::timestamptz,$12,$13,$14,$15,$16,$17,$18,$19,$20::timestamptz,$21::timestamptz,$20::timestamptz)
+       ON CONFLICT (match_source_id) DO UPDATE SET
+         source_url=EXCLUDED.source_url, competition=EXCLUDED.competition, season=EXCLUDED.season,
+         gender=EXCLUDED.gender, age_group=EXCLUDED.age_group, format=EXCLUDED.format,
+         home_team=EXCLUDED.home_team, away_team=EXCLUDED.away_team,
+         status=CASE WHEN public.crikora_match_summaries.status='completed' THEN 'completed' ELSE EXCLUDED.status END,
+         start_time=COALESCE(EXCLUDED.start_time,public.crikora_match_summaries.start_time),
+         venue=COALESCE(EXCLUDED.venue,public.crikora_match_summaries.venue),
+         toss_text=COALESCE(EXCLUDED.toss_text,public.crikora_match_summaries.toss_text),
+         toss_winner=COALESCE(EXCLUDED.toss_winner,public.crikora_match_summaries.toss_winner),
+         toss_decision=COALESCE(EXCLUDED.toss_decision,public.crikora_match_summaries.toss_decision),
+         result=COALESCE(EXCLUDED.result,public.crikora_match_summaries.result),
+         winner=COALESCE(EXCLUDED.winner,public.crikora_match_summaries.winner),
+         victory_margin=COALESCE(EXCLUDED.victory_margin,public.crikora_match_summaries.victory_margin),
+         player_of_match=COALESCE(EXCLUDED.player_of_match,public.crikora_match_summaries.player_of_match),
+         completed_at=COALESCE(public.crikora_match_summaries.completed_at,EXCLUDED.completed_at),
+         observed_at=EXCLUDED.observed_at, updated_at=now()
+       RETURNING status`,
+      [
+        entity.sourceId, entity.sourceUrl, String(payload.competition ?? "Cricket"),
+        nullableString(payload.season), String(payload.gender ?? "unknown"),
+        String(payload.ageGroup ?? "senior"), String(payload.format ?? "Unknown"),
+        String(payload.homeTeam ?? "Unknown"), String(payload.awayTeam ?? "Unknown"),
+        incomingStatus, startTime, nullableString(payload.venue), nullableString(payload.toss),
+        nullableString(payload.tossWinner), nullableString(payload.tossDecision),
+        nullableString(payload.result), nullableString(payload.winner), nullableString(payload.victoryMargin),
+        nullableString(payload.playerOfMatch), observedAt, completedAt
+      ]
+    );
+    const persistedStatus = upserted.rows[0]?.status ?? incomingStatus;
+
+    const incomingInnings = arrayOfRecords(payload.innings);
+    if (persistedStatus === "completed" && incomingStatus === "completed" && incomingInnings.length > 0) {
+      // Preserve previously known innings totals if a later source response is
+      // incomplete. Replace the compact innings set only when new totals exist.
+      await client.query("DELETE FROM public.crikora_match_summary_innings WHERE match_source_id=$1", [entity.sourceId]);
+      for (const [index, raw] of incomingInnings.entries()) {
+        await client.query(
+          `INSERT INTO public.crikora_match_summary_innings
+            (match_source_id,innings_number,batting_team,runs,wickets,overs,all_out,declared)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            entity.sourceId, Number(raw.inningsNumber ?? index + 1), nullableString(raw.teamName),
+            nullableNumber(raw.runs), nullableNumber(raw.wickets), nullableString(raw.overs),
+            Boolean(raw.allOut), Boolean(raw.declared)
+          ]
+        );
+      }
+    }
+
+    if (persistedStatus === "live") {
+      await client.query(
+        `INSERT INTO public.crikora_live_match_state (match_source_id,compact_state,last_seen_at)
+         VALUES ($1,$2::jsonb,$3::timestamptz)
+         ON CONFLICT (match_source_id) DO UPDATE SET
+           compact_state=EXCLUDED.compact_state,last_seen_at=EXCLUDED.last_seen_at`,
+        [entity.sourceId, JSON.stringify(payload), observedAt]
+      );
+    } else {
+      // Completing a match is an atomic transition: the final summary and its
+      // innings are written above before transient live state is removed.
+      await client.query("DELETE FROM public.crikora_live_match_state WHERE match_source_id=$1", [entity.sourceId]);
+    }
+  }
+
+
 
 
   /**
@@ -481,6 +630,35 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     return result.rows.map(hydrate);
   }
 
+  async listPlayerUrls(limit = 100, offset = 0): Promise<StoredEntity[]> {
+    const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
+    const safeOffset = Math.max(0, Math.min(1_000_000, Math.trunc(offset)));
+    const result = await this.pool.query<{ source_id: string; profile_url: string; last_seen_at: Date | string }>(
+      `SELECT source_id, profile_url, last_seen_at
+       FROM public.crikora_player_urls
+       ORDER BY source_id ASC
+       LIMIT $1 OFFSET $2`,
+      [safeLimit, safeOffset]
+    );
+    return result.rows.map(row => ({
+      entityType: "player",
+      sourceId: row.source_id,
+      sourceUrl: row.profile_url,
+      payload: { profileUrl: row.profile_url },
+      fetchedAt: new Date(row.last_seen_at).toISOString(),
+      expiresAt: null,
+      retentionClass: "persistent"
+    }));
+  }
+
+  async getPlayerUrl(sourceId: string): Promise<string | undefined> {
+    const result = await this.pool.query<{ profile_url: string }>(
+      "SELECT profile_url FROM public.crikora_player_urls WHERE source_id=$1",
+      [sourceId]
+    );
+    return result.rows[0]?.profile_url;
+  }
+
   async search(query: string, limit = 50): Promise<StoredEntity[]> {
     const q = query.trim();
     if (!q) return [];
@@ -504,6 +682,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
 
 
   async recordSourcePages(pages: SourcePageCapture[]): Promise<{ inserted: number; duplicates: number; deferred: number }> {
+    pages = pages.filter(shouldPersistSourcePage);
     if (!pages.length) return { inserted: 0, duplicates: 0, deferred: 0 };
     const client = await this.pool.connect();
     let inserted = 0;

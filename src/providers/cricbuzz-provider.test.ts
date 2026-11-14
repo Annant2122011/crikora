@@ -27,13 +27,12 @@ describe("Crikora cricket scope and format classification", () => {
 
 });
 describe("expanded public cricket sitemap scope", () => {
-  it("includes team, series, player performance and men's/women's ranking pages", () => {
+  it("includes team, series and men's/women's ranking pages, but defers player match details", () => {
     for (const url of [
       "https://www.cricbuzz.com/cricket-team/india/2",
       "https://www.cricbuzz.com/cricket-team/sierra-leone-women/490/results",
       "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/points-table",
       "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/stats",
-      "https://www.cricbuzz.com/player-match-performance/match/22397/player/1836/batting",
       "https://www.cricbuzz.com/cricket-stats/icc-rankings/women/batting",
       "https://www.cricbuzz.com/cricket-stats/icc-rankings/men/batting"
     ]) {
@@ -106,7 +105,6 @@ describe("Crikora initial collection seed scope", () => {
     const included = [
       "https://www.cricbuzz.com/live-cricket-scores/176154/yl-vs-ut-9th-match-t10-2026",
       "https://www.cricbuzz.com/profiles/10012/smriti-mandhana",
-      "https://www.cricbuzz.com/profiles/10012/smriti-mandhana/batting",
       "https://www.cricbuzz.com/cricket-schedule/upcoming-series/all",
       "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026",
       "https://www.cricbuzz.com/cricket-series/12677/womens-big-bash-league-2026/matches",
@@ -152,10 +150,10 @@ describe("Cricbuzz targeted discovery seeds", () => {
       "https://www.cricbuzz.com/live-cricket-scores/555/example-women-vs-women",
       "https://www.cricbuzz.com/cricket-series/555/womens-league",
       "https://www.cricbuzz.com/profiles/777/women-player",
-      "https://www.cricbuzz.com/profiles/777/women-player/batting",
       "https://www.cricbuzz.com/cricket-schedule/series/all"
     ];
     for (const value of allowed) expect(isTargetedCricbuzzCollectionUrl(value)).toBe(true);
+    expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/profiles/777/women-player/batting")).toBe(false);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-news/140765/example-story")).toBe(false);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-news/latest-news")).toBe(false);
     expect(isTargetedCricbuzzCollectionUrl("https://www.cricbuzz.com/cricket-scorecard-archives/1877")).toBe(false);
@@ -180,7 +178,7 @@ describe("targeted link following", () => {
   const newsB = "https://www.cricbuzz.com/cricket-news/140766/story-b";
   const schedule = "https://www.cricbuzz.com/cricket-schedule/series/all";
 
-  it("follows matches, player statistics and schedules, while excluding all news links", () => {
+  it("follows match cards and schedules but defers player statistics until a profile is opened", () => {
     expect(shouldFollowTargetedPageLink(matchIndex, matchPage)).toBe(true);
     expect(shouldFollowTargetedPageLink(matchIndex, squadsPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(matchIndex, factsPage)).toBe(false);
@@ -192,7 +190,7 @@ describe("targeted link following", () => {
     expect(shouldFollowTargetedPageLink(schedule, commentaryPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(matchPage, squadsPage)).toBe(false);
     expect(shouldFollowTargetedPageLink(squadsPage, player)).toBe(true);
-    expect(shouldFollowTargetedPageLink(player, batting)).toBe(true);
+    expect(shouldFollowTargetedPageLink(player, batting)).toBe(false);
     expect(shouldFollowTargetedPageLink(player, otherPlayer)).toBe(false);
     expect(shouldFollowTargetedPageLink(newsIndex, newsA)).toBe(false);
     expect(shouldFollowTargetedPageLink(newsA, newsB)).toBe(false);

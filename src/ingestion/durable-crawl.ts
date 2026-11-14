@@ -133,12 +133,30 @@ export class DurableCrawlService {
   }
 
   async startTargetedCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
-    const urls = dedupeCricbuzzPageUrls(
+    const discoveredUrls = dedupeCricbuzzPageUrls(
       [...seedUrls, ...getCricbuzzDiscoverySeedUrls()].filter(url => this.provider.isAllowedCrawlUrl(url))
     );
+    const playerUrls = discoveredUrls.filter(url => pageKind(url) === "player");
+    if (playerUrls.length) {
+      const observedAt = new Date().toISOString();
+      await this.repository.upsertMany(playerUrls.flatMap(profileUrl => {
+        const sourceId = new URL(profileUrl).pathname.match(/^\/profiles\/(\d+)\/[^/]+\/?$/i)?.[1];
+        return sourceId ? [{
+          entityType: "player" as const,
+          sourceId,
+          sourceUrl: profileUrl,
+          payload: {},
+          fetchedAt: observedAt
+        }] : [];
+      }));
+    }
+    // Player sitemap entries become URL-only directory rows. No profile or
+    // statistics page is added to the worker queue.
+    const urls = discoveredUrls.filter(url => !["player", "player-stats", "player-match-performance"].includes(pageKind(url)));
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     const kinds = urls.map(pageKind);
-    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match, schedule or player seed URLs.");
+    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match or schedule seed URLs.");
+
     await this.recordCoverageTargets(urls);
 
     const client = await this.pool.connect();
@@ -274,7 +292,22 @@ export class DurableCrawlService {
   }
 
   async enqueueDiscoveredUrls(values: string[]): Promise<number> {
-    const urls = dedupeCricbuzzPageUrls(values.filter(url => this.provider.isAllowedCrawlUrl(url)));
+    const discoveredUrls = dedupeCricbuzzPageUrls(values.filter(url => this.provider.isAllowedCrawlUrl(url)));
+    const playerUrls = discoveredUrls.filter(url => pageKind(url) === "player");
+    if (playerUrls.length) {
+      const observedAt = new Date().toISOString();
+      await this.repository.upsertMany(playerUrls.flatMap(profileUrl => {
+        const sourceId = new URL(profileUrl).pathname.match(/^\/profiles\/(\d+)\/[^/]+\/?$/i)?.[1];
+        return sourceId ? [{
+          entityType: "player" as const,
+          sourceId,
+          sourceUrl: profileUrl,
+          payload: {},
+          fetchedAt: observedAt
+        }] : [];
+      }));
+    }
+    const urls = discoveredUrls.filter(url => !["player", "player-stats", "player-match-performance"].includes(pageKind(url)));
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     if (urls.length) await this.recordCoverageTargets(urls);
 
@@ -322,7 +355,7 @@ export class DurableCrawlService {
                )
              )
              OR
-             (coverage.page_kind IN ('player', 'player-stats', 'player-match-performance', 'team', 'team-subpage', 'series', 'series-subpage', 'ranking')
+             (coverage.page_kind IN ('team', 'team-subpage', 'series', 'series-subpage', 'ranking')
                AND coverage.last_fetched_at <= now() - interval '24 hours')
               OR
               (coverage.page_kind = 'schedule'
@@ -376,11 +409,10 @@ export class DurableCrawlService {
          FROM public.crikora_crawl_queue
          WHERE run_id = $1
             AND page_kind NOT IN ('news', 'news-category', 'news-index')
+            AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')
            AND ((status = 'pending' AND next_attempt_at <= now())
              OR (status = 'processing' AND lease_until <= now()))
          ORDER BY CASE
-           WHEN page_kind = 'player' THEN 0
-           WHEN page_kind = 'player-stats' THEN 1
            WHEN page_kind = 'match' THEN 2
            WHEN page_kind = 'schedule' THEN 3
            WHEN page_kind IN ('series', 'series-subpage') THEN 4
@@ -548,7 +580,7 @@ export class DurableCrawlService {
     let retryAfterSeconds: number | undefined;
     if (run.pendingCount > 0 && run.processingCount === 0) {
       const next = await this.pool.query<{ seconds: number | string | null }>(
-        "SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now())))) AS seconds FROM public.crikora_crawl_queue WHERE run_id = $1 AND status = 'pending' AND page_kind NOT IN ('news', 'news-category', 'news-index')",
+        "SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now())))) AS seconds FROM public.crikora_crawl_queue WHERE run_id = $1 AND status = 'pending' AND page_kind NOT IN ('news', 'news-category', 'news-index') AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')",
         [active.id]
       );
       retryAfterSeconds = count(next.rows[0]?.seconds) || undefined;
@@ -583,7 +615,7 @@ export class DurableCrawlService {
     const row = result.rows[0];
     if (!row) throw new Error("Crikora crawl run was not found.");
     const counts = await this.pool.query<QueueCounts>(
-      "SELECT count(*) AS total_count, count(*) FILTER (WHERE status = 'pending') AS pending_count, count(*) FILTER (WHERE status = 'processing') AS processing_count, count(*) FILTER (WHERE status = 'completed') AS completed_count, count(*) FILTER (WHERE status = 'failed') AS failed_count, count(*) FILTER (WHERE status = 'skipped') AS skipped_count, min(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at FROM public.crikora_crawl_queue WHERE run_id = $1 AND page_kind NOT IN ('news', 'news-category', 'news-index')",
+      "SELECT count(*) AS total_count, count(*) FILTER (WHERE status = 'pending') AS pending_count, count(*) FILTER (WHERE status = 'processing') AS processing_count, count(*) FILTER (WHERE status = 'completed') AS completed_count, count(*) FILTER (WHERE status = 'failed') AS failed_count, count(*) FILTER (WHERE status = 'skipped') AS skipped_count, min(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at FROM public.crikora_crawl_queue WHERE run_id = $1 AND page_kind NOT IN ('news', 'news-category', 'news-index') AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')",
       [runId]
     );
     const c = counts.rows[0]!;

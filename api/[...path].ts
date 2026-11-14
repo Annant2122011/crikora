@@ -522,11 +522,13 @@ async function listEntities(type: EntityType, url: URL, response: ApiResponse): 
     sendJson(response, 400, { error: "Invalid limit." });
     return;
   }
-  const rows = await getRepository().list(type, limit, offset);
+  const rows = type === "player"
+    ? await getRepository().listPlayerUrls(limit, offset)
+    : await getRepository().list(type, limit, offset);
   sendJson(response, 200, {
     data: rows.map(present),
     meta: { count: rows.length, limit, offset, nextOffset: rows.length === limit ? offset + limit : null,
-      retentionPolicy: RETENTION_POLICY }
+      retentionPolicy: RETENTION_POLICY, playerDirectoryMode: type === "player" ? "url-only" : undefined }
   });
 }
 
@@ -537,23 +539,29 @@ async function comparePlayers(url: URL, response: ApiResponse): Promise<void> {
     return sendJson(response, 400, { error: "Provide 2 to 4 comma-separated numeric Cricbuzz player IDs." });
   }
 
-  const rows = await Promise.all(ids.map(id => getRepository().get("player", id)));
-  const missing = ids.filter((_id, index) => !rows[index]);
+  const entities: Array<Awaited<ReturnType<CricbuzzProvider["fetchPlayerProfile"]>>> = [];
+  // Fetch one player's pages at a time. The provider's source-request pacing
+  // is shared, so concurrent comparisons must not bunch up Cricbuzz requests.
+  for (const id of ids) {
+    const profileUrl = await getRepository().getPlayerUrl(id);
+    entities.push(profileUrl
+      ? await getProvider().fetchPlayerProfile(profileUrl, AbortSignal.timeout(30_000))
+      : undefined);
+  }
+  const missing = ids.filter((_id, index) => !entities[index]);
   if (missing.length) {
     return sendJson(response, 404, {
-      error: "One or more player profiles have not been collected yet.",
+      error: "One or more player profile URLs are not in the directory or the source page is temporarily unavailable.",
       missingPlayerIds: missing
     });
   }
 
-  const players = rows.map((row, index) => {
-    const entity = row!;
-    const profile = entity.payload.profile && typeof entity.payload.profile === "object"
-      ? entity.payload.profile as Record<string, unknown>
-      : {};
+  const players = entities.map((entity, index) => {
+    const payload = entity!.payload;
+    const profile = payload.profile && typeof payload.profile === "object"
+      ? payload.profile as Record<string, unknown> : {};
     const fields = profile.allFields && typeof profile.allFields === "object"
-      ? profile.allFields as Record<string, unknown>
-      : {};
+      ? { ...(profile.allFields as Record<string, unknown>) } : {};
     const common = [
       "fullName", "country", "role", "battingStyle", "bowlingStyle",
       "birthDate", "birthPlace", "heightCm", "teams"
@@ -562,11 +570,20 @@ async function comparePlayers(url: URL, response: ApiResponse): Promise<void> {
       if (profile[key] !== undefined && fields[key] === undefined) fields[key] = profile[key];
     }
     return {
-      player: present(entity),
       playerId: ids[index],
-      displayName: String(profile.fullName ?? entity.payload.title ?? entity.payload.name ?? ids[index]),
+      player: {
+        ...payload,
+        id: entity!.sourceId,
+        entityType: "player",
+        sourceUrl: entity!.sourceUrl,
+        fetchedAt: entity!.fetchedAt,
+        retentionClass: "on-demand",
+        persisted: false
+      },
+      displayName: String(profile.fullName ?? payload.title ?? payload.name ?? ids[index]),
       comparisonFields: fields,
-      careerStatistics: profile.statistics ?? entity.payload.statistics ?? []
+      careerStatistics: profile.statistics ?? payload.statistics ?? [],
+      statisticsTabs: profile.statisticsTabs ?? []
     };
   });
 
@@ -580,11 +597,40 @@ async function comparePlayers(url: URL, response: ApiResponse): Promise<void> {
   }));
   sendJson(response, 200, {
     data: { players, comparison },
-    meta: { count: players.length, source: "cricbuzz", comparisonMode: "source-labelled-profile-fields" }
+    meta: { count: players.length, source: "cricbuzz", comparisonMode: "on-demand-source-labelled-profile-fields",
+      persisted: false }
   });
 }
 
 async function getEntity(type: EntityType, sourceId: string, response: ApiResponse): Promise<void> {
+  if (type === "player") {
+    const profileUrl = await getRepository().getPlayerUrl(sourceId);
+    if (!profileUrl) {
+      sendJson(response, 404, { error: "Player profile URL not found in the directory." });
+      return;
+    }
+    const entity = await getProvider().fetchPlayerProfile(profileUrl, AbortSignal.timeout(30_000));
+    if (!entity) {
+      sendJson(response, 502, { error: "Cricbuzz did not return the player profile. The URL remains in the directory for retry." });
+      return;
+    }
+    sendJson(response, 200, {
+      data: {
+        ...entity.payload,
+        id: entity.sourceId,
+        entityType: "player",
+        sourceUrl: entity.sourceUrl,
+        fetchedAt: entity.fetchedAt,
+        retentionClass: "on-demand",
+        expiresAt: null,
+        persisted: false
+      },
+      meta: { source: "cricbuzz", retrieval: "on-demand", persisted: false,
+        retentionPolicy: RETENTION_POLICY }
+    });
+    return;
+  }
+
   const row = await getRepository().get(type, sourceId);
   if (!row) {
     sendJson(response, 404, { error: "Entity not found or expired." });
