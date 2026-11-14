@@ -59,4 +59,25 @@ describe("toCompactMatchPayload", () => {
       { inningsNumber: 2, teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false, declared: false }
     ]);
   });
+  it("does not interpret overs as wickets and parses tosses without a redundant won-the-toss phrase", () => {
+    const summary = toCompactMatchPayload({
+      entityType: "match",
+      sourceId: "125",
+      sourceUrl: "https://www.cricbuzz.com/live-cricket-scores/125/england-vs-south-africa",
+      fetchedAt: "2026-11-14T12:00:00.000Z",
+      payload: {
+        status: "completed",
+        homeTeam: "South Africa",
+        awayTeam: "England",
+        toss: "England chose to bowl",
+        stats: { indexCardText: "South Africa 190 (19.3 Ov); England 191/3 (19.4 Ov)" }
+      }
+    });
+    expect(summary.tossWinner).toBe("England");
+    expect(summary.tossDecision).toBe("bowl");
+    expect(summary.innings).toMatchObject([
+      { teamName: "South Africa", runs: 190, wickets: null, overs: "19.3", allOut: false },
+      { teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false }
+    ]);
+  });
 });
