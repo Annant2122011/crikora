@@ -113,7 +113,10 @@ SELECT
     ELSE 'unknown'
   END,
   CASE
-    WHEN COALESCE(payload->>'competition','') ~* '\\mU[ -]?(11|13|15|16|17|19|21|23)\\M|under[ -]?(11|13|15|16|17|19|21|23)' THEN lower(regexp_replace(COALESCE(payload->>'competition',''), '.*\\m(U[ -]?(11|13|15|16|17|19|21|23)|Under[ -]?(11|13|15|16|17|19|21|23))\\M.*', 'u\\1', 'i'))
+    WHEN COALESCE(payload->>'competition','') ~* '\\m(?:u|under)[ -]?(11|13|15|16|17|19|21|23)\\M'
+      THEN 'u' || (regexp_match(lower(COALESCE(payload->>'competition','')), '\\m(?:u|under)[ -]?(11|13|15|16|17|19|21|23)\\M'))[1]
+    WHEN COALESCE(payload->>'competition','') ~* '\\memerging\\M' THEN 'emerging'
+    WHEN COALESCE(payload->>'competition','') ~* '\\myouth\\M' THEN 'youth'
     ELSE 'senior'
   END,
   COALESCE(payload->>'format','Unknown'),
