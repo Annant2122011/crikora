@@ -353,6 +353,54 @@ export class CricbuzzProvider implements CricketProvider {
     );
   }
 
+  async fetchPlayerProfile(value: string, signal?: AbortSignal): Promise<CrikoraEntity | undefined> {
+    const url = new URL(value);
+    assertAllowedPageUrl(url);
+    const identity = playerProfilePath(url.pathname);
+    if (!identity || identity.isStats) {
+      throw new Error("The on-demand player route requires a base Cricbuzz profile URL.");
+    }
+    const page = await this.tryFetchPage(url, "on-demand:player-profile", signal);
+    if (!page) return undefined;
+    const entity = parseEntityPage(page.$, page.url, "player");
+    if (!entity || entity.entityType !== "player") return undefined;
+    await this.enrichPlayerProfileFromCricinfo(entity, page, signal);
+
+    const tabUrls = [...new Set(getLinks(page.$, page.url)
+      .filter(link => {
+        const target = playerProfilePath(link.path);
+        return target?.id === identity.id && target.isStats;
+      })
+      .map(link => link.url))].slice(0, 12);
+
+    const statisticsTabs: Array<Record<string, unknown>> = [];
+    for (const tabUrl of tabUrls) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Player profile retrieval aborted.");
+      const tabPage = await this.tryFetchPage(new URL(tabUrl), "on-demand:player-statistics", signal);
+      if (!tabPage) continue;
+      const extracted = extractPageData(tabPage.$, tabPage.url);
+      statisticsTabs.push({
+        sourceUrl: tabPage.url,
+        pageKind: playerProfilePath(new URL(tabPage.url).pathname)?.isStats ? "player-statistics" : "player-profile",
+        title: extracted.title,
+        labels: extracted.labels,
+        tables: extracted.tables,
+        sections: extracted.sections,
+        structuredData: extracted.structuredData,
+        serverComponents: extracted.serverComponents,
+        text: extracted.text
+      });
+    }
+
+    if (isRecord(entity.payload.profile)) {
+      entity.payload.profile = {
+        ...entity.payload.profile,
+        statisticsTabs
+      };
+    }
+    return entity;
+  }
+
   getPendingRelatedUrls(): string[] {
     return [...new Set([...this.pendingRelatedLinks.values()].flatMap(queue => [...queue.keys()]))];
   }
