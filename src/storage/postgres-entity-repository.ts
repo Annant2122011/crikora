@@ -187,6 +187,17 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
         const entity = sourceEntity.entityType === "match"
           ? { ...sourceEntity, payload: toCompactMatchPayload(sourceEntity) }
           : sourceEntity;
+
+        // Once a match is final, a delayed live/upcoming index response must
+        // never overwrite its historical cache row or make it disappear.
+        if (entity.entityType === "match" && entity.payload.status !== "completed") {
+          const finalRow = await client.query(
+            "SELECT 1 FROM public.crikora_match_summaries WHERE match_source_id=$1 AND status='completed' LIMIT 1",
+            [entity.sourceId]
+          );
+          if (finalRow.rowCount) continue;
+        }
+
         const retentionClass = getEntityRetentionClass(entity);
         const expiresAt = retentionClass === "ephemeral"
           ? new Date(fetchedAt.getTime() + DATA_TTL_SECONDS * 1000).toISOString()
