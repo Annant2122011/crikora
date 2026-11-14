@@ -580,8 +580,7 @@ export class DurableCrawlService {
     let retryAfterSeconds: number | undefined;
     if (run.pendingCount > 0 && run.processingCount === 0) {
       const next = await this.pool.query<{ seconds: number | string | null }>(
-        "SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now())))) AS seconds FROM public.crikora_crawl_queue WHERE run_id = $1 AND status = 'pending' AND page_kind NOT IN ('news', 'news-category', 'news-index')
-        AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')",
+        "SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(next_attempt_at) - now())))) AS seconds FROM public.crikora_crawl_queue WHERE run_id = $1 AND status = 'pending' AND page_kind NOT IN ('news', 'news-category', 'news-index') AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')",
         [active.id]
       );
       retryAfterSeconds = count(next.rows[0]?.seconds) || undefined;
@@ -616,8 +615,7 @@ export class DurableCrawlService {
     const row = result.rows[0];
     if (!row) throw new Error("Crikora crawl run was not found.");
     const counts = await this.pool.query<QueueCounts>(
-      "SELECT count(*) AS total_count, count(*) FILTER (WHERE status = 'pending') AS pending_count, count(*) FILTER (WHERE status = 'processing') AS processing_count, count(*) FILTER (WHERE status = 'completed') AS completed_count, count(*) FILTER (WHERE status = 'failed') AS failed_count, count(*) FILTER (WHERE status = 'skipped') AS skipped_count, min(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at FROM public.crikora_crawl_queue WHERE run_id = $1 AND page_kind NOT IN ('news', 'news-category', 'news-index')
-        AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')",
+      "SELECT count(*) AS total_count, count(*) FILTER (WHERE status = 'pending') AS pending_count, count(*) FILTER (WHERE status = 'processing') AS processing_count, count(*) FILTER (WHERE status = 'completed') AS completed_count, count(*) FILTER (WHERE status = 'failed') AS failed_count, count(*) FILTER (WHERE status = 'skipped') AS skipped_count, min(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at FROM public.crikora_crawl_queue WHERE run_id = $1 AND page_kind NOT IN ('news', 'news-category', 'news-index') AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')",
       [runId]
     );
     const c = counts.rows[0]!;
