@@ -304,9 +304,12 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
     );
     const persistedStatus = upserted.rows[0]?.status ?? incomingStatus;
 
-    if (persistedStatus === "completed" && incomingStatus === "completed") {
+    const incomingInnings = arrayOfRecords(payload.innings);
+    if (persistedStatus === "completed" && incomingStatus === "completed" && incomingInnings.length > 0) {
+      // Preserve previously known innings totals if a later source response is
+      // incomplete. Replace the compact innings set only when new totals exist.
       await client.query("DELETE FROM public.crikora_match_summary_innings WHERE match_source_id=$1", [entity.sourceId]);
-      for (const [index, raw] of arrayOfRecords(payload.innings).entries()) {
+      for (const [index, raw] of incomingInnings.entries()) {
         await client.query(
           `INSERT INTO public.crikora_match_summary_innings
             (match_source_id,innings_number,batting_team,runs,wickets,overs,all_out,declared)
