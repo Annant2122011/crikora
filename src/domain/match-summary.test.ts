@@ -59,6 +59,36 @@ describe("toCompactMatchPayload", () => {
       { inningsNumber: 2, teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false, declared: false }
     ]);
   });
+  it("extracts final innings totals from the compact facts text without scorecard data", () => {
+    const summary = toCompactMatchPayload({
+      entityType: "match",
+      sourceId: "127",
+      sourceUrl: "https://www.cricbuzz.com/live-cricket-scores/127/south-africa-vs-england",
+      fetchedAt: "2026-11-14T12:00:00.000Z",
+      payload: {
+        status: "completed",
+        homeTeam: "South Africa",
+        awayTeam: "England",
+        toss: "England chose to bowl",
+        result: "England won by 7 wickets",
+        stats: {
+          liveSummary: "South Africa 190 all out in 19.3 overs; England 191/3 (19.4 Ov); England won by 7 wickets",
+          infoText: "Toss: England chose to bowl; Venue: Newlands"
+        }
+      }
+    });
+    expect(summary).toMatchObject({
+      tossWinner: "England",
+      tossDecision: "bowl",
+      winner: "England",
+      victoryMargin: "7 wickets",
+      innings: [
+        { teamName: "South Africa", runs: 190, wickets: 10, overs: "19.3", allOut: true },
+        { teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false }
+      ]
+    });
+  });
+
   it("does not interpret overs as wickets and parses tosses without a redundant won-the-toss phrase", () => {
     const summary = toCompactMatchPayload({
       entityType: "match",
