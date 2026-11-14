@@ -34,7 +34,7 @@ The priority order for the match detail workflow is:
 3. Ball-by-ball commentary: retrieved only after the first two groups complete, in bounded innings/over chunks.
 4. Optional extras: graphs, wagon wheels, pitch maps, forecasts, videos and other lower-priority assets.
 
-Priority dependencies are enforced in the detail-job model/API, not left to a frontend timing accident. A match-list or live refresh must never enqueue commentary.
+Stage 3 will implement these dependencies in the detail-job queue/API, not leave them to frontend timing. A match-list or live refresh must never enqueue commentary.
 
 ## Player storage
 
