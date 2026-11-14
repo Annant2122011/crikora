@@ -1143,7 +1143,7 @@ function parseMatch(
     const phrase = team + " won by";
     const index = resultText.toLowerCase().lastIndexOf(phrase.toLowerCase());
     if (index < 0) return undefined;
-    const margin = resultText.slice(index + phrase.length).split(/[.;\n]/, 1)[0]?.trim();
+    const margin = resultText.slice(index + phrase.length).split(/[.;\n]/, 1)[0]?.replace(/\s+(?:Info|Scorecard|Squads|Commentary|Full Scorecard)\b.*$/i, "").trim();
     return margin ? team + " won by " + margin : undefined;
   }).find(Boolean);
   const result = teamResult ?? resultText.match(/\b(Match abandoned[^.]*|Match drawn|Match tied|No result)\b/i)?.[1]?.trim();
