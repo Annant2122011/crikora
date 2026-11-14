@@ -14,7 +14,7 @@ A historical match stores only the compact match-card record:
 - Player of the match where supplied.
 - Per innings: innings number, batting team, runs, wickets, overs, all-out and declared flags.
 
-It does **not** store player-by-player batting/bowling rows, deliveries, commentary, wagon wheels, pitch maps, graphs, video assets, playing-XI detail or raw match-page HTML. A completed match may be read once from the scorecard page to extract final innings totals, but only the compact summary is persisted. Commentary is never fetched by the background match crawler.
+It does **not** store player-by-player batting/bowling rows, deliveries, commentary, wagon wheels, pitch maps, graphs, video assets, playing-XI detail or raw match-page HTML. The scorecard page is not read during background collection. Final innings totals are parsed only from the overview/card and essential facts page; if the source does not expose them, they remain unknown until a user opens the match. Commentary is never fetched by the background match crawler.
 
 ## Live and completed match lifecycle
 
