@@ -539,7 +539,7 @@ async function comparePlayers(url: URL, response: ApiResponse): Promise<void> {
     return sendJson(response, 400, { error: "Provide 2 to 4 comma-separated numeric Cricbuzz player IDs." });
   }
 
-  const entities = [];
+  const entities: Array<Awaited<ReturnType<CricbuzzProvider["fetchPlayerProfile"]>>> = [];
   // Fetch one player's pages at a time. The provider's source-request pacing
   // is shared, so concurrent comparisons must not bunch up Cricbuzz requests.
   for (const id of ids) {
