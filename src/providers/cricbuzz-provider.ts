@@ -392,9 +392,10 @@ export class CricbuzzProvider implements CricketProvider {
       });
     }
 
-    if (isRecord(entity.payload.profile)) {
+    const profile = entity.payload.profile;
+    if (profile && typeof profile === "object" && !Array.isArray(profile)) {
       entity.payload.profile = {
-        ...entity.payload.profile,
+        ...(profile as Record<string, unknown>),
         statisticsTabs
       };
     }
