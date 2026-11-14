@@ -80,4 +80,26 @@ describe("toCompactMatchPayload", () => {
       { teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false }
     ]);
   });
+  it("derives compact totals from completed scorecard text without keeping detailed tables", () => {
+    const summary = toCompactMatchPayload({
+      entityType: "match",
+      sourceId: "126",
+      sourceUrl: "https://www.cricbuzz.com/live-cricket-scores/126/england-vs-south-africa",
+      fetchedAt: "2026-11-14T12:00:00.000Z",
+      payload: {
+        status: "completed",
+        homeTeam: "South Africa",
+        awayTeam: "England",
+        stats: {
+          scorecardText: "South Africa 190 all out in 19.3 overs; England 191/3 (19.4 Ov)"
+        },
+        scorecardPage: { tables: [{ rows: [{ batter: "Do not persist" }] }] }
+      }
+    });
+    expect(summary.innings).toMatchObject([
+      { teamName: "South Africa", runs: 190, wickets: 10, overs: "19.3", allOut: true },
+      { teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false }
+    ]);
+    expect(JSON.stringify(summary)).not.toContain("Do not persist");
+  });
 });
