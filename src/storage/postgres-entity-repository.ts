@@ -112,7 +112,7 @@ function isNewsEntity(entity: CrikoraEntity): boolean {
   try { path = new URL(entity.sourceUrl).pathname; } catch { /* URL is validated elsewhere */ }
   return Boolean(entity.payload.newsArticle) ||
     pageKind === "news" || pageKind.startsWith("news-") ||
-    /^\\/cricket-news(?:\\/|$)/i.test(path);
+    /^\/cricket-news(?:\/|$)/i.test(path);
 }
 
 function isPlayerDetailEntity(entity: CrikoraEntity): boolean {
@@ -121,13 +121,13 @@ function isPlayerDetailEntity(entity: CrikoraEntity): boolean {
   try { path = new URL(entity.sourceUrl).pathname; } catch { /* URL is validated elsewhere */ }
   return pageKind === "player-stats" || pageKind === "player-directory" ||
     pageKind === "player-match-performance" ||
-    /^\\/profiles\\/\\d+\\//i.test(path) && entity.entityType !== "player";
+    /^\/profiles\/\d+\//i.test(path) && entity.entityType !== "player";
 }
 
 function shouldPersistSourcePage(page: SourcePageCapture): boolean {
   let path = "";
   try { path = new URL(page.url).pathname; } catch { return false; }
-  if (/^\\/(?:profiles|cricket-news|live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary|player-match-performance)(?:\\/|$)/i.test(path)) return false;
+  if (/^\/(?:profiles|cricket-news|live-cricket-scores|cricket-match-facts|cricket-match-squads|live-cricket-scorecard|live-cricket-full-commentary|player-match-performance)(?:\/|$)/i.test(path)) return false;
   return !/^(?:player|player-stats|news|news-index|news-category|match|match-facts|match-squads|match-scorecard|commentary)$/i.test(page.pageKind);
 }
 
@@ -171,7 +171,7 @@ export class PostgresEntityRepository implements EntityRepository, ArchiveReposi
 
         if (sourceEntity.entityType === "player") {
           const url = new URL(sourceEntity.sourceUrl);
-          const match = url.pathname.match(/^\\/profiles\\/(\\d+)\\/[^/]+\\/?$/i);
+          const match = url.pathname.match(/^\/profiles\/(\d+)\/[^/]+\/?$/i);
           if (!match || match[1] !== sourceEntity.sourceId || !validSourcePageUrl(sourceEntity.sourceUrl)) continue;
           await client.query(
             `INSERT INTO public.crikora_player_urls (source_id, profile_url, first_seen_at, last_seen_at)
