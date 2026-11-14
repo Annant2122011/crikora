@@ -133,12 +133,30 @@ export class DurableCrawlService {
   }
 
   async startTargetedCrawl(seedUrls: string[]): Promise<{ created: boolean; resumed: boolean; run: CrawlRunSummary }> {
-    const urls = dedupeCricbuzzPageUrls(
+    const discoveredUrls = dedupeCricbuzzPageUrls(
       [...seedUrls, ...getCricbuzzDiscoverySeedUrls()].filter(url => this.provider.isAllowedCrawlUrl(url))
     );
+    const playerUrls = discoveredUrls.filter(url => pageKind(url) === "player");
+    if (playerUrls.length) {
+      const observedAt = new Date().toISOString();
+      await this.repository.upsertMany(playerUrls.flatMap(profileUrl => {
+        const sourceId = new URL(profileUrl).pathname.match(/^\/profiles\/(\d+)\/[^/]+\/?$/i)?.[1];
+        return sourceId ? [{
+          entityType: "player" as const,
+          sourceId,
+          sourceUrl: profileUrl,
+          payload: {},
+          fetchedAt: observedAt
+        }] : [];
+      }));
+    }
+    // Player sitemap entries become URL-only directory rows. No profile or
+    // statistics page is added to the worker queue.
+    const urls = discoveredUrls.filter(url => !["player", "player-stats", "player-match-performance"].includes(pageKind(url)));
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     const kinds = urls.map(pageKind);
-    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match, schedule or player seed URLs.");
+    if (!urls.length) throw new Error("The targeted Crikora collection has no allowed match or schedule seed URLs.");
+
     await this.recordCoverageTargets(urls);
 
     const client = await this.pool.connect();
@@ -274,7 +292,22 @@ export class DurableCrawlService {
   }
 
   async enqueueDiscoveredUrls(values: string[]): Promise<number> {
-    const urls = dedupeCricbuzzPageUrls(values.filter(url => this.provider.isAllowedCrawlUrl(url)));
+    const discoveredUrls = dedupeCricbuzzPageUrls(values.filter(url => this.provider.isAllowedCrawlUrl(url)));
+    const playerUrls = discoveredUrls.filter(url => pageKind(url) === "player");
+    if (playerUrls.length) {
+      const observedAt = new Date().toISOString();
+      await this.repository.upsertMany(playerUrls.flatMap(profileUrl => {
+        const sourceId = new URL(profileUrl).pathname.match(/^\/profiles\/(\d+)\/[^/]+\/?$/i)?.[1];
+        return sourceId ? [{
+          entityType: "player" as const,
+          sourceId,
+          sourceUrl: profileUrl,
+          payload: {},
+          fetchedAt: observedAt
+        }] : [];
+      }));
+    }
+    const urls = discoveredUrls.filter(url => !["player", "player-stats", "player-match-performance"].includes(pageKind(url)));
     const identityKeys = urls.map(getCricbuzzCrawlIdentityKey);
     if (urls.length) await this.recordCoverageTargets(urls);
 
@@ -322,7 +355,7 @@ export class DurableCrawlService {
                )
              )
              OR
-             (coverage.page_kind IN ('player', 'player-stats', 'player-match-performance', 'team', 'team-subpage', 'series', 'series-subpage', 'ranking')
+             (coverage.page_kind IN ('team', 'team-subpage', 'series', 'series-subpage', 'ranking')
                AND coverage.last_fetched_at <= now() - interval '24 hours')
               OR
               (coverage.page_kind = 'schedule'
@@ -375,7 +408,7 @@ export class DurableCrawlService {
          SELECT id
          FROM public.crikora_crawl_queue
          WHERE run_id = $1
-            AND page_kind NOT IN ('news', 'news-category', 'news-index')
+            AND page_kind NOT IN ('news', 'news-category', 'news-index', 'player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')
            AND ((status = 'pending' AND next_attempt_at <= now())
              OR (status = 'processing' AND lease_until <= now()))
          ORDER BY CASE
