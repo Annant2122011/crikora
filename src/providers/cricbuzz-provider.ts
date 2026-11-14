@@ -492,12 +492,19 @@ export class CricbuzzProvider implements CricketProvider {
         return { discoveredUrls: [], skipped: true };
       }
 
-      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info);
+      const scorecardUrl = navigation.scorecard ?? fallback.scorecard;
+      // A completed historical card needs final innings totals. Read the
+      // scorecard once, but pass only the compact projection to storage;
+      // batting/bowling rows are discarded by toCompactMatchPayload().
+      const scorecard = bucket === "completed" && scorecardUrl
+        ? await this.tryFetchPage(new URL(scorecardUrl), "summary:completed-scorecard", signal)
+        : undefined;
+      const match = parseMatch({ id: identity.sourceId, path: url.pathname, bucket }, page, info, scorecard);
       match.infoUrl = info?.url;
-      match.scorecardUrl = navigation.scorecard ?? fallback.scorecard;
+      match.scorecardUrl = scorecardUrl;
       match.squadsUrl = navigation.squads ?? fallback.squads;
       match.commentaryUrl = navigation.commentary ?? fallback.commentary;
-      pages = [page, info].filter((item): item is PageRecord => Boolean(item));
+      pages = [page, info, scorecard].filter((item): item is PageRecord => Boolean(item));
       entity = {
         entityType: "match",
         sourceId: identity.sourceId,
