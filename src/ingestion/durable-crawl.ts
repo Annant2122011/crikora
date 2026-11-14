@@ -408,12 +408,11 @@ export class DurableCrawlService {
          SELECT id
          FROM public.crikora_crawl_queue
          WHERE run_id = $1
-            AND page_kind NOT IN ('news', 'news-category', 'news-index', 'player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')
+            AND page_kind NOT IN ('news', 'news-category', 'news-index')
+            AND page_kind NOT IN ('player', 'player-stats', 'player-match-performance', 'match-squads', 'match-scorecard', 'commentary', 'match-highlights', 'live-graphs', 'over-by-over', 'match-forecast', 'wicket-zone')
            AND ((status = 'pending' AND next_attempt_at <= now())
              OR (status = 'processing' AND lease_until <= now()))
          ORDER BY CASE
-           WHEN page_kind = 'player' THEN 0
-           WHEN page_kind = 'player-stats' THEN 1
            WHEN page_kind = 'match' THEN 2
            WHEN page_kind = 'schedule' THEN 3
            WHEN page_kind IN ('series', 'series-subpage') THEN 4
