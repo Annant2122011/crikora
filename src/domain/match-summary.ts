@@ -68,9 +68,20 @@ function extractTextInnings(sourceText: string, teams: string[]): MatchSummaryIn
   const output: MatchSummaryInnings[] = [];
   for (const team of teams) {
     if (!team || /^unknown$/i.test(team)) continue;
-    const index = sourceText.toLowerCase().indexOf(team.toLowerCase());
+    const loweredText = sourceText.toLowerCase();
+    const index = loweredText.indexOf(team.toLowerCase());
     if (index < 0) continue;
-    const segment = sourceText.slice(index, index + 220);
+    // Stop at the next opponent label. Otherwise the first team's text window
+    // can accidentally consume the second team's score from the same match card.
+    const nextTeamIndexes = teams
+      .filter(candidate => candidate && candidate.toLowerCase() !== team.toLowerCase())
+      .map(candidate => loweredText.indexOf(candidate.toLowerCase(), index + team.length))
+      .filter(position => position > index);
+    const nextTeamIndex = nextTeamIndexes.length ? Math.min(...nextTeamIndexes) : -1;
+    const segmentEnd = nextTeamIndex > index
+      ? Math.min(nextTeamIndex, index + 220)
+      : Math.min(sourceText.length, index + 220);
+    const segment = sourceText.slice(index, segmentEnd);
 
     const slashScore = segment.match(/\b(\d{1,3})\s*\/\s*(\d{1,2})\s*(?:\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\))?/i);
     const allOutScore = segment.match(/\b(\d{1,3})\s*(?:all[ -]?out)\b(?:\s*(?:in)?\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\b)?/i);
