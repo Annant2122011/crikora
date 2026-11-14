@@ -117,6 +117,7 @@ export function toCompactMatchPayload(entity: CrikoraEntity): Record<string, unk
   const payload = entity.payload;
   const sourceText = [
     isRecord(payload.stats) ? payload.stats.indexCardText : null,
+    isRecord(payload.stats) ? payload.stats.scorecardText : null,
     isRecord(payload.stats) ? payload.stats.liveSummary : null,
     payload.description,
     payload.result
