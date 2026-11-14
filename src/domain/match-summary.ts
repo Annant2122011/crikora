@@ -33,9 +33,9 @@ function rows(value: unknown): Record<string, unknown>[] {
 
 function parseToss(tossText: string | null): { tossWinner: string | null; tossDecision: "bat" | "bowl" | "unknown" | null } {
   if (!tossText) return { tossWinner: null, tossDecision: null };
-  const decisionMatch = tossText.match(/\\b(?:elected|opted|chose|choose|decided)\\s+to\\s+(bat|bowl|field)\\b/i);
-  const tossWinner = tossText.match(/^(.+?)\\s+(?:won|wins)\\s+the\\s+toss\\b/i)?.[1]?.trim()
-    ?? (decisionMatch ? tossText.slice(0, decisionMatch.index).replace(/[,:;\\s]+$/, "").trim() : null);
+  const decisionMatch = tossText.match(/\b(?:elected|opted|chose|choose|decided)\s+to\s+(bat|bowl|field)\b/i);
+  const tossWinner = tossText.match(/^(.+?)\s+(?:won|wins)\s+the\s+toss\b/i)?.[1]?.trim()
+    ?? (decisionMatch ? tossText.slice(0, decisionMatch.index).replace(/[,:;\s]+$/, "").trim() : null);
   const choice = decisionMatch?.[1]?.toLowerCase();
   const tossDecision = choice === "bat" ? "bat" : choice === "bowl" || choice === "field" ? "bowl" : "unknown";
   return { tossWinner: tossWinner || null, tossDecision };
