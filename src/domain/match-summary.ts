@@ -72,13 +72,13 @@ function extractTextInnings(sourceText: string, teams: string[]): MatchSummaryIn
     if (index < 0) continue;
     const segment = sourceText.slice(index, index + 220);
 
-    const slashScore = segment.match(/\\b(\\d{1,3})\\s*\\/\\s*(\\d{1,2})\\s*(?:\\(\\s*(\\d{1,2}(?:\\.\\d)?)\\s*(?:ov|overs?)\\s*\\))?/i);
-    const allOutScore = segment.match(/\\b(\\d{1,3})\\s*(?:all[ -]?out)\\b(?:\\s*(?:in)?\\s*(\\d{1,2}(?:\\.\\d)?)\\s*(?:ov|overs?)\\b)?/i);
-    const runsWithOvers = segment.match(/\\b(\\d{1,3})\\s*\\(\\s*(\\d{1,2}(?:\\.\\d)?)\\s*(?:ov|overs?)\\s*\\)/i);
+    const slashScore = segment.match(/\b(\d{1,3})\s*\/\s*(\d{1,2})\s*(?:\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\))?/i);
+    const allOutScore = segment.match(/\b(\d{1,3})\s*(?:all[ -]?out)\b(?:\s*(?:in)?\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\b)?/i);
+    const runsWithOvers = segment.match(/\b(\d{1,3})\s*\(\s*(\d{1,2}(?:\.\d)?)\s*(?:ov|overs?)\s*\)/i);
     const inningsScore = slashScore ?? allOutScore ?? runsWithOvers;
     if (!inningsScore) continue;
 
-    const allOut = inningsScore === allOutScore || /\\ball[ -]?out\\b/i.test(segment.slice(0, 110));
+    const allOut = inningsScore === allOutScore || /\ball[ -]?out\b/i.test(segment.slice(0, 110));
     const runs = number(inningsScore[1]);
     const wickets = slashScore ? number(slashScore[2]) : allOut ? 10 : null;
     const overs = slashScore ? slashScore[3] ?? null
@@ -91,7 +91,7 @@ function extractTextInnings(sourceText: string, teams: string[]): MatchSummaryIn
       wickets,
       overs,
       allOut: allOut || wickets === 10,
-      declared: /\\bdeclared\\b/i.test(segment.slice(0, 110))
+      declared: /\bdeclared\b/i.test(segment.slice(0, 110))
     });
   }
   return output;
