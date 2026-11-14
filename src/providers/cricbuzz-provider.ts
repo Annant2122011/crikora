@@ -1138,8 +1138,14 @@ function parseMatch(
     : undefined;
   const toss = structuredToss || paragraphToss || labeledValue(tossSource, "Toss") ||
     clean(tossSource.match(/\bToss\s*:?\s+(.+?)(?=\s+(?:Venue|Date|Time|Umpires|3rd Umpire|Referee)\b|$)/i)?.[1] ?? "");
-  const result = [body, infoText, scoreText].join("\n")
-    .match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();
+  const resultText = [body, infoText, scoreText].join("\n");
+  const teamResult = [homeTeam, awayTeam].map(team => {
+    const escapedTeam = team.replace(/[.*+?^()|[\\]\\\\]/g, "\\  const result = [body, infoText, scoreText].join("\n")
+    .match(/([A-Za-z0-9 .'-]+ won by [^.]+|Match abandoned[^.]*|Match drawn|Match tied|No result)/i)?.[1]?.trim();");
+    const match = resultText.match(new RegExp("\\\\b" + escapedTeam + "\\\\s+won\\\\s+by\\\\s+([^.;\\\\n]+)", "i"));
+    return match ? `${team} won by ${clean(match[1])}` : undefined;
+  }).find(Boolean);
+  const result = teamResult ?? resultText.match(/\\b(Match abandoned[^.]*|Match drawn|Match tied|No result)\\b/i)?.[1]?.trim();
   const status: MatchStatus = result || discovered.bucket === "completed" ? "completed" : discovered.bucket;
   return {
     id: `cricbuzz:${discovered.id}`, source: "cricbuzz", sourceMatchId: discovered.id,
