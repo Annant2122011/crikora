@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+import { toCompactMatchPayload } from "./match-summary.js";
+
+describe("toCompactMatchPayload", () => {
+  it("keeps only match-card score and toss fields", () => {
+    const summary = toCompactMatchPayload({
+      entityType: "match",
+      sourceId: "123",
+      sourceUrl: "https://www.cricbuzz.com/live-cricket-scores/123/england-vs-south-africa",
+      fetchedAt: "2026-11-14T12:00:00.000Z",
+      payload: {
+        status: "completed",
+        competition: "International",
+        format: "T20",
+        homeTeam: "England",
+        awayTeam: "South Africa",
+        toss: "England won the toss and chose to bowl",
+        result: "England won by 7 wickets",
+        innings: [
+          { inningsNumber: 1, teamName: "South Africa", runs: 190, wickets: 10, overs: "19.3", batters: [{ name: "Do not store" }] },
+          { inningsNumber: 2, teamName: "England", runs: 191, wickets: 3, overs: "19.4", bowlers: [{ name: "Do not store" }] }
+        ],
+        matchData: { deliveries: [{ commentary: "Do not store" }], commentary: [{ commentary: "Do not store" }] },
+        officials: { umpire: "Do not store" },
+        squads: { players: ["Do not store"] },
+        stats: { scorecardText: "Do not store" }
+      }
+    });
+
+    expect(summary).toMatchObject({
+      status: "completed",
+      tossWinner: "England",
+      tossDecision: "bowl",
+      winner: "England",
+      victoryMargin: "7 wickets",
+      innings: [
+        { teamName: "South Africa", runs: 190, wickets: 10, overs: "19.3", allOut: true },
+        { teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false }
+      ]
+    });
+    expect(JSON.stringify(summary)).not.toContain("Do not store");
+  });
+
+  it("derives scores from short index-card text when structured innings are unavailable", () => {
+    const summary = toCompactMatchPayload({
+      entityType: "match",
+      sourceId: "124",
+      sourceUrl: "https://www.cricbuzz.com/live-cricket-scores/124/england-vs-south-africa",
+      fetchedAt: "2026-11-14T12:00:00.000Z",
+      payload: {
+        status: "completed",
+        homeTeam: "South Africa",
+        awayTeam: "England",
+        stats: { indexCardText: "South Africa 190 all out in 19.3 overs; England 191/3 (19.4 Ov)" }
+      }
+    });
+    expect(summary.innings).toEqual([
+      { inningsNumber: 1, teamName: "South Africa", runs: 190, wickets: 10, overs: "19.3", allOut: true, declared: false },
+      { inningsNumber: 2, teamName: "England", runs: 191, wickets: 3, overs: "19.4", allOut: false, declared: false }
+    ]);
+  });
+});
